@@ -1,0 +1,50 @@
+name: Build Capacitor iOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and sync Capacitor iOS
+        run: npm run cap:sync:ios
+
+      - name: Install CocoaPods dependencies
+        run: pod install --project-directory=ios/App
+
+      - name: Build unsigned iOS Simulator app
+        run: >-
+          xcodebuild
+          -workspace ios/App/App.xcworkspace
+          -scheme App
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath ios/build
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build
+
+      - name: Package simulator app
+        run: ditto -c -k --sequesterRsrc --keepParent ios/build/Build/Products/Debug-iphonesimulator/App.app mobiduka-ios-simulator.zip
+
+      - name: Upload iOS simulator app
+        uses: actions/upload-artifact@v5
+        with:
+          name: mobiduka-ios-simulator
+          path: mobiduka-ios-simulator.zip

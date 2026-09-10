@@ -39,3 +39,11 @@ npm run cap:sync
 ```
 
 Then rebuild the APK with `npm run android:debug` or rerun the GitHub workflow.
+
+## iOS GitHub Actions build
+
+The workflow at `.github/workflows/build-capacitor-ios.yml` runs on `macos-latest`, builds the React app, installs CocoaPods, and compiles an unsigned iOS Simulator app. It runs automatically for pushes to `dev` or can be started manually from the Actions tab.
+
+Download the `mobiduka-ios-simulator` artifact from a successful run. It contains `App.app` packaged as a ZIP for simulator testing.
+
+This artifact is not installable on a physical iPhone. A device IPA requires Apple Developer signing credentials, certificates, and provisioning profiles stored as GitHub Actions secrets. The current workflow intentionally avoids signing so it can build without Apple credentials.
