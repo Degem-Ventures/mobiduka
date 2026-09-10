@@ -17,6 +17,8 @@ The debug APK is created at:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+The GitHub Actions workflow uses the runner's Gradle installation, so it does not depend on the Git LFS Gradle wrapper binary.
+
 ## GitHub Actions build
 
 The workflow at `.github/workflows/build-capacitor-apk.yml` builds the APK on Ubuntu with Node, Java, and the Android SDK supplied by the runner.
