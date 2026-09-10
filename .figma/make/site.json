@@ -1,0 +1,10 @@
+{
+  "description": "A modern POS system tailored for small retail businesses offering sales, inventory, customer, and financial management with an intuitive mobile interface.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

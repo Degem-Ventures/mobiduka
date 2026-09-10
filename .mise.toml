@@ -1,0 +1,6 @@
+[tools]
+node = "22"
+pnpm = "10"
+
+
+gh codespace ports visibility 8443:public -c super-space-doodle-9qj9jxpgrvxfxvq4 && gh codespace ports -c super-space-doodle-9qj9jxpgrvxfxvq4 --json sourcePort,visibility,browseUrl
