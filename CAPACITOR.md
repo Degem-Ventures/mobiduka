@@ -21,7 +21,7 @@ The GitHub Actions workflow uses the runner's Gradle installation, so it does no
 
 ## GitHub Actions build
 
-The workflow at `.github/workflows/build-capacitor-apk.yml` builds the APK on Ubuntu with Node, Java, and the Android SDK supplied by the runner.
+The workflow at `.github/workflows/build-capacitor-apk.yml` builds the APK on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner.
 
 1. Push this project to GitHub.
 2. Open the repository's **Actions** tab.
