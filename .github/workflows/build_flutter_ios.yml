@@ -34,3 +34,9 @@ jobs:
         run: |
           cd flutter_app
           flutter build ios --no-codesign --debug
+
+      - name: Upload iOS Simulator Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobiduka-flutter-ios-debug
+          path: flutter_app/build/ios/iphoneos/Runner.app
