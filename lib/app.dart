@@ -305,15 +305,17 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     final activeNav = _bottomNavScreens.contains(_screen) ? _screen : null;
     final showNav = _bottomNavScreens.contains(_screen);
 
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0D1B3D), Color(0xFF123A8F)],
+    return Material(
+      color: Colors.transparent,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF0D1B3D), Color(0xFF123A8F)],
+          ),
         ),
-      ),
-      child: Stack(
+        child: Stack(
         alignment: Alignment.center,
         children: [
           Padding(
@@ -392,6 +394,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
