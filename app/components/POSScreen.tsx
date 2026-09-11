@@ -23,7 +23,7 @@ interface Props {
   onNavigate: (screen: string) => void
 }
 
-export default function POSScreen({ onNavigate }: Props) {
+export default function POSScreen({ onNavigate: _onNavigate }: Props) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
