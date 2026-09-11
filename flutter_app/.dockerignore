@@ -1,0 +1,11 @@
+.git
+.gitignore
+.dart_tool
+build
+.vscode
+.idea
+*.log
+android
+ios
+web-build
+.DS_Store
