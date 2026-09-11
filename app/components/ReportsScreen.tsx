@@ -115,9 +115,8 @@ interface Props { onNavigate: (s: string) => void }
 export default function ReportsScreen({ onNavigate }: Props) {
   const [tab, setTab] = useState<'daily' | 'monthly' | 'profit'>('daily')
 
-  const todaySales   = weekData.find(d => d.isToday)?.sales  ?? 0
-  const todayProfit  = weekData.find(d => d.isToday)?.profit ?? 0
-  const weekSales    = weekData.filter(d => !d.future).reduce((s, d) => s + d.sales,  0)
+  const todaySales    = weekData.find(d => d.isToday)?.sales  ?? 0
+  const weekSales     = weekData.filter(d => !d.future).reduce((s, d) => s + d.sales,  0)
   const weekProfit   = weekData.filter(d => !d.future).reduce((s, d) => s + d.profit, 0)
   const avgMargin    = weekSales > 0 ? ((weekProfit / weekSales) * 100).toFixed(1) : '0'
 

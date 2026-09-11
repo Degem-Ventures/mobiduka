@@ -9,3 +9,4 @@ vite.config.*.timestamp-*
 *-debug.log*
 .claude-replay.*
 .tmp-*
+.next

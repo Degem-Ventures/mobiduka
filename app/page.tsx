@@ -1,3 +1,5 @@
+"use client";
+
 import { JSX, useState } from "react";
 import LoginScreen from "./components/LoginScreen";
 import Dashboard from "./components/Dashboard";
@@ -143,24 +145,11 @@ const navItems: {
   },
 ];
 
-const navScreens: Screen[] = [
-  "dashboard",
-  "pos",
-  "inventory",
-  "customers",
-  "more",
-];
+const navScreens: Screen[] = ["dashboard", "pos", "inventory", "customers", "more"];
 
-// Screens that show the bottom nav
-const showNavFor: Screen[] = [
-  "dashboard",
-  "pos",
-  "inventory",
-  "customers",
-  "more",
-];
+const showNavFor: Screen[] = ["dashboard", "pos", "inventory", "customers", "more"];
 
-export default function App() {
+export default function Page() {
   const [screen, setScreen] = useState<Screen>("login");
   const [loggedIn, setLoggedIn] = useState(false);
 
@@ -192,9 +181,7 @@ export default function App() {
       case "customers":
         return <CustomersScreen onNavigate={handleNavigate} />;
       case "more":
-        return (
-          <MoreScreen onLogout={handleLogout} onNavigate={handleNavigate} />
-        );
+        return <MoreScreen onLogout={handleLogout} onNavigate={handleNavigate} />;
       case "settings":
         return <SettingsScreen onNavigate={handleNavigate} />;
       case "purchases":
@@ -229,9 +216,7 @@ export default function App() {
         padding: "20px",
       }}
     >
-      {/* Phone frame */}
       <div className="phone-frame">
-        {/* Notch */}
         <div
           style={{
             position: "absolute",
@@ -249,9 +234,7 @@ export default function App() {
         {screen === "login" && <LoginScreen onLogin={handleLogin} />}
 
         {loggedIn && screen !== "login" && (
-          <div
-            style={{ height: "100%", display: "flex", flexDirection: "column" }}
-          >
+          <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
             <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
               {renderScreen()}
             </div>
@@ -311,7 +294,6 @@ export default function App() {
         )}
       </div>
 
-      {/* App info */}
       <div
         style={{
           position: "fixed",
