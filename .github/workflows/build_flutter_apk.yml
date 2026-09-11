@@ -34,6 +34,13 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
+      - name: Ensure Android project exists
+        run: |
+          cd flutter_app
+          if [ ! -f android/app/build.gradle ]; then
+            flutter create --platforms=android .
+          fi
+
       - name: Install Dependencies
         run: |
           cd flutter_app
