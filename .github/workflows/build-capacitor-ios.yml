@@ -28,6 +28,29 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare Capacitor web assets
+        run: |
+          mkdir -p dist
+          if [ -d public ]; then cp -R public/* dist/; fi
+          if [ ! -f dist/index.html ]; then
+            cat > dist/index.html <<'EOF'
+            <!doctype html>
+            <html lang="en">
+              <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>MobiDuka</title>
+              </head>
+              <body>
+                <main style="font-family: sans-serif; padding: 2rem; text-align: center;">
+                  <h1>MobiDuka</h1>
+                  <p>Capacitor web bundle placeholder.</p>
+                </main>
+              </body>
+            </html>
+            EOF
+          fi
+
       - name: Build and sync Capacitor iOS
         run: pnpm run cap:sync:ios
 
