@@ -34,6 +34,7 @@ model Business {
   sales            Sale[]
   expenses         Expense[]
   cashSessions     CashSession[]
+  purchaseOrders   PurchaseOrder[]
   auditLogs        AuditLog[]
   syncQueues       SyncQueue[]
   notifications    Notification[]
@@ -119,7 +120,7 @@ model Category {
 }
 
 model Supplier {
-  id            String    @id @default(uuid())
+  id            String        @id @default(uuid())
   businessId    String
   name          String
   phone         String?
@@ -127,11 +128,12 @@ model Supplier {
   location      String?
   contactPerson String?
   notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  business      Business  @relation(fields: [businessId], references: [id])
+  business      Business      @relation(fields: [businessId], references: [id])
   products      Product[]
+  purchaseOrders PurchaseOrder[]
 }
 
 model Product {
@@ -161,6 +163,34 @@ model Product {
   inventory     Inventory?
   stockMoves    StockMovement[]
   saleItems     SaleItem[]
+  purchaseItems PurchaseItem[]
+}
+
+model PurchaseOrder {
+  id          String        @id @default(uuid())
+  businessId  String
+  supplierId  String?
+  orderNo     String?
+  status      String        @default("REQUESTED")
+  totalCost   Float         @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  business    Business      @relation(fields: [businessId], references: [id])
+  supplier    Supplier?     @relation(fields: [supplierId], references: [id])
+  items       PurchaseItem[]
+}
+
+model PurchaseItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  productId       String
+  quantity        Int           @default(0)
+  costPrice       Float         @default(0)
+  createdAt       DateTime      @default(now())
+
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  product         Product       @relation(fields: [productId], references: [id])
 }
 
 model Inventory {
