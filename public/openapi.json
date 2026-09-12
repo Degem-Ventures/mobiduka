@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "http://localhost:3000/api",
-      "description": "Local Dev Codespace Core Instance Router"
+      "url": "/api",
+      "description": "Current app origin API router"
     }
   ],
   "paths": {
@@ -129,6 +129,35 @@
         "responses": {
           "200": { "description": "Session closed out cleanly, returns computed float variances." },
           "201": { "description": "New open shift session generated." }
+        }
+      }
+    },
+    "/purchase-orders": {
+      "post": {
+        "summary": "Supply Chain & Restock Procurement System",
+        "description": "Logs new wholesale distributor order sheets or automatically closes them out to increment store stock items.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId"],
+                "properties": {
+                  "action": { "type": "string", "example": "RECEIVE" },
+                  "businessId": { "type": "string" },
+                  "orderId": { "type": "string" },
+                  "supplierId": { "type": "string" },
+                  "orderNo": { "type": "string", "example": "PO-9002" },
+                  "items": { "type": "array", "items": { "type": "object" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Order batch received and inventory stock level metrics updated." },
+          "201": { "description": "Purchase order successfully created in REQUESTED state." }
         }
       }
     }

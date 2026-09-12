@@ -27,9 +27,7 @@ body {
   margin: 0;
   background: #0D1B3D;
   min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
 }
 
 /* Scrollbar hide */
