@@ -1,6 +1,10 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
+import 'services/cash_service.dart';
+import 'services/product_repository.dart';
+import 'services/sync_service.dart';
+
 void main() => runApp(const MobiDukaApp());
 
 const navy = Color(0xFF123A8F);
@@ -29,20 +33,22 @@ class Product {
   final String status;
 }
 
-const products = <Product>[
-  Product('Unga Jogoo 2kg', 'Flour', 160, 200, 45, 20, '🌾'),
-  Product('Cooking Oil 1L', 'Oils', 150, 190, 32, 15, '🫙'),
-  Product('Sugar 1kg', 'Sugar', 100, 140, 28, 30, '🍬', status: 'low'),
-  Product('Blue Band 500g', 'Spreads', 110, 150, 18, 20, '🧈', status: 'low'),
-  Product('Milk 500ml', 'Dairy', 75, 100, 60, 40, '🥛'),
-  Product('Royco 75g', 'Spices', 30, 45, 5, 20, '🌶️', status: 'critical'),
-  Product('Panadol 500mg', 'Pharma', 20, 30, 3, 50, '💊', status: 'critical'),
-  Product('Omo 400g', 'Detergent', 130, 180, 8, 15, '🧺', status: 'low'),
-  Product('Colgate 100ml', 'Personal', 60, 85, 22, 20, '🪥'),
-  Product('Bread White', 'Bakery', 40, 55, 15, 20, '🍞', status: 'low'),
-  Product('Eggs (tray)', 'Dairy', 380, 480, 12, 10, '🥚'),
-  Product('Nescafé 100g', 'Beverages', 240, 320, 9, 12, '☕', status: 'low'),
+final List<Product> defaultProducts = <Product>[
+  const Product('Unga Jogoo 2kg', 'Flour', 160, 200, 45, 20, '🌾'),
+  const Product('Cooking Oil 1L', 'Oils', 150, 190, 32, 15, '🫙'),
+  const Product('Sugar 1kg', 'Sugar', 100, 140, 28, 30, '🍬', status: 'low'),
+  const Product('Blue Band 500g', 'Spreads', 110, 150, 18, 20, '🧈', status: 'low'),
+  const Product('Milk 500ml', 'Dairy', 75, 100, 60, 40, '🥛'),
+  const Product('Royco 75g', 'Spices', 30, 45, 5, 20, '🌶️', status: 'critical'),
+  const Product('Panadol 500mg', 'Pharma', 20, 30, 3, 50, '💊', status: 'critical'),
+  const Product('Omo 400g', 'Detergent', 130, 180, 8, 15, '🧺', status: 'low'),
+  const Product('Colgate 100ml', 'Personal', 60, 85, 22, 20, '🪥'),
+  const Product('Bread White', 'Bakery', 40, 55, 15, 20, '🍞', status: 'low'),
+  const Product('Eggs (tray)', 'Dairy', 380, 480, 12, 10, '🥚'),
+  const Product('Nescafé 100g', 'Beverages', 240, 320, 9, 12, '☕', status: 'low'),
 ];
+
+List<Product> products = List<Product>.from(defaultProducts);
 
 const inventoryCategories = <String>[
   'Flour',
@@ -65,9 +71,104 @@ class MobiDukaApp extends StatefulWidget {
 }
 
 class _MobiDukaAppState extends State<MobiDukaApp> {
+  final CashService _cashService = CashService();
   int tab = 0;
   bool loggedIn = false;
   String? detail;
+  String? activeSessionId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCatalog();
+  }
+
+  Future<void> _loadCatalog() async {
+    final cachedProducts = await ProductRepository.instance.loadProducts();
+    if (cachedProducts.isNotEmpty) {
+      setState(() {
+        products = List<Product>.from(cachedProducts);
+      });
+      return;
+    }
+
+    await ProductRepository.instance.saveProducts(defaultProducts);
+    setState(() {
+      products = List<Product>.from(defaultProducts);
+    });
+  }
+
+  Future<void> _handleLoginAttempt() async {
+    final session = await _cashService.getActiveSession(
+      businessId: 'demo-business',
+      userId: 'demo-user',
+    );
+
+    if (session == null) {
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) => _CashShiftGateSheet(
+          onOpened: () {
+            setState(() {
+              loggedIn = true;
+              tab = 0;
+              detail = null;
+              activeSessionId = session?['id'] as String? ?? 'new-session';
+            });
+          },
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      loggedIn = true;
+      tab = 0;
+      detail = null;
+      activeSessionId = session['id'] as String?;
+    });
+  }
+
+  Future<void> _handleCloseShift() async {
+    final activeSession = await _cashService.getActiveSession(
+      businessId: 'demo-business',
+      userId: 'demo-user',
+    );
+
+    if (activeSession == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No open cash drawer session found for this cashier.'),
+          backgroundColor: Color(0xFFD32F2F),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => _CloseShiftSheet(
+        sessionId: activeSession['id'] as String,
+        onFinalized: () {
+          setState(() {
+            loggedIn = false;
+            detail = null;
+            tab = 0;
+            activeSessionId = null;
+          });
+          Navigator.of(context).pop();
+        },
+      ),
+    );
+  }
 
   void open(String value) => setState(() => detail = value);
 
@@ -75,10 +176,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   Widget build(BuildContext context) {
     final body = !loggedIn
         ? LoginScreen(
-            onLogin: () => setState(() {
-              loggedIn = true;
-              tab = 0;
-            }),
+            onLogin: _handleLoginAttempt,
           )
         : detail != null
             ? DetailScreen(title: detail!, onBack: () => setState(() => detail = null))
@@ -87,7 +185,15 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                 const POSScreen(),
                 const ProductScreen(title: 'Inventory & Stock'),
                 const CustomerScreen(),
-                MoreScreen(onOpen: open, onLogout: () => setState(() => loggedIn = false)),
+                MoreScreen(
+                  onOpen: open,
+                  onLogout: () => setState(() {
+                    loggedIn = false;
+                    detail = null;
+                    activeSessionId = null;
+                  }),
+                  onCloseShift: _handleCloseShift,
+                ),
               ][tab];
 
     return MaterialApp(
@@ -139,6 +245,279 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                 ]),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CashShiftGateSheet extends StatefulWidget {
+  const _CashShiftGateSheet({required this.onOpened});
+  final VoidCallback onOpened;
+
+  @override
+  State<_CashShiftGateSheet> createState() => _CashShiftGateSheetState();
+}
+
+class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
+  final TextEditingController _openingCashController = TextEditingController(text: '2500');
+  final CashService _cashService = CashService();
+  bool _submitting = false;
+
+  Future<void> _openShift() async {
+    final value = double.tryParse(_openingCashController.text.trim());
+    if (value == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid opening cash amount.'),
+          backgroundColor: Color(0xFFD32F2F),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+
+    try {
+      final sessionId = await _cashService.openSession(
+        businessId: 'demo-business',
+        userId: 'demo-user',
+        openingCash: value,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      widget.onOpened();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Shift opened successfully. Drawer ID: $sessionId'),
+          backgroundColor: const Color(0xFF2E7D32),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to open shift: $error'),
+          backgroundColor: const Color(0xFFD32F2F),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Cash Shift Ignition', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
+              const SizedBox(height: 8),
+              const Text('Set the starting drawer float before you unlock the sales dashboard.', style: TextStyle(color: muted, fontSize: 13)),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _openingCashController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink),
+                decoration: InputDecoration(
+                  labelText: 'Opening Cash (KES)',
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _submitting ? null : _openShift,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2E7D32),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  child: Text(_submitting ? 'Opening Shift...' : 'Open Shift Drawer', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CloseShiftSheet extends StatefulWidget {
+  const _CloseShiftSheet({required this.sessionId, required this.onFinalized});
+  final String sessionId;
+  final VoidCallback onFinalized;
+
+  @override
+  State<_CloseShiftSheet> createState() => _CloseShiftSheetState();
+}
+
+class _CloseShiftSheetState extends State<_CloseShiftSheet> {
+  final TextEditingController _closingCashController = TextEditingController(text: '0');
+  final TextEditingController _notesController = TextEditingController();
+  final CashService _cashService = CashService();
+  bool _submitting = false;
+
+  Future<void> _submitCloseout() async {
+    final closingCash = double.tryParse(_closingCashController.text.trim());
+    if (closingCash == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid counted cash amount.'),
+          backgroundColor: Color(0xFFD32F2F),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+
+    try {
+      final summary = await _cashService.closeSession(
+        sessionId: widget.sessionId,
+        businessId: 'demo-business',
+        userId: 'demo-user',
+        closingCash: closingCash,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Shift Closeout Summary'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Expected Drawer Balance: KSh ${summary['expectedBalance']}'),
+              const SizedBox(height: 8),
+              Text('Actual Counted Cash: KSh ${summary['actualCounted']}'),
+              const SizedBox(height: 8),
+              Text(
+                'Variance: KSh ${summary['variance']}',
+                style: TextStyle(
+                  color: (summary['variance'] as num) < 0 ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Notes: ${_notesController.text.trim().isEmpty ? 'No closeout notes recorded.' : _notesController.text.trim()}',
+                style: const TextStyle(color: muted),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Review'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                widget.onFinalized();
+              },
+              child: const Text('Finalize Closeout'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to close shift: $error'),
+          backgroundColor: const Color(0xFFD32F2F),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Close Shift Session', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
+              const SizedBox(height: 8),
+              const Text('Record the actual counted cash and finalize your drawer reconciliation.', style: TextStyle(color: muted, fontSize: 13)),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _closingCashController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: ink),
+                decoration: InputDecoration(
+                  labelText: 'Counted Cash Amount (KES)',
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _notesController,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'Closeout Notes',
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _submitting ? null : _submitCloseout,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: navy,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  child: Text(_submitting ? 'Closing Shift...' : 'Close Shift', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1208,6 +1587,7 @@ class POSScreen extends StatefulWidget {
 }
 
 class _POSScreenState extends State<POSScreen> {
+  final SyncService _syncService = SyncService();
   String search = '';
   String category = 'All';
   String paymentMethod = 'cash';
@@ -1262,6 +1642,66 @@ class _POSScreenState extends State<POSScreen> {
   int get discountAmount => (subtotal * discount / 100).round();
 
   int get total => subtotal - discountAmount;
+
+  Future<void> _completeSale() async {
+    if (cart.isEmpty) return;
+
+    final saleId = 'sale-${DateTime.now().millisecondsSinceEpoch}';
+    final salePayload = {
+      'id': saleId,
+      'businessId': 'demo-business',
+      'deviceId': 'mobile-device',
+      'userId': 'demo-owner',
+      'paymentMethod': paymentMethod,
+      'discount': discountAmount,
+      'subtotal': subtotal,
+      'total': total,
+      'items': cartItems.map((item) => {
+        'name': item['name'],
+        'price': item['price'],
+        'qty': item['qty'],
+      }).toList(),
+      'createdAt': DateTime.now().toIso8601String(),
+    };
+
+    await _syncService.queueChange(
+      id: saleId,
+      entityName: 'sale',
+      operation: 'create',
+      payload: salePayload,
+    );
+
+    for (final entry in cart.entries) {
+      final index = products.indexWhere((item) => item.name == entry.key);
+      if (index == -1) continue;
+      final product = products[index];
+      final updatedStock = product.stock - entry.value;
+      products[index] = Product(
+        product.name,
+        product.category,
+        product.cost,
+        product.price,
+        updatedStock < 0 ? 0 : updatedStock,
+        product.reorder,
+        product.emoji,
+        status: updatedStock <= product.reorder ? 'low' : 'good',
+      );
+    }
+
+    await ProductRepository.instance.saveProducts(products);
+    await _syncService.processCloudSync(
+      businessId: 'demo-business',
+      deviceId: 'mobile-device',
+      userId: 'demo-owner',
+    );
+
+    if (mounted) {
+      setState(() {
+        discount = 0;
+        view = 'receipt';
+      });
+    }
+  }
 
   List<Map<String, dynamic>> get cartItems => cart.entries.map((entry) {
     final product = products.firstWhere((item) => item.name == entry.key);
@@ -1604,7 +2044,7 @@ class _POSScreenState extends State<POSScreen> {
                   ),
                   const SizedBox(height: 18),
                   TextButton(
-                    onPressed: () => setState(() => view = 'receipt'),
+                    onPressed: _completeSale,
                     style: TextButton.styleFrom(
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
@@ -3315,9 +3755,10 @@ class _CustomerScreenState extends State<CustomerScreen> {
 }
 
 class MoreScreen extends StatelessWidget {
-  const MoreScreen({required this.onOpen, required this.onLogout});
+  const MoreScreen({required this.onOpen, required this.onLogout, required this.onCloseShift});
   final ValueChanged<String> onOpen;
   final VoidCallback onLogout;
+  final VoidCallback onCloseShift;
 
   final List<Map<String, dynamic>> _menuSections = const [
     {
@@ -3445,6 +3886,21 @@ class MoreScreen extends StatelessWidget {
           const SizedBox(height: 12),
           ..._menuSections.map((section) => _menuSection(section['section'] as String, section['items'] as List<Map<String, dynamic>>)),
           const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: onCloseShift,
+            icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
+            label: const Text('Close Shift Session', style: TextStyle(color: Color(0xFF2E7D32), fontSize: 15, fontWeight: FontWeight.w700)),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFE8F5E9),
+              foregroundColor: const Color(0xFF2E7D32),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFC8E6C9)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
           TextButton.icon(
             onPressed: onLogout,
             icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),

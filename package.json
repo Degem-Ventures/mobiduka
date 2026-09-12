@@ -13,10 +13,15 @@
     "cap:open": "cap open android",
     "android:debug": "npm run cap:sync && cd android && ./gradlew assembleDebug"
   },
+  "prisma": {
+    "seed": "node --import tsx prisma/seed.ts"
+  },
   "dependencies": {
     "@capacitor/android": "^7.4.3",
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.6.9",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.0",
     "next": "^16.3.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -30,7 +35,9 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.0",
     "oxfmt": "^0.2.0",
+    "prisma": "^5.22.0",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.20.3",
     "typescript": "^5.7.0",
     "vite": "^8.0.0"
   }
