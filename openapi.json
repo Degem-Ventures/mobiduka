@@ -1,0 +1,136 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "MobiDuka Retail POS API Blueprint",
+    "description": "Multi-tenant, offline-first production backend engine supporting Flutter mobile clients and Kenyan retail ecosystems (Cash tracking, M-Pesa records, local synchronization syncing).",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000/api",
+      "description": "Local Dev Codespace Core Instance Router"
+    }
+  ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "summary": "Multi-Factor Authentication Entry Gateway",
+        "description": "Handles standard credential authorization maps for owners and fast PIN code verification sequences for shift cashiers.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identifier": { "type": "string", "example": "owner@mobiduka.com" },
+                  "password": { "type": "string", "example": "OwnerPass123" },
+                  "pin": { "type": "string", "example": "2540" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Authentication successful, returns active JWT token parameters." },
+          "401": { "description": "Invalid user credentials or mismatched secret keys." }
+        }
+      }
+    },
+    "/sync": {
+      "post": {
+        "summary": "Atomic Queue Transaction Sync Synchronization Endpoint",
+        "description": "Processes a collection array of chronological state logs generated offline on the local device.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "deviceId", "userId", "records"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "deviceId": { "type": "string" },
+                  "userId": { "type": "string", "format": "uuid" },
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string" },
+                        "entityName": { "type": "string", "example": "Sale" },
+                        "operation": { "type": "string", "example": "CREATE" },
+                        "payload": { "type": "object" },
+                        "createdAt": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Batch synced, returns processing counts and archived item arrays." },
+          "500": { "description": "Atomic transaction database failure exception thrown." }
+        }
+      }
+    },
+    "/sales": {
+      "post": {
+        "summary": "Process Sales Order Records",
+        "description": "Locks an atomic order invoice ledger transaction string, records item histories, and automatically decreases shelf metrics.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "businessId": { "type": "string" },
+                  "userId": { "type": "string" },
+                  "invoiceNo": { "type": "string", "example": "INV-83749" },
+                  "totalAmount": { "type": "number", "example": 510.0 },
+                  "paymentMode": { "type": "string", "example": "MPESA" },
+                  "mpesaRef": { "type": "string", "example": "QX728HJ92K" },
+                  "items": { "type": "array", "items": { "type": "object" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Sale created and stock adjustments complete." }
+        }
+      }
+    },
+    "/cash/session": {
+      "post": {
+        "summary": "Cashier Shift Drawer Reconciliation System",
+        "description": "Triggers daily shift ignition sequences or processes shift totals with dynamic computed cash variances.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId", "userId"],
+                "properties": {
+                  "action": { "type": "string", "example": "CLOSE" },
+                  "businessId": { "type": "string" },
+                  "userId": { "type": "string" },
+                  "sessionId": { "type": "string" },
+                  "closingCash": { "type": "number", "example": 14200.0 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Session closed out cleanly, returns computed float variances." },
+          "201": { "description": "New open shift session generated." }
+        }
+      }
+    }
+  }
+}
