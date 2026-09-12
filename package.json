@@ -10,10 +10,10 @@
     "start": "next start",
     "format": "oxfmt",
     "postinstall": "prisma generate",
-    "cap:sync": "npm run build && cap sync android",
-    "cap:sync:ios": "npm run build && cap sync ios",
+    "cap:sync": "pnpm run build && cap sync android",
+    "cap:sync:ios": "pnpm run build && cap sync ios",
     "cap:open": "cap open android",
-    "android:debug": "npm run cap:sync && cd android && ./gradlew assembleDebug"
+    "android:debug": "pnpm run cap:sync && cd android && ./gradlew assembleDebug"
   },
   "prisma": {
     "seed": "node --import tsx prisma/seed.ts"
