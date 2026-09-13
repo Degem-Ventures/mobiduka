@@ -48,6 +48,46 @@ jobs:
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/' android/app/build.gradle
           fi
 
+          # Apply the same SDK values to every Android library, including Flutter plugins.
+          if [ -f android/build.gradle.kts ]; then
+            cat >> android/build.gradle.kts <<'KOTLIN'
+
+          subprojects {
+            plugins.withId("com.android.application") {
+              extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
+                compileSdk = 36
+                buildToolsVersion = "36.0.0"
+                defaultConfig.targetSdk = 36
+              }
+            }
+            plugins.withId("com.android.library") {
+              extensions.configure<com.android.build.api.dsl.LibraryExtension> {
+                compileSdk = 36
+                buildToolsVersion = "36.0.0"
+                defaultConfig.targetSdk = 36
+              }
+            }
+          }
+          KOTLIN
+          else
+            cat >> android/build.gradle <<'GRADLE'
+
+          subprojects {
+            afterEvaluate { project ->
+              if (project.hasProperty('android')) {
+                project.android {
+                  compileSdkVersion 36
+                  buildToolsVersion "36.0.0"
+                  defaultConfig {
+                    targetSdkVersion 36
+                  }
+                }
+              }
+            }
+          }
+          GRADLE
+          fi
+
       - name: Install Dependencies
         run: |
           cd flutter_app
