@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'package:bluetooth_print_plus/bluetooth_print_plus.dart' show BluetoothDevice;
 
 import 'services/cash_service.dart';
 import 'services/credit_service.dart';
@@ -2104,7 +2104,7 @@ class _POSScreenState extends State<POSScreen> {
                     DropdownButtonFormField<BluetoothDevice>(
                       value: _selectedPrinter,
                       decoration: const InputDecoration(labelText: 'Receipt printer', prefixIcon: Icon(Icons.print_outlined), border: OutlineInputBorder()),
-                      items: _pairedPrinters.map((printer) => DropdownMenuItem(value: printer, child: Text(printer.name ?? 'Bluetooth printer'))).toList(),
+                      items: _pairedPrinters.map((printer) => DropdownMenuItem(value: printer, child: Text(printer.name.isEmpty ? 'Bluetooth printer' : printer.name))).toList(),
                       onChanged: (printer) => setState(() => _selectedPrinter = printer),
                     ),
                     const SizedBox(height: 10),

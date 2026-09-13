@@ -1,9 +1,12 @@
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'package:bluetooth_print_plus/bluetooth_print_plus.dart';
 
 class PrinterService {
-  final BlueThermalPrinter bluetooth = BlueThermalPrinter.instance;
+  final EscCommand _escCommand = EscCommand();
 
-  Future<List<BluetoothDevice>> getPairedDevices() => bluetooth.getBondedDevices();
+  Future<List<BluetoothDevice>> getPairedDevices() async {
+    final results = await BluetoothPrintPlus.startScan(timeout: const Duration(seconds: 8));
+    return List<BluetoothDevice>.from(results as List);
+  }
 
   Future<void> printReceipt({
     required BluetoothDevice device,
@@ -13,29 +16,33 @@ class PrinterService {
     required String paymentMode,
     required List<Map<String, dynamic>> items,
   }) async {
-    final connected = await bluetooth.isConnected ?? false;
-    if (!connected) await bluetooth.connect(device);
+    if (!BluetoothPrintPlus.isConnected) {
+      await BluetoothPrintPlus.connect(device);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
 
-    bluetooth.printCustom(storeName.toUpperCase(), 3, 1);
-    bluetooth.printCustom('Point of Sale Receipt', 1, 1);
-    bluetooth.printCustom('--------------------------------', 1, 1);
-    bluetooth.printLeftRight('Invoice No:', invoiceNo, 1);
-    bluetooth.printLeftRight('Payment Mode:', paymentMode, 1);
-    bluetooth.printCustom('--------------------------------', 1, 1);
+    await _escCommand.cleanCommand();
+    await _escCommand.text(content: storeName.toUpperCase(), alignment: Alignment.center, fontSize: EscFontSize.size3);
+    await _escCommand.text(content: 'Point of Sale Receipt', alignment: Alignment.center);
+    await _escCommand.text(content: '--------------------------------', alignment: Alignment.center);
+    await _escCommand.text(content: 'Invoice No: $invoiceNo');
+    await _escCommand.text(content: 'Payment Mode: $paymentMode');
+    await _escCommand.text(content: '--------------------------------', alignment: Alignment.center);
 
     for (final item in items) {
       final name = item['name']?.toString() ?? 'Item';
       final quantity = (item['qty'] as num?)?.toInt() ?? 0;
       final price = (item['price'] as num?)?.toDouble() ?? 0;
-      bluetooth.printCustom(name, 1, 0);
-      bluetooth.printLeftRight('$quantity x KES ${price.toStringAsFixed(0)}', 'KES ${(quantity * price).toStringAsFixed(0)}', 1);
+      await _escCommand.text(content: name);
+      await _escCommand.text(content: '$quantity x KES ${price.toStringAsFixed(0)}    KES ${(quantity * price).toStringAsFixed(0)}');
     }
 
-    bluetooth.printCustom('--------------------------------', 1, 1);
-    bluetooth.printCustom('TOTAL AMOUNT: KES ${totalAmount.toStringAsFixed(2)}', 2, 1);
-    bluetooth.printCustom('Asante kwa biashara yako!', 1, 1);
-    bluetooth.printNewLine();
-    bluetooth.printNewLine();
-    bluetooth.paperCut();
+    await _escCommand.text(content: '--------------------------------', alignment: Alignment.center);
+    await _escCommand.text(content: 'TOTAL AMOUNT: KES ${totalAmount.toStringAsFixed(2)}', alignment: Alignment.center, style: EscTextStyle.bold, fontSize: EscFontSize.size2);
+    await _escCommand.text(content: 'Asante kwa biashara yako!', alignment: Alignment.center);
+    await _escCommand.newline();
+    await _escCommand.newline();
+    await _escCommand.cutPaper();
+    await BluetoothPrintPlus.write(await _escCommand.getCommand());
   }
 }
