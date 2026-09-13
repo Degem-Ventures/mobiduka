@@ -25,6 +25,18 @@ jobs:
             flutter create --platforms=ios .
           fi
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          podfile = Path("ios/Podfile")
+          text = podfile.read_text()
+          marker = "    flutter_additional_ios_build_settings(target)\n"
+          setting = marker + "    target.build_configurations.each do |config|\n" + "      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n" + "    end\n"
+          if marker not in text:
+              raise SystemExit("Expected Flutter Podfile post_install hook was not found")
+          podfile.write_text(text.replace(marker, setting, 1))
+          PY
+
       - name: Install Dependencies
         run: |
           cd flutter_app
