@@ -30,11 +30,16 @@ jobs:
 
           podfile = Path("ios/Podfile")
           text = podfile.read_text()
+          modular_headers = "use_modular_headers!\n"
+          if "use_modular_headers!" not in text:
+              text = modular_headers + text
           marker = "    flutter_additional_ios_build_settings(target)\n"
-          setting = marker + "    target.build_configurations.each do |config|\n" + "      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n" + "    end\n"
+          setting = marker + "    target.build_configurations.each do |config|\n" + "      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n" + "      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'\n" + "    end\n"
           if marker not in text:
               raise SystemExit("Expected Flutter Podfile post_install hook was not found")
-          podfile.write_text(text.replace(marker, setting, 1))
+          text = text.replace(marker, setting, 1)
+          text = text.replace("post_install do |installer|\n", "post_install do |installer|\n  installer.pods_project.build_configurations.each do |config|\n    config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n  end\n", 1)
+          podfile.write_text(text)
           PY
 
       - name: Install Dependencies
