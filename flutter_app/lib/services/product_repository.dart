@@ -32,7 +32,7 @@ class ProductRepository {
 
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE products (
@@ -44,9 +44,13 @@ class ProductRepository {
             stock INTEGER,
             reorder INTEGER,
             emoji TEXT,
+            barcode TEXT,
             status TEXT
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) await db.execute('ALTER TABLE products ADD COLUMN barcode TEXT');
       },
     );
   }
@@ -72,6 +76,7 @@ class ProductRepository {
           'stock': product.stock,
           'reorder': product.reorder,
           'emoji': product.emoji,
+          'barcode': product.barcode,
           'status': product.status,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
@@ -95,6 +100,7 @@ class ProductRepository {
         row['reorder'] as int? ?? 10,
         row['emoji'] as String? ?? '📦',
         status: status,
+        barcode: row['barcode'] as String?,
       );
     }).toList();
   }
@@ -112,6 +118,7 @@ class ProductRepository {
         'stock': product.stock,
         'reorder': product.reorder,
         'emoji': product.emoji,
+        'barcode': product.barcode,
         'status': product.status,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
@@ -136,8 +143,27 @@ class ProductRepository {
         row['reorder'] as int? ?? 10,
         row['emoji'] as String? ?? '📦',
         status: status,
+        barcode: row['barcode'] as String?,
       );
     }).toList();
+  }
+
+  Future<Product?> findByBarcode(String barcode) async {
+    final db = await database;
+    final rows = await db.query('products', where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return Product(
+      row['name'] as String,
+      row['category'] as String,
+      row['cost'] as int? ?? 0,
+      row['price'] as int? ?? 0,
+      row['stock'] as int? ?? 0,
+      row['reorder'] as int? ?? 10,
+      row['emoji'] as String? ?? '📦',
+      status: row['status'] as String? ?? 'good',
+      barcode: row['barcode'] as String?,
+    );
   }
 
   Future<List<Map<String, dynamic>>> fetchCatalogJson() async {
@@ -152,6 +178,7 @@ class ProductRepository {
         'stock': row['stock'],
         'reorder': row['reorder'],
         'emoji': row['emoji'],
+        'barcode': row['barcode'],
         'status': row['status'],
       };
     }).toList();

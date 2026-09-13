@@ -1,9 +1,20 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 
 import 'services/cash_service.dart';
+import 'services/credit_service.dart';
+import 'services/customer_service.dart';
+import 'services/mpesa_service.dart';
 import 'services/product_repository.dart';
+import 'services/purchase_order_service.dart';
+import 'services/printer_service.dart';
+import 'services/sms_watcher_service.dart';
 import 'services/sync_service.dart';
+import 'widgets/barcode_scanner_view.dart';
 
 void main() => runApp(const MobiDukaApp());
 
@@ -22,6 +33,7 @@ class Product {
     this.reorder,
     this.emoji, {
     this.status = 'good',
+    this.barcode,
   });
   final String name;
   final String category;
@@ -31,6 +43,7 @@ class Product {
   final int reorder;
   final String emoji;
   final String status;
+  final String? barcode;
 }
 
 final List<Product> defaultProducts = <Product>[
@@ -1588,9 +1601,16 @@ class POSScreen extends StatefulWidget {
 
 class _POSScreenState extends State<POSScreen> {
   final SyncService _syncService = SyncService();
+  final MpesaService _mpesaService = MpesaService();
+  final SmsWatcherService _smsWatcherService = SmsWatcherService();
+  final PrinterService _printerService = PrinterService();
+  final TextEditingController _mpesaPhoneController = TextEditingController(text: '254');
+  List<BluetoothDevice> _pairedPrinters = const [];
+  BluetoothDevice? _selectedPrinter;
   String search = '';
   String category = 'All';
   String paymentMethod = 'cash';
+  bool _mpesaRequestPending = false;
   int discount = 0;
   String view = 'pos';
 
@@ -1608,6 +1628,63 @@ class _POSScreenState extends State<POSScreen> {
   ];
 
   final Map<String, int> cart = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPairedPrinters();
+  }
+
+  Future<void> _loadPairedPrinters() async {
+    try {
+      final printers = await _printerService.getPairedDevices();
+      if (!mounted) return;
+      setState(() {
+        _pairedPrinters = printers;
+        _selectedPrinter = printers.isEmpty ? null : printers.first;
+      });
+    } catch (_) {
+      // Bluetooth may be unavailable on simulators or unsupported devices.
+    }
+  }
+
+  Future<void> _openBarcodeScanner() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BarcodeScannerView(
+          onProductScanned: (product) => addToCart(product),
+        ),
+      ),
+    );
+  }
+
+  void _printReceiptInBackground() {
+    final printer = _selectedPrinter;
+    if (printer == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pair a Bluetooth printer before printing.')));
+      return;
+    }
+
+    unawaited(_printerService.printReceipt(
+      device: printer,
+      storeName: 'MobiDuka Store',
+      invoiceNo: 'RCPT-${DateTime.now().millisecondsSinceEpoch % 100000}',
+      totalAmount: total.toDouble(),
+      paymentMode: paymentMethod,
+      items: cartItems,
+    ).then((_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Receipt sent to printer.')));
+    }).catchError((_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFFD32F2F), content: Text('Unable to print receipt.')));
+    }));
+  }
+
+  @override
+  void dispose() {
+    _smsWatcherService.stopSmsWatcher();
+    _mpesaPhoneController.dispose();
+    super.dispose();
+  }
 
   void addToCart(Product product) {
     setState(() {
@@ -1643,8 +1720,112 @@ class _POSScreenState extends State<POSScreen> {
 
   int get total => subtotal - discountAmount;
 
+  Future<Map<String, dynamic>> _awaitMpesaConfirmation({
+    required String checkoutRequestId,
+    required double amount,
+    required String phone,
+  }) {
+    final completer = Completer<Map<String, dynamic>>();
+    var finishedSources = 0;
+    Map<String, dynamic>? lastFailure;
+
+    void handleResult(Map<String, dynamic> result) {
+      if (completer.isCompleted) return;
+      if (result['status'] == 'SUCCESS') {
+        completer.complete(result);
+        return;
+      }
+      lastFailure = result;
+      finishedSources++;
+      if (finishedSources == 2) completer.complete(lastFailure!);
+    }
+
+    _mpesaService.pollTransactionStatus(checkoutRequestId: checkoutRequestId).then(handleResult).catchError((error) {
+      handleResult({'status': 'FAILED', 'message': 'Online M-Pesa verification failed: $error'});
+    });
+    _smsWatcherService.startSmsIncomingWatcher(
+      targetAmount: amount,
+      customerPhone: phone,
+      onPaymentVerified: (_) {},
+    ).then((code) => handleResult({
+      'status': code == null ? 'TIMEOUT' : 'SUCCESS',
+      'receipt': code,
+      'message': code == null ? 'Offline SMS verification timed out.' : 'Payment verified from M-Pesa SMS.',
+    })).catchError((error) {
+      handleResult({'status': 'FAILED', 'message': 'Offline SMS verification failed: $error'});
+    });
+
+    return completer.future;
+  }
+
   Future<void> _completeSale() async {
     if (cart.isEmpty) return;
+
+    if (paymentMethod == 'mpesa') {
+      setState(() => _mpesaRequestPending = true);
+      final result = await _mpesaService.initiateStkPush(
+        phoneNumber: _mpesaPhoneController.text,
+        amount: total.toDouble(),
+        businessId: 'demo-business',
+        accountReference: 'MobiDuka POS',
+      );
+      if (!mounted) return;
+      if (result['success'] != true) {
+        setState(() => _mpesaRequestPending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: const Color(0xFFD32F2F), content: Text(result['message'] as String? ?? 'M-Pesa request failed.')),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(backgroundColor: navy, content: Text('Awaiting Customer PIN Entry...')),
+      );
+
+      final checkoutRequestId = result['checkoutRequestId'] as String?;
+      if (checkoutRequestId == null || checkoutRequestId.isEmpty) {
+        setState(() => _mpesaRequestPending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(backgroundColor: Color(0xFFD32F2F), content: Text('M-Pesa did not return a verification ID.')),
+        );
+        return;
+      }
+
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => const AlertDialog(
+            title: Text('Awaiting Customer PIN Entry...'),
+            content: Row(
+              children: [
+                CircularProgressIndicator(color: navy),
+                SizedBox(width: 16),
+                Expanded(child: Text('Checking M-Pesa confirmation.')),
+              ],
+            ),
+          ),
+        );
+      }
+
+      final confirmation = await _awaitMpesaConfirmation(
+        checkoutRequestId: checkoutRequestId,
+        amount: total.toDouble(),
+        phone: _mpesaPhoneController.text,
+      );
+      if (!mounted) return;
+      _smsWatcherService.stopSmsWatcher();
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+      setState(() => _mpesaRequestPending = false);
+      if (confirmation['status'] != 'SUCCESS') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: const Color(0xFFD32F2F), content: Text(confirmation['message'] as String? ?? 'M-Pesa payment was not confirmed.')),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: const Color(0xFF2E7D32), content: Text(confirmation['message'] as String? ?? 'Payment verified successfully.')),
+      );
+    }
 
     final saleId = 'sale-${DateTime.now().millisecondsSinceEpoch}';
     final salePayload = {
@@ -1666,8 +1847,8 @@ class _POSScreenState extends State<POSScreen> {
 
     await _syncService.queueChange(
       id: saleId,
-      entityName: 'sale',
-      operation: 'create',
+      entityName: 'Sale',
+      operation: 'CREATE',
       payload: salePayload,
     );
 
@@ -1919,11 +2100,20 @@ class _POSScreenState extends State<POSScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  if (_pairedPrinters.isNotEmpty) ...[
+                    DropdownButtonFormField<BluetoothDevice>(
+                      value: _selectedPrinter,
+                      decoration: const InputDecoration(labelText: 'Receipt printer', prefixIcon: Icon(Icons.print_outlined), border: OutlineInputBorder()),
+                      items: _pairedPrinters.map((printer) => DropdownMenuItem(value: printer, child: Text(printer.name ?? 'Bluetooth printer'))).toList(),
+                      onChanged: (printer) => setState(() => _selectedPrinter = printer),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   Row(
                     children: [
                       Expanded(
                         child: TextButton(
-                          onPressed: () {},
+                          onPressed: _printReceiptInBackground,
                           style: TextButton.styleFrom(
                             backgroundColor: const Color(0xFFEEF2FF),
                             foregroundColor: navy,
@@ -2016,6 +2206,20 @@ class _POSScreenState extends State<POSScreen> {
                   const SizedBox(height: 12),
                   _paymentOption('cash', 'Cash', 'Physical cash payment', '💵', navy),
                   _paymentOption('mpesa', 'M-Pesa', 'Mobile money transfer', '📱', const Color(0xFF2E7D32)),
+                  if (paymentMethod == 'mpesa') ...[
+                    const SizedBox(height: 2),
+                    TextField(
+                      controller: _mpesaPhoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'Customer phone number',
+                        hintText: '2547XXXXXXXX',
+                        prefixIcon: Icon(Icons.phone_android),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   _paymentOption('credit', 'Credit / Tab', 'Add to customer account', '📋', const Color(0xFFD32F2F)),
                   const SizedBox(height: 20),
                   const Text('Discount', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
@@ -2044,14 +2248,16 @@ class _POSScreenState extends State<POSScreen> {
                   ),
                   const SizedBox(height: 18),
                   TextButton(
-                    onPressed: _completeSale,
+                    onPressed: _mpesaRequestPending ? null : _completeSale,
                     style: TextButton.styleFrom(
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: Text('Complete Sale · KSh $total', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                    child: _mpesaRequestPending
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text('Complete Sale · KSh $total', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                   ),
                 ],
               ),
@@ -3263,6 +3469,7 @@ class _ProductScreenState extends State<ProductScreen> {
 
 class CustomerEntry {
   const CustomerEntry({
+    required this.id,
     required this.initials,
     required this.name,
     required this.phone,
@@ -3272,6 +3479,7 @@ class CustomerEntry {
     required this.color,
   });
 
+  final String id;
   final String initials;
   final String name;
   final String phone;
@@ -3305,19 +3513,15 @@ class CustomerScreen extends StatefulWidget {
 }
 
 class _CustomerScreenState extends State<CustomerScreen> {
+  final CustomerService _customerService = CustomerService();
+  final SyncService _syncService = SyncService();
+  final TextEditingController _searchController = TextEditingController();
   String search = '';
   String tab = 'all';
   String? selected;
+  bool _loadingCustomers = true;
 
-  static const List<CustomerEntry> _customers = [
-    CustomerEntry(initials: 'JM', name: 'Jane Mwangi', phone: '0712 345 678', credit: 3400, purchases: 28, lastVisit: '2h ago', color: Color(0xFF123A8F)),
-    CustomerEntry(initials: 'PO', name: 'Peter Otieno', phone: '0723 456 789', credit: 5200, purchases: 45, lastVisit: 'Yesterday', color: Color(0xFF2E7D32)),
-    CustomerEntry(initials: 'MW', name: 'Mary Wanjiku', phone: '0734 567 890', credit: 0, purchases: 32, lastVisit: '3 days ago', color: Color(0xFFD32F2F)),
-    CustomerEntry(initials: 'JK', name: 'James Kariuki', phone: '0745 678 901', credit: 1800, purchases: 19, lastVisit: '1 week ago', color: Color(0xFFD4AF37)),
-    CustomerEntry(initials: 'GA', name: 'Grace Achieng', phone: '0756 789 012', credit: 9600, purchases: 67, lastVisit: 'Today', color: Color(0xFF7B1FA2)),
-    CustomerEntry(initials: 'DK', name: 'David Kamau', phone: '0767 890 123', credit: 0, purchases: 14, lastVisit: '2 weeks ago', color: Color(0xFFF57C00)),
-    CustomerEntry(initials: 'SN', name: 'Sarah Njeri', phone: '0778 901 234', credit: 2100, purchases: 38, lastVisit: '4 days ago', color: Color(0xFF00796B)),
-  ];
+  List<CustomerEntry> _customers = const [];
 
   static const List<CustomerTransaction> _transactions = [
     CustomerTransaction(date: 'Today 14:18', type: 'Sale', amount: 3400, method: 'M-Pesa', items: 8),
@@ -3325,6 +3529,102 @@ class _CustomerScreenState extends State<CustomerScreen> {
     CustomerTransaction(date: '5 Jul', type: 'Payment', amount: -2000, method: 'Cash', items: 0),
     CustomerTransaction(date: '3 Jul', type: 'Sale', amount: 4800, method: 'Cash', items: 12),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCustomers();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCustomers() async {
+    final rows = await _customerService.searchCachedCustomers(_searchController.text);
+    if (!mounted) return;
+    setState(() {
+      _customers = rows.map(_customerFromRow).toList();
+      _loadingCustomers = false;
+    });
+  }
+
+  CustomerEntry _customerFromRow(Map<String, dynamic> row) {
+    final name = row['name'] as String? ?? 'Customer';
+    final initials = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).map((part) => part[0]).take(2).join().toUpperCase();
+    return CustomerEntry(
+      id: row['id'] as String? ?? name,
+      initials: initials.isEmpty ? 'CU' : initials,
+      name: name,
+      phone: row['phone'] as String? ?? '',
+      credit: (row['balance'] as num?)?.round() ?? 0,
+      purchases: row['transactionCount'] as int? ?? 0,
+      lastVisit: row['createdAt'] as String? ?? 'No visits yet',
+      color: const Color(0xFF123A8F),
+    );
+  }
+
+  Future<void> _showRegisterCustomerSheet() async {
+    final nameController = TextEditingController();
+    final phoneController = TextEditingController();
+    final limitController = TextEditingController(text: '0');
+    final formKey = GlobalKey<FormState>();
+    var created = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
+        child: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Register New Customer', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 16),
+              TextFormField(controller: nameController, decoration: const InputDecoration(labelText: 'Customer name', border: OutlineInputBorder()), validator: (value) => value == null || value.trim().isEmpty ? 'Name is required' : null),
+              const SizedBox(height: 12),
+              TextFormField(controller: phoneController, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone number', hintText: '0712 345 678', border: OutlineInputBorder())),
+              const SizedBox(height: 12),
+              TextFormField(controller: limitController, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Initial credit limit', prefixText: 'KSh ', border: OutlineInputBorder()), validator: (value) => double.tryParse(value ?? '') == null ? 'Enter a valid amount' : null),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () async {
+                    if (!(formKey.currentState?.validate() ?? false)) return;
+                    await _customerService.onboardOfflineCustomer(
+                      businessId: 'demo-business',
+                      name: nameController.text,
+                      phone: phoneController.text,
+                      initialCreditLimit: double.parse(limitController.text),
+                    );
+                    created = true;
+                    if (!sheetContext.mounted) return;
+                    Navigator.of(sheetContext).pop();
+                  },
+                  child: const Text('Save Customer'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    nameController.dispose();
+    phoneController.dispose();
+    limitController.dispose();
+    if (!created) return;
+    await _loadCustomers();
+    if (!mounted) return;
+    unawaited(_syncService.processCloudSync(businessId: 'demo-business', deviceId: 'mobile-device', userId: 'demo-owner'));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Customer registered and queued for sync.')));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3578,7 +3878,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                   children: [
                     const Text('Customers', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
                     TextButton(
-                      onPressed: () {},
+                      onPressed: _showRegisterCustomerSheet,
                       style: TextButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: ink,
@@ -3607,7 +3907,11 @@ class _CustomerScreenState extends State<CustomerScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: TextField(
-                    onChanged: (value) => setState(() => search = value),
+                    controller: _searchController,
+                    onChanged: (value) {
+                      setState(() => search = value);
+                      unawaited(_loadCustomers());
+                    },
                     style: const TextStyle(color: Colors.white, fontSize: 14),
                     decoration: InputDecoration(
                       hintText: 'Search customers...',
@@ -4761,16 +5065,14 @@ class PurchaseOrdersScreen extends StatefulWidget {
 }
 
 class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
+  final SyncService _syncService = SyncService();
+  final PurchaseOrderService _purchaseOrderService = PurchaseOrderService.instance;
+
   String filter = 'all';
   _PurchaseOrderEntry? selected;
   bool showNew = false;
-  final List<_PurchaseOrderEntry> orders = const [
-    _PurchaseOrderEntry(id: 'PO-2026-084', supplier: 'Unga Limited', date: '8 Jul 2026', items: 6, total: 48000, status: 'pending', dueDate: '10 Jul 2026'),
-    _PurchaseOrderEntry(id: 'PO-2026-083', supplier: 'Bidco Africa', date: '7 Jul 2026', items: 4, total: 32500, status: 'delivered', dueDate: '9 Jul 2026'),
-    _PurchaseOrderEntry(id: 'PO-2026-082', supplier: 'Procter & Gamble', date: '5 Jul 2026', items: 8, total: 67200, status: 'partial', dueDate: '7 Jul 2026'),
-    _PurchaseOrderEntry(id: 'PO-2026-081', supplier: 'Dawa Limited', date: '3 Jul 2026', items: 12, total: 24800, status: 'delivered', dueDate: '5 Jul 2026'),
-    _PurchaseOrderEntry(id: 'PO-2026-080', supplier: 'Brookside Dairy', date: '1 Jul 2026', items: 3, total: 18600, status: 'cancelled', dueDate: '3 Jul 2026'),
-  ];
+  List<_PurchaseOrderEntry> orders = const [];
+  final Map<String, TextEditingController> _itemControllers = {};
 
   final List<Map<String, dynamic>> orderItems = const [
     {'name': 'Unga Jogoo 2kg', 'qty': 50, 'unit': 'Bags', 'cost': 160, 'total': 8000},
@@ -4785,11 +5087,249 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
 
   final Map<String, String> newForm = {'supplier': '', 'notes': ''};
 
+  @override
+  void initState() {
+    super.initState();
+    _loadOrders();
+    for (final item in orderItems) {
+      final name = item['name'] as String;
+      _itemControllers[name] = TextEditingController(text: '${item['qty']}');
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _itemControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _loadOrders() async {
+    final rows = await _purchaseOrderService.loadPurchaseOrders();
+    if (!mounted) return;
+
+    setState(() {
+      orders = rows.map(_mapRowToOrder).toList();
+    });
+  }
+
+  _PurchaseOrderEntry _mapRowToOrder(Map<String, dynamic> row) {
+    final rawStatus = (row['status'] as String? ?? 'REQUESTED').toString();
+    final status = _normalizeOrderStatus(rawStatus);
+
+    final rawItems = row['items'] as String? ?? '[]';
+    List<dynamic> decodedItems = [];
+    try {
+      decodedItems = jsonDecode(rawItems) as List<dynamic>;
+    } catch (_) {
+      decodedItems = const [];
+    }
+
+    return _PurchaseOrderEntry(
+      id: row['id'] as String? ?? 'PO-${DateTime.now().millisecondsSinceEpoch}',
+      supplier: row['supplierName'] as String? ?? 'Supplier',
+      date: _formatDisplayDate(row['createdAt'] as String?),
+      items: decodedItems.length,
+      total: row['total'] as int? ?? 0,
+      status: status,
+      dueDate: _formatDisplayDate(row['expectedDeliveryDate'] as String?),
+    );
+  }
+
+  String _normalizeOrderStatus(String status) {
+    final value = status.trim().toLowerCase();
+    if (value == 'requested') return 'pending';
+    if (value == 'received') return 'delivered';
+    return value.isEmpty ? 'pending' : value;
+  }
+
+  String _formatDisplayDate(String? rawDate) {
+    if (rawDate == null || rawDate.isEmpty) return 'TBD';
+    try {
+      final parsed = DateTime.tryParse(rawDate);
+      if (parsed == null) return 'TBD';
+      return '${parsed.day} ${_monthShort(parsed.month)} ${parsed.year}';
+    } catch (_) {
+      return 'TBD';
+    }
+  }
+
+  String _monthShort(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
+  }
+
+  Future<void> _submitPurchaseOrder() async {
+    final supplierName = (newForm['supplier'] ?? '').trim();
+    if (supplierName.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a supplier before submitting the procurement request.')),
+      );
+      return;
+    }
+
+    final draftedItems = orderItems.map((item) {
+      final name = item['name'] as String;
+      final controller = _itemControllers[name] ?? TextEditingController(text: '${item['qty']}');
+      final qty = int.tryParse(controller.text) ?? (item['qty'] as int);
+      final cost = item['cost'] as int;
+      return {
+        'name': name,
+        'qty': qty,
+        'unit': item['unit'],
+        'cost': cost,
+        'total': qty * cost,
+      };
+    }).toList();
+
+    final created = await _purchaseOrderService.createOfflinePurchaseOrder(
+      supplierName: supplierName,
+      items: draftedItems,
+      notes: newForm['notes'],
+      expectedDeliveryDate: DateTime.now().add(const Duration(days: 5)).toIso8601String(),
+    );
+
+    final orderId = created['id'] as String? ?? 'PO-${DateTime.now().millisecondsSinceEpoch}';
+
+    await _syncService.queueChange(
+      id: orderId,
+      entityName: 'purchase_order',
+      operation: 'create',
+      payload: {
+        'id': orderId,
+        'supplierName': supplierName,
+        'status': 'REQUESTED',
+        'action': 'CREATE',
+        'notes': newForm['notes'] ?? '',
+        'expectedDeliveryDate': DateTime.now().add(const Duration(days: 5)).toIso8601String(),
+        'items': draftedItems,
+        'total': created['total'],
+      },
+    );
+
+    await _syncService.processCloudSync(
+      businessId: 'demo-business',
+      deviceId: 'mobile-device',
+      userId: 'demo-owner',
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      newForm['supplier'] = '';
+      newForm['notes'] = '';
+      showNew = false;
+      for (final item in orderItems) {
+        final name = item['name'] as String;
+        _itemControllers[name]?.text = '${item['qty']}';
+      }
+    });
+
+    await _loadOrders();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Procurement request queued and synced.')),
+    );
+  }
+
+  Future<void> _markOrderReceived(_PurchaseOrderEntry order) async {
+    final updated = await _purchaseOrderService.markPurchaseOrderReceived(order.id);
+    if (updated.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to mark the purchase order as received.')),
+      );
+      return;
+    }
+
+    final orderItemsRaw = updated['items'] as String? ?? '[]';
+    List<dynamic> items = [];
+    try {
+      items = jsonDecode(orderItemsRaw) as List<dynamic>;
+    } catch (_) {
+      items = const [];
+    }
+
+    final refreshedProducts = List<Product>.from(products);
+    for (final item in items) {
+      final itemMap = item as Map<String, dynamic>;
+      final name = itemMap['name'] as String? ?? '';
+      final qty = (itemMap['qty'] is num)
+          ? (itemMap['qty'] as num).toInt()
+          : int.tryParse(itemMap['qty']?.toString() ?? '') ?? 0;
+      if (name.isEmpty || qty <= 0) continue;
+
+      final index = refreshedProducts.indexWhere((product) => product.name == name);
+      if (index >= 0) {
+        final existing = refreshedProducts[index];
+        refreshedProducts[index] = Product(
+          existing.name,
+          existing.category,
+          existing.cost,
+          existing.price,
+          existing.stock + qty,
+          existing.reorder,
+          existing.emoji,
+          status: existing.stock + qty <= existing.reorder ? 'low' : 'good',
+        );
+      }
+    }
+
+    products = refreshedProducts;
+    await ProductRepository.instance.saveProducts(products);
+
+    await _syncService.queueChange(
+      id: order.id,
+      entityName: 'purchase_order',
+      operation: 'update',
+      payload: {
+        'id': order.id,
+        'supplierName': order.supplier,
+        'status': 'RECEIVED',
+        'action': 'RECEIVE',
+        'items': items,
+        'receivedAt': updated['receivedAt'],
+      },
+    );
+    await _syncService.processCloudSync(
+      businessId: 'demo-business',
+      deviceId: 'mobile-device',
+      userId: 'demo-owner',
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      selected = null;
+    });
+    await _loadOrders();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Stock was refreshed and the receipt was recorded.')),
+    );
+  }
+
   List<_PurchaseOrderEntry> get filteredOrders {
     if (filter == 'pending') return orders.where((o) => o.status == 'pending' || o.status == 'partial').toList();
     if (filter == 'delivered') return orders.where((o) => o.status == 'delivered').toList();
     return orders;
   }
+
+  int get draftSubtotal {
+    var total = 0;
+    for (final item in orderItems) {
+      final name = item['name'] as String;
+      final qty = int.tryParse(_itemControllers[name]?.text ?? '') ?? (item['qty'] as int);
+      final cost = item['cost'] as int;
+      total += qty * cost;
+    }
+    return total;
+  }
+
+  int get draftTax => (draftSubtotal * 0.16).round();
+  int get draftTotal => draftSubtotal + draftTax;
 
   Color _statusColor(String status) {
     switch (status) {
@@ -5018,7 +5558,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             child: TextField(
                               textAlign: TextAlign.center,
                               keyboardType: TextInputType.number,
-                              controller: TextEditingController(text: item['qty'].toString())..selection = TextSelection.collapsed(offset: item['qty'].toString().length),
+                              controller: _itemControllers[item['name']] ?? TextEditingController(text: '${item['qty']}'),
                               decoration: const InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                                 border: OutlineInputBorder(),
@@ -5059,22 +5599,22 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   ),
                   child: Column(
                     children: [
-                      _totalsRow('Subtotal', 'KSh 34,200'),
-                      _totalsRow('Tax (16% VAT)', 'KSh 5,472'),
-                      _totalsRow('Total', 'KSh 39,672', bold: true),
+                      _totalsRow('Subtotal', 'KSh ${draftSubtotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
+                      _totalsRow('Tax (16% VAT)', 'KSh ${draftTax.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
+                      _totalsRow('Total', 'KSh ${draftTotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}', bold: true),
                     ],
                   ),
                 ),
                 const SizedBox(height: 20),
                 TextButton(
-                  onPressed: () => setState(() => showNew = false),
+                  onPressed: _submitPurchaseOrder,
                   style: TextButton.styleFrom(
                     backgroundColor: navy,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  child: const Text('Submit Purchase Order', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                  child: const Text('Submit Procurement Request', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 ),
               ],
             ),
@@ -5209,7 +5749,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: TextButton(
-                          onPressed: () => setState(() => selected = null),
+                          onPressed: () => _markOrderReceived(order),
                           style: TextButton.styleFrom(
                             foregroundColor: Colors.white,
                             backgroundColor: const Color(0xFF2E7D32),
@@ -6987,66 +7527,123 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 }
 
-class CreditBookScreen extends StatelessWidget {
-  const CreditBookScreen({required this.onBack});
+class CreditBookScreen extends StatefulWidget {
+  const CreditBookScreen({required this.onBack, super.key});
   final VoidCallback onBack;
 
-  final List<_CreditAccount> _accounts = const [
-    _CreditAccount(
-      customer: 'Peter Otieno',
-      phone: '0723 456 789',
-      balance: 5200,
-      lastTx: '8 Jul 2026',
-      txCount: 4,
-      initials: 'PO',
-      color: Color(0xFF2E7D32),
-      daysOld: 1,
-    ),
-    _CreditAccount(
-      customer: 'Grace Achieng',
-      phone: '0756 789 012',
-      balance: 9600,
-      lastTx: '8 Jul 2026',
-      txCount: 7,
-      initials: 'GA',
-      color: Color(0xFF7B1FA2),
-      daysOld: 0,
-    ),
-    _CreditAccount(
-      customer: 'Jane Mwangi',
-      phone: '0712 345 678',
-      balance: 3400,
-      lastTx: '7 Jul 2026',
-      txCount: 2,
-      initials: 'JM',
-      color: Color(0xFF123A8F),
-      daysOld: 1,
-    ),
-    _CreditAccount(
-      customer: 'James Kariuki',
-      phone: '0745 678 901',
-      balance: 1800,
-      lastTx: '5 Jul 2026',
-      txCount: 1,
-      initials: 'JK',
-      color: Color(0xFFD4AF37),
-      daysOld: 3,
-    ),
-    _CreditAccount(
-      customer: 'Sarah Njeri',
-      phone: '0778 901 234',
-      balance: 2100,
-      lastTx: '4 Jul 2026',
-      txCount: 3,
-      initials: 'SN',
-      color: Color(0xFF00796B),
-      daysOld: 4,
-    ),
-  ];
+  @override
+  State<CreditBookScreen> createState() => _CreditBookScreenState();
+}
+
+class _CreditBookScreenState extends State<CreditBookScreen> {
+  final CreditService _creditService = CreditService.instance;
+  final SyncService _syncService = SyncService();
+  List<CreditAccount> _accounts = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAccounts();
+  }
+
+  Future<void> _loadAccounts() async {
+    final accounts = await _creditService.loadCreditAccounts();
+    if (!mounted) return;
+    setState(() {
+      _accounts = accounts;
+      _loading = false;
+    });
+  }
+
+  Future<void> _showRepaymentSheet(CreditAccount account) async {
+    final amountController = TextEditingController();
+    final amount = await showModalBottomSheet<double>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Receive Debt Repayment', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text('${account.customer} · Outstanding KSh ${account.balance.toStringAsFixed(0)}', style: const TextStyle(color: muted, fontSize: 12)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: amountController,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Collected Cash/M-Pesa Amount', prefixText: 'KSh ', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () {
+                  final value = double.tryParse(amountController.text.trim());
+                  if (value == null || value <= 0 || value > account.balance) return;
+                  Navigator.of(sheetContext).pop(value);
+                },
+                child: const Text('Record Repayment'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    amountController.dispose();
+    if (amount == null) return;
+
+    final updated = await _creditService.recordOfflinePayment(customerId: account.customerId, amount: amount);
+    if (updated == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment exceeds the outstanding balance.')));
+      return;
+    }
+
+    final paymentRecordId = 'credit-payment-${DateTime.now().microsecondsSinceEpoch}';
+    await _syncService.queueChange(
+      id: paymentRecordId,
+      entityName: 'Credit',
+      operation: 'UPDATE',
+      payload: {
+        'id': paymentRecordId,
+        'action': 'RECORD_PAYMENT',
+        'businessId': 'demo-business',
+        'customerId': account.customerId,
+        'amount': amount,
+      },
+    );
+    await _syncService.processCloudSync(businessId: 'demo-business', deviceId: 'mobile-device', userId: 'demo-owner');
+    await _loadAccounts();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Debt repayment recorded successfully.')),
+    );
+  }
+
+  int _daysOutstanding(CreditAccount account) {
+    final value = account.lastTransactionAt;
+    if (value == null) return 0;
+    final date = DateTime.tryParse(value);
+    if (date == null) return 0;
+    return DateTime.now().difference(date).inDays;
+  }
+
+  String _lastTransactionLabel(CreditAccount account) {
+    final value = account.lastTransactionAt;
+    if (value == null) return 'No payments recorded';
+    final date = DateTime.tryParse(value);
+    if (date == null) return 'Recent transaction';
+    return 'Last: ${date.day}/${date.month}/${date.year}';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final total = _accounts.fold<int>(0, (sum, item) => sum + item.balance);
+    final total = _accounts.fold<double>(0, (sum, item) => sum + item.balance);
 
     return ListView(
       padding: EdgeInsets.zero,
@@ -7066,7 +7663,7 @@ class CreditBookScreen extends StatelessWidget {
               Row(
                 children: [
                   IconButton(
-                    onPressed: onBack,
+                    onPressed: widget.onBack,
                     icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: Colors.white70),
                     splashRadius: 20,
                     padding: EdgeInsets.zero,
@@ -7103,7 +7700,7 @@ class CreditBookScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'KSh ${total.toString()}',
+                      'KSh ${total.toStringAsFixed(0)}',
                       style: const TextStyle(
                         color: Color(0xFFFF6B6B),
                         fontSize: 30,
@@ -7127,7 +7724,13 @@ class CreditBookScreen extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
           child: Column(
-            children: _accounts.map((account) {
+            children: _loading
+                ? [const Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: navy))]
+                : _accounts.isEmpty
+                    ? [const Padding(padding: EdgeInsets.all(32), child: Text('No local credit accounts found.', style: TextStyle(color: muted, fontSize: 14)))]
+                    : _accounts.map((account) {
+              final daysOld = _daysOutstanding(account);
+              final hasOutstanding = account.balance > 0;
               return Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 10),
@@ -7150,7 +7753,7 @@ class CreditBookScreen extends StatelessWidget {
                       width: 46,
                       height: 46,
                       decoration: BoxDecoration(
-                        color: account.color,
+                        color: Color(account.colorValue),
                         borderRadius: BorderRadius.circular(23),
                       ),
                       child: Center(
@@ -7179,7 +7782,7 @@ class CreditBookScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '${account.phone} · ${account.txCount} transactions',
+                            '${account.phone} · ${account.transactionCount} transactions',
                             style: const TextStyle(
                               color: muted,
                               fontSize: 11,
@@ -7187,11 +7790,11 @@ class CreditBookScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            account.daysOld == 0
+                            daysOld == 0
                                 ? 'Added today'
-                                : '${account.daysOld}d outstanding',
+                                : '${daysOld}d outstanding',
                             style: TextStyle(
-                              color: account.daysOld > 3 ? const Color(0xFFD32F2F) : const Color(0xFFF9A825),
+                              color: daysOld > 3 ? const Color(0xFFD32F2F) : const Color(0xFFF9A825),
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -7202,22 +7805,44 @@ class CreditBookScreen extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text(
-                          'KSh ${account.balance.toString()}',
-                          style: const TextStyle(
-                            color: Color(0xFFD32F2F),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: hasOutstanding ? const Color(0xFFFFEBEE) : const Color(0xFFE8F5E9),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'KSh ${account.balance.toStringAsFixed(0)}',
+                            style: TextStyle(
+                              color: hasOutstanding ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Last: ${account.lastTx}',
+                          _lastTransactionLabel(account),
                           style: const TextStyle(
                             color: muted,
                             fontSize: 11,
                           ),
                         ),
+                        if (hasOutstanding) ...[
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: () => _showRepaymentSheet(account),
+                            style: TextButton.styleFrom(
+                              backgroundColor: navy,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            child: const Text('Receive Repayment', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -7229,28 +7854,6 @@ class CreditBookScreen extends StatelessWidget {
       ],
     );
   }
-}
-
-class _CreditAccount {
-  const _CreditAccount({
-    required this.customer,
-    required this.phone,
-    required this.balance,
-    required this.lastTx,
-    required this.txCount,
-    required this.initials,
-    required this.color,
-    required this.daysOld,
-  });
-
-  final String customer;
-  final String phone;
-  final int balance;
-  final String lastTx;
-  final int txCount;
-  final String initials;
-  final Color color;
-  final int daysOld;
 }
 
 class ReportsScreen extends StatefulWidget {
@@ -7524,6 +8127,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       ],
                     ),
                   ),
+                    IconButton(
+                      onPressed: _openBarcodeScanner,
+                      tooltip: 'Scan barcode',
+                      color: gold,
+                      icon: const Icon(Icons.qr_code_scanner),
+                    ),
                   const SizedBox(width: 10),
                   SizedBox(
                     width: 58,

@@ -43,6 +43,33 @@ export async function POST(request: Request) {
       );
     }
 
+    const business = await prisma.business.findUnique({
+      where: { id: businessId },
+      select: { id: true },
+    });
+
+    if (!business) {
+      return NextResponse.json(
+        { error: "Invalid businessId. The target store was not found." },
+        { status: 400 },
+      );
+    }
+
+    const cashier = await prisma.user.findFirst({
+      where: {
+        id: resolvedCashierId,
+        businessId,
+      },
+      select: { id: true },
+    });
+
+    if (!cashier) {
+      return NextResponse.json(
+        { error: "The cashier user does not belong to this business." },
+        { status: 400 },
+      );
+    }
+
     const normalizedItems = items.map((item) => ({
       productId: item.productId,
       quantity: Number(item.quantity ?? 0),
@@ -56,6 +83,8 @@ export async function POST(request: Request) {
     const discountTotal = normalizedItems.reduce((sum, item) => sum + item.discount, 0);
     const taxTotal = normalizedItems.reduce((sum, item) => sum + item.tax, 0);
     const computedTotal = subtotal - discountTotal + taxTotal;
+    const normalizedPaymentMode = String(paymentMode ?? "CASH").trim().toUpperCase();
+    const saleTotal = Number(totalAmount ?? computedTotal);
 
     const completedSale = await prisma.$transaction(async (tx) => {
       const sale = await tx.sale.create({
@@ -67,8 +96,8 @@ export async function POST(request: Request) {
           subtotal: Number(totalAmount ?? subtotal),
           discount: discountTotal,
           tax: taxTotal,
-          total: Number(totalAmount ?? computedTotal),
-          paymentStatus: paymentMode ? "PAID" : "PENDING",
+          total: saleTotal,
+          paymentStatus: normalizedPaymentMode ? "PAID" : "PENDING",
           saleStatus: "COMPLETED",
         },
       });
@@ -113,22 +142,21 @@ export async function POST(request: Request) {
         });
       }
 
-      if (paymentMode === "MPESA" && mpesaRef) {
-        const paymentMethod = await tx.paymentMethod.upsert({
-          where: { name: "MPESA" },
-          update: {},
-          create: { name: "MPESA" },
-        });
+      const paymentMethodName = normalizedPaymentMode || "CASH";
+      const paymentMethod = await tx.paymentMethod.upsert({
+        where: { name: paymentMethodName },
+        update: {},
+        create: { name: paymentMethodName },
+      });
 
-        await tx.payment.create({
-          data: {
-            saleId: sale.id,
-            paymentMethodId: paymentMethod.id,
-            amount: Number(totalAmount ?? computedTotal),
-            reference: mpesaRef,
-          },
-        });
-      }
+      await tx.payment.create({
+        data: {
+          saleId: sale.id,
+          paymentMethodId: paymentMethod.id,
+          amount: saleTotal,
+          reference: paymentMethodName === "MPESA" ? mpesaRef ?? null : null,
+        },
+      });
 
       await tx.auditLog.create({
         data: {
