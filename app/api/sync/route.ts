@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 
 interface SyncRecord {
   id: string;
-  entityName: "Category" | "Supplier" | "Product" | "Customer" | "Sale" | "Expense";
+  entityName: "Category" | "Supplier" | "Product" | "Customer" | "Sale" | "Expense" | "Credit";
   operation: "CREATE" | "UPDATE" | "DELETE";
   payload: any;
   createdAt: string;
@@ -31,13 +31,29 @@ export async function POST(request: Request) {
       select: { status: true },
     });
 
-    if (!business || business.status === "SUSPENDED") {
+    if (!business) {
+      return NextResponse.json(
+        { error: "Invalid businessId. The store account was not found." },
+        { status: 400 },
+      );
+    }
+
+    if (business.status === "SUSPENDED") {
       return NextResponse.json(
         { error: "Unauthorized access. Invalid or suspended store account license." },
         { status: 403 },
       );
     }
 
+    const resolvedDeviceId = await prisma.device.findFirst({
+      where: {
+        OR: [{ id: deviceId }, { deviceUuid: deviceId }],
+        businessId,
+      },
+      select: { id: true },
+    });
+
+    const effectiveDeviceId = resolvedDeviceId?.id ?? deviceId ?? null;
     const processedIds: string[] = [];
 
     await prisma.$transaction(async (tx) => {
@@ -154,6 +170,47 @@ export async function POST(request: Request) {
             break;
           }
 
+          case "Credit": {
+            const creditCustomer = await tx.customer.findFirst({
+              where: { id: dataPayload.customerId, businessId },
+              select: { id: true },
+            });
+
+            if (!creditCustomer || dataPayload.action !== "RECORD_PAYMENT") {
+              throw new Error("Invalid credit repayment customer or action.");
+            }
+
+            const account = await tx.creditAccount.findUnique({
+              where: { customerId: dataPayload.customerId },
+            });
+            const paymentAmount = Number(dataPayload.amount);
+
+            if (!account || !Number.isFinite(paymentAmount) || paymentAmount <= 0 || paymentAmount > account.balance) {
+              throw new Error("Credit repayment exceeds the outstanding balance.");
+            }
+
+            const nextBalance = account.balance - paymentAmount;
+            await tx.creditAccount.update({
+              where: { customerId: dataPayload.customerId },
+              data: {
+                balance: nextBalance,
+                lastPayment: new Date(),
+                status: nextBalance === 0 ? "CLEARED" : "ACTIVE",
+              },
+            });
+            await tx.creditLedgerEntry.create({
+              data: {
+                id: dataPayload.id,
+                businessId,
+                customerId: dataPayload.customerId,
+                type: "PAYMENT",
+                amount: paymentAmount,
+                status: "COMPLETED",
+              },
+            });
+            break;
+          }
+
           default:
             throw new Error(`Unsupported ledger entity: ${entityName}`);
         }
@@ -165,7 +222,7 @@ export async function POST(request: Request) {
             recordId: dataPayload.id,
             operation,
             status: "PROCESSED",
-            deviceId: deviceId ?? null,
+            deviceId: effectiveDeviceId ?? null,
           },
         });
 

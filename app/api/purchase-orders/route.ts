@@ -21,6 +21,21 @@ export async function POST(request: Request) {
         );
       }
 
+      const supplierExists = await prisma.supplier.findFirst({
+        where: {
+          id: supplierId,
+          businessId,
+        },
+        select: { id: true },
+      });
+
+      if (!supplierExists) {
+        return NextResponse.json(
+          { error: "Supplier does not belong to this business or could not be found." },
+          { status: 400 },
+        );
+      }
+
       const newOrder = await prisma.$transaction(async (tx) => {
         const order = await tx.purchaseOrder.create({
           data: {

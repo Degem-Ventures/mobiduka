@@ -50,36 +50,40 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
     }
 
-    if (pin) {
-      if (!user.pinHash) {
-        return NextResponse.json({ error: "PIN login is not enabled for this account." }, { status: 401 });
-      }
+    let passwordMatches = false;
+    let pinMatches = false;
 
-      const validPin = user.pinHash.startsWith("$2")
-        ? bcrypt.compareSync(pin, user.pinHash)
-        : crypto.timingSafeEqual(
-            Buffer.from(user.pinHash),
-            Buffer.from(crypto.createHash("sha256").update(pin).digest("hex")),
-          );
-
-      if (!validPin) {
-        return NextResponse.json({ error: "Invalid PIN." }, { status: 401 });
-      }
-    } else if (password) {
-      if (!user.passwordHash) {
-        return NextResponse.json({ error: "Password login is not enabled for this account." }, { status: 401 });
-      }
-
-      const validPassword = user.passwordHash.startsWith("$2")
+    if (password && user.passwordHash) {
+      passwordMatches = user.passwordHash.startsWith("$2")
         ? bcrypt.compareSync(password, user.passwordHash)
         : crypto.timingSafeEqual(
             Buffer.from(user.passwordHash),
             Buffer.from(crypto.createHash("sha256").update(password).digest("hex")),
           );
+    }
 
-      if (!validPassword) {
+    if (pin && user.pinHash) {
+      pinMatches = user.pinHash.startsWith("$2")
+        ? bcrypt.compareSync(pin, user.pinHash)
+        : crypto.timingSafeEqual(
+            Buffer.from(user.pinHash),
+            Buffer.from(crypto.createHash("sha256").update(pin).digest("hex")),
+          );
+    }
+
+    if (!passwordMatches && !pinMatches) {
+      if (pin && user.pinHash) {
+        return NextResponse.json({ error: "Invalid PIN." }, { status: 401 });
+      }
+
+      if (password && user.passwordHash) {
         return NextResponse.json({ error: "Invalid password." }, { status: 401 });
       }
+
+      return NextResponse.json(
+        { error: "This account does not have a configured PIN or password login method." },
+        { status: 401 },
+      );
     }
 
     const token = signToken({
