@@ -2452,6 +2452,12 @@ class _POSScreenState extends State<POSScreen> {
                         ),
                       ),
                     ),
+                    IconButton(
+                      onPressed: _openBarcodeScanner,
+                      tooltip: 'Scan barcode',
+                      color: gold,
+                      icon: const Icon(Icons.qr_code_scanner),
+                    ),
                     const SizedBox(width: 10),
                     InkWell(
                       onTap: () => setState(() => view = 'cart'),
@@ -8127,12 +8133,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       ],
                     ),
                   ),
-                    IconButton(
-                      onPressed: _openBarcodeScanner,
-                      tooltip: 'Scan barcode',
-                      color: gold,
-                      icon: const Icon(Icons.qr_code_scanner),
-                    ),
                   const SizedBox(width: 10),
                   SizedBox(
                     width: 58,
