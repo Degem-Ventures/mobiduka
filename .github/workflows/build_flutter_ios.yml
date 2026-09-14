@@ -16,7 +16,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: "stable"
+          channel: 'stable'
 
       - name: Ensure iOS project exists
         run: |
@@ -25,50 +25,19 @@ jobs:
             flutter create --platforms=ios .
           fi
 
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
+          # 1. Enforce global deployment targets and modular headers constraints
+          if [ -f ios/Podfile ]; then
+            sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" ios/Podfile
+            if ! grep -q "use_modular_headers!" ios/Podfile; then
+              printf "use_modular_headers!\n$(cat ios/Podfile)" > ios/Podfile
+            fi
 
-          podfile_path = Path("ios/Podfile")
-          if not podfile_path.exists():
-              print("Podfile does not exist yet.")
-              exit(0)
-
-          text = podfile_path.read_text()
-
-          # 1. Enforce global modular headers explicitly
-          if "use_modular_headers!" not in text:
-              text = "use_modular_headers!\n" + text
-
-          # 2. Force explicit iOS platform targets to satisfy CocoaPods
-          if "platform :ios" not in text:
-              text = "platform :ios, '15.0'\n" + text
-
-          # 3. Completely wipe out any pre-existing post_install macro blocks 
-          # to prevent duplicate closures or legacy undefined 'target' crashes.
-          text = re.sub(r"post_install\s+do\s+\|installer\|.*?end", "", text, flags=re.DOTALL)
-
-          # 4. Append a clean, fully-formed, error-free post_install hook block
-          clean_post_install = """
-            post_install do |installer|
-              # Project-level global configurations
-              installer.pods_project.build_configurations.each do |config|
-                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-              end
-              # Target-level module configurations
-              installer.pod_targets.each do |target|
-                target.build_configurations.each do |config|
-                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-                  config.build_settings['DEFINES_MODULE'] = 'YES'
-                  config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
-                end
-              end
-            end
-            """
-            text += clean_post_install
-            podfile_path.write_text(text)
-            print("Successfully stripped old hooks and injected a clean post_install block.")
-            PY
+            # 2. Inject an absolute global compilation module override block into the Podfile.
+            # This completely bypasses Python compilation traps by writing raw strings to disk.
+            if ! grep -q "CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES" ios/Podfile; then
+              printf "\npost_install do |installer|\n  installer.pods_project.build_configurations.each do |config|\n    config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n  end\n  installer.pod_targets.each do |target|\n    target.build_configurations.each do |config|\n      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n      config.build_settings['DEFINES_MODULE'] = 'YES'\n      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'\n    end\n  end\nend\n" >> ios/Podfile
+            fi
+          fi
 
       - name: Install Dependencies
         run: |
