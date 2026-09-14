@@ -21,56 +21,50 @@ jobs:
       - name: Ensure iOS project exists
         run: |
           cd flutter_app
+          
+          # 1. Let Flutter natively generate the pristine, valid Podfile template structure
           if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
             flutter create --platforms=ios .
           fi
 
-          # 🌟 ULTIMATE FIX: Completely overwrite the Podfile with the strict loading path architecture required by Flutter.
-          # This pulls in 'podhelper.rb' to provide the 'flutter_install_all_ios_pods' method before CocoaPods evaluates the targets.
-          cat << 'EOF' > ios/Podfile
-          # 1. Load Flutter's native macro definitions from the environment toolchain path
-          flutter_shared_utils = File.expand_path(File.join('..', 'Flutter', 'podhelper.rb'), __FILE__)
-          if File.exist?(flutter_shared_utils)
-            load flutter_shared_utils
-          else
-            # Fallback to local cache environment if project was generated inside a workspace subfolder context
-            load File.expand_path(File.join('Flutter', 'podhelper.rb'), __FILE__)
-          end
+          # Move into the native ios wrapper directory context
+          cd ios
+          
+          # Trigger initial mock pod setup parameters so that the local Podfile is fully expanded
+          flutter pub get
 
-          platform :ios, '15.0'
+          # 2. Force the explicit modern baseline deployment platform target
+          sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" Podfile
 
-          use_modular_headers!
-
-          target 'Runner' do
-            use_frameworks!
-            use_modular_headers!
-            
-            # 2. Invoke the verified Flutter dependency generator macro
-            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-            
-            target 'RunnerTests' do
-              inherit! :search_paths
-            end
-          end
-
-          post_install do |installer|
-            # 3. Project-level global configurations
+          # 3. Inject an absolute global module override block into the natively generated Podfile.
+          # This replaces the default placeholder macro loop safely using a Ruby text-swap stream.
+          ruby -e '
+          podfile = "Podfile"
+          content = File.read(podfile)
+          
+          project_injection = "
+            # Global compilation settings injected by MobiDuka POS pipeline
             installer.pods_project.build_configurations.each do |config|
-              config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+              config.build_settings[\"CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES\"] = \"YES\"
             end
-            
-            # 4. Target-level module configurations (Forces mobile_scanner & printing plugins to build safely)
             installer.aggregate_targets.each do |target|
               flutter_additional_ios_build_settings(target)
               target.user_project.build_configurations.each do |config|
-                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-                config.build_settings['DEFINES_MODULE'] = 'YES'
-                config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+                config.build_settings[\"CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES\"] = \"YES\"
+                config.build_settings[\"DEFINES_MODULE\"] = \"YES\"
+                config.build_settings[\"CLANG_ENABLE_MODULES\"] = \"YES\"
               end
-            end
+            end"
+
+          if content.include?("flutter_additional_ios_build_settings(target)") && !content.include?("CLANG_ALLOW_NON_MODULAR_INCLUDES")
+            # Clear the old structural post_install macro sequence to prevent duplicate block crashes
+            content.gsub!(/post_install\s+do\s+\|installer\|.*?end/m, "")
+            # Append the clean unified framework compilation rules block safely to the bottom
+            content += \"\npost_install do |installer|\\n#{project_injection}\\nend\\n\"
+            File.write(podfile, content)
+            puts "Successfully patched the native post_install block settings."
           end
-          EOF
-                    echo "Successfully instantiated a syntax-pure, modern iOS Podfile with Flutter framework integrations!"
+          '
 
       - name: Install Dependencies
         run: |
