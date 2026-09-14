@@ -22,34 +22,53 @@ jobs:
         run: |
           cd flutter_app
           
-          # 1. Force scaffolding of native platform wrappers if missing
+          # 1. Generate the base project directory wrapper natively
           if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
             flutter create --platforms=ios .
           fi
 
-          # 2. Force Flutter to evaluate and safely resolve all native pod helper toolchains
+          # 2. Force Flutter to populate dependencies and initialize the baseline Podfile configuration
           flutter pub get
 
-          # 3. Apply the critical deployment baseline and patch the valid Podfile in-place
-          if [ -f ios/Podfile ]; then
-            # Set target deployment platform baseline safely
-            sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" ios/Podfile
+          # 3. Create a dedicated standalone, type-safe Ruby override script.
+          # This isolates non-modular header exclusions from sed formatting limitations.
+          cat << 'EOF' > ios/pod_overrides.rb
+          def apply_mobiduka_custom_build_settings(installer)
+            puts "🚀 Injecting MobiDuka POS Custom Hardware Compilation Overrides..."
             
-            # Inject our Project-level non-modular settings right below the post_install hook definition row
-            sed -i '' "s/post_install do |installer|/post_install do |installer|\\
-            installer.pods_project.build_configurations.each do |config|\\
-              config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\\
-            end/g" ios/Podfile
+            # A. Project-level global configurations
+            if installer.respond_to?(:pods_project) && installer.pods_project
+              installer.pods_project.build_configurations.each do |config|
+                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+              end
+            end
+            
+            # B. Target-level module configurations (Forces mobile_scanner & printing plugins to compile safely)
+            if installer.respond_to?(:pod_targets) && installer.pod_targets
+              installer.pod_targets.each do |target|
+                target.build_configurations.each do |config|
+                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                  config.build_settings['DEFINES_MODULE'] = 'YES'
+                  config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+                end
+              end
+            end
+          end
+          EOF
 
-                      # Inject our Target-level non-modular, module definition, and Clang variables inside the target loop
-                      sed -i '' "s/flutter_additional_ios_build_settings(target)/flutter_additional_ios_build_settings(target)\\
-              target.build_configurations.each do |config|\\
-                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\\
-                config.build_settings['DEFINES_MODULE'] = 'YES'\\
-                config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'\\
-              end/g" ios/Podfile
+                    # 4. Inject a lightweight file hook reference at the top and bottom of your Podfile.
+                    # This hooks our standalone script into the native post_install processing phase safely.
+                    if [ -f ios/Podfile ]; then
+                      # Fix target baseline deployment platform safely
+                      sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" ios/Podfile
                       
-                      echo "✅ Successfully injected hardware non-modular compilation settings into the native Flutter Podfile!"
+                      # Require our standalone override script at the very top of the Podfile template
+                      printf "require_relative 'pod_overrides.rb'\n$(cat ios/Podfile)" > ios/Podfile
+                      
+                      # Append the dynamic method runner instruction hook cleanly onto the end of the file
+                      printf "\n\npost_install do |installer|\n  apply_mobiduka_custom_build_settings(installer)\nend\n" >> ios/Podfile
+                      
+                      echo "✅ Successfully linked modular hardware override hook script inside the native Podfile configuration layout!"
                     fi
 
       - name: Install Dependencies
