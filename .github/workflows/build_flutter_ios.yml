@@ -30,18 +30,27 @@ jobs:
           # 2. Extract dependencies to fully expand local build templates
           flutter pub get
 
-          # 3. Patch the natively generated Podfile directly in-place
+          # 3. Patch the natively generated Podfile directly in-place using a stable Ruby script block
+          # This avoids BSD sed parsing mutations completely
           if [ -f ios/Podfile ]; then
-            # Enforce modern platform deployment configurations
-            sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" ios/Podfile
-            
-            # Inject Project-level non-modular settings right below the native post_install signature row
-            sed -i '' "s/post_install do |installer|/post_install do |installer|\n  if installer.respond_to?(:pods_project) \&\& installer.pods_project\n    installer.pods_project.build_configurations.each { |c| c.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES' }\n  end/g" ios/Podfile
+            ruby -e "
+            podfile_path = 'ios/Podfile'
+            lines = File.read(podfile_path)
 
-            # Inject Target-level module rules directly inside the native target compilation loop
-            sed -i '' "s/flutter_additional_ios_build_settings(target)/flutter_additional_ios_build_settings(target)\n    target.build_configurations.each do |config|\n      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n      config.build_settings['DEFINES_MODULE'] = 'YES'\n      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'\n    end/g" ios/Podfile
-            
-            echo "✅ Successfully linked clean hardware configuration overrides inside Podfile parameters."
+            # Enforce modern platform deployment configurations
+            lines.gsub!(/# platform :ios, '12.0'/, \"platform :ios, '15.0'\")
+
+            # Project-level non-modular settings injection
+            project_rule = \"post_install do |installer|\\n  if installer.respond_to?(:pods_project) && installer.pods_project\\n    installer.pods_project.build_configurations.each { |c| c.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES' }\\n  end\"
+            lines.gsub!(/post_install do \|installer\|/, project_rule)
+
+            # Target-level plugin non-modular, module definition, and Clang variables injection
+            target_rule = \"flutter_additional_ios_build_settings(target)\\n    target.build_configurations.each do |config|\\n      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\\n      config.build_settings['DEFINES_MODULE'] = 'YES'\\n      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'\\n    end\"
+            lines.gsub!(/flutter_additional_ios_build_settings\(target\)/, target_rule)
+
+            File.write(podfile_path, lines)
+            puts '✅ Successfully applied hardware non-modular compilation settings to Podfile!'
+            "
           fi
 
       - name: Install Dependencies
