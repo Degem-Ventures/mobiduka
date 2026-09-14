@@ -1,6 +1,6 @@
 "use client";
 
-import React, { JSX, useState } from "react";
+import { JSX, useState } from "react";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import LoginScreen from "./components/LoginScreen";
 import Dashboard from "./components/Dashboard";
