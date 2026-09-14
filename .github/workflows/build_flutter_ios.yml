@@ -31,7 +31,7 @@ jobs:
           flutter pub get
 
           # 3. Create a dedicated standalone, type-safe Ruby override script.
-          # This isolates non-modular header exclusions from sed formatting limitations.
+          # This separates custom non-modular parameters cleanly from the main Podfile structure.
           cat << 'EOF' > ios/pod_overrides.rb
           def apply_mobiduka_custom_build_settings(installer)
             puts "🚀 Injecting MobiDuka POS Custom Hardware Compilation Overrides..."
@@ -56,8 +56,8 @@ jobs:
           end
           EOF
 
-                    # 4. Inject a lightweight file hook reference at the top and bottom of your Podfile.
-                    # This hooks our standalone script into the native post_install processing phase safely.
+                    # 4. Inject a lightweight file hook reference at the top and INSIDE the native post_install block.
+                    # This prevents multiple post_install block collisions.
                     if [ -f ios/Podfile ]; then
                       # Fix target baseline deployment platform safely
                       sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" ios/Podfile
@@ -65,10 +65,27 @@ jobs:
                       # Require our standalone override script at the very top of the Podfile template
                       printf "require_relative 'pod_overrides.rb'\n$(cat ios/Podfile)" > ios/Podfile
                       
-                      # Append the dynamic method runner instruction hook cleanly onto the end of the file
-                      printf "\n\npost_install do |installer|\n  apply_mobiduka_custom_build_settings(installer)\nend\n" >> ios/Podfile
-                      
-                      echo "✅ Successfully linked modular hardware override hook script inside the native Podfile configuration layout!"
+                      # Use a robust inline script to inject our method call inside the native post_install block safely
+                      python3 - <<'PY'
+                      import re
+                      from pathlib import Path
+
+                      podfile_path = Path("ios/Podfile")
+                      text = podfile_path.read_text()
+
+                      # Find the start of the native post_install block and append our custom hook immediately below it
+                      pattern = r"(post_install\s+do\s+\|installer\|)"
+                      replacement = r"\1\n  apply_mobiduka_custom_build_settings(installer)"
+
+                      if re.search(pattern, text):
+                          text = re.sub(pattern, replacement, text, count=1)
+                          podfile_path.write_text(text)
+                          print("✅ Successfully wired the override trigger into the existing post_install macro container.")
+                      else:
+                          print("⚠️ Native post_install block not found. Appending standard block as fallback.")
+                          text += "\npost_install do |installer|\n  apply_mobiduka_custom_build_settings(installer)\nend\n"
+                          podfile_path.write_text(text)
+                      PY
                     fi
 
       - name: Install Dependencies
