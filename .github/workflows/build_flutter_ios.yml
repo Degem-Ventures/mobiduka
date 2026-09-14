@@ -21,7 +21,7 @@ jobs:
       - name: Ensure iOS project exists
         run: |
           cd flutter_app
-          
+
           # 1. Generate a fresh native iOS directory tree natively
           if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
             flutter create --platforms=ios .
@@ -29,56 +29,56 @@ jobs:
 
           # Keep the Podfile deterministic while loading podhelper from the Flutter SDK.
           cat << 'EOF' > ios/Podfile
-            def flutter_root
-              generated_xcode_build_settings_path = File.expand_path(
-                File.join('..', 'Flutter', 'Generated.xcconfig'),
-                __FILE__
-              )
-
-              unless File.exist?(generated_xcode_build_settings_path)
-                raise "#{generated_xcode_build_settings_path} must exist. Run flutter pub get first"
-              end
-
-              File.foreach(generated_xcode_build_settings_path) do |line|
-                matches = line.match(/FLUTTER_ROOT=(.*)/)
-                return matches[1].strip if matches
-              end
-              raise 'FLUTTER_ROOT not found in Generated.xcconfig'
-            end
-
-            require File.expand_path(
-              File.join('packages', 'flutter_tools', 'bin', 'podhelper'),
-              flutter_root
+          def flutter_root
+            generated_xcode_build_settings_path = File.expand_path(
+              File.join('..', 'Flutter', 'Generated.xcconfig'),
+              __FILE__
             )
 
-            flutter_ios_podfile_setup
+            unless File.exist?(generated_xcode_build_settings_path)
+              raise "#{generated_xcode_build_settings_path} must exist. Run flutter pub get first"
+            end
 
-            platform :ios, '15.0'
+            File.foreach(generated_xcode_build_settings_path) do |line|
+              matches = line.match(/FLUTTER_ROOT=(.*)/)
+              return matches[1].strip if matches
+            end
+            raise 'FLUTTER_ROOT not found in Generated.xcconfig'
+          end
 
+          require File.expand_path(
+            File.join('packages', 'flutter_tools', 'bin', 'podhelper'),
+            flutter_root
+          )
+
+          flutter_ios_podfile_setup
+
+          platform :ios, '15.0'
+
+          use_modular_headers!
+
+          target 'Runner' do
+            use_frameworks!
             use_modular_headers!
 
-            target 'Runner' do
-              use_frameworks!
-              use_modular_headers!
-              
-              flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-              
-              target 'RunnerTests' do
-                inherit! :search_paths
-              end
-            end
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
-            post_install do |installer|
-              installer.pods_project.targets.each do |target|
-                flutter_additional_ios_build_settings(target)
-                target.build_configurations.each do |config|
-                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-                  config.build_settings['DEFINES_MODULE'] = 'YES'
-                  config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
-                end
+            target 'RunnerTests' do
+              inherit! :search_paths
+            end
+          end
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+              target.build_configurations.each do |config|
+                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                config.build_settings['DEFINES_MODULE'] = 'YES'
+                config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
               end
             end
-            EOF
+          end
+          EOF
                       echo "✅ Successfully written a pristine, error-free Podfile template to disk!"
 
       - name: Install Dependencies
