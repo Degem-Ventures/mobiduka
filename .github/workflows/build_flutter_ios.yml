@@ -27,16 +27,31 @@ jobs:
             flutter create --platforms=ios .
           fi
 
-          # 2. Complete a clean overwrite to avoid sed mutations or duplicate block collisions
-          # This incorporates the explicit platform target and load macros required by Flutter
+          # Keep the Podfile deterministic while loading podhelper from the Flutter SDK.
           cat << 'EOF' > ios/Podfile
-            # Load Flutter shared utilities natively to declare internal macros
-            flutter_shared_utils = File.expand_path(File.join('..', 'Flutter', 'podhelper.rb'), __FILE__)
-            if File.exist?(flutter_shared_utils)
-              load flutter_shared_utils
-            else
-              load File.expand_path(File.join('Flutter', 'podhelper.rb'), __FILE__)
+            def flutter_root
+              generated_xcode_build_settings_path = File.expand_path(
+                File.join('..', 'Flutter', 'Generated.xcconfig'),
+                __FILE__
+              )
+
+              unless File.exist?(generated_xcode_build_settings_path)
+                raise "#{generated_xcode_build_settings_path} must exist. Run flutter pub get first"
+              end
+
+              File.foreach(generated_xcode_build_settings_path) do |line|
+                matches = line.match(/FLUTTER_ROOT=(.*)/)
+                return matches[1].strip if matches
+              end
+              raise 'FLUTTER_ROOT not found in Generated.xcconfig'
             end
+
+            require File.expand_path(
+              File.join('packages', 'flutter_tools', 'bin', 'podhelper'),
+              flutter_root
+            )
+
+            flutter_ios_podfile_setup
 
             platform :ios, '15.0'
 
@@ -54,15 +69,9 @@ jobs:
             end
 
             post_install do |installer|
-              # A. Project-level global configurations
-              installer.pods_project.build_configurations.each do |config|
-                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-              end
-              
-              # B. Target-level module configurations (Forces mobile_scanner & printing plugins to compile safely)
-              installer.aggregate_targets.each do |target|
+              installer.pods_project.targets.each do |target|
                 flutter_additional_ios_build_settings(target)
-                target.user_project.build_configurations.each do |config|
+                target.build_configurations.each do |config|
                   config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
                   config.build_settings['DEFINES_MODULE'] = 'YES'
                   config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
