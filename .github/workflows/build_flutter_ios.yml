@@ -25,34 +25,26 @@ jobs:
             flutter create --platforms=ios .
           fi
 
-          # 1. Force the explicit baseline iOS deployment platform
+          # 1. Enforce global deployment targets and modular headers constraints
           if [ -f ios/Podfile ]; then
             sed -i '' "s/# platform :ios, '12.0'/platform :ios, '15.0'/g" ios/Podfile
             if ! grep -q "use_modular_headers!" ios/Podfile; then
               printf "use_modular_headers!\n$(cat ios/Podfile)" > ios/Podfile
             fi
 
-            # 2. Inject an absolute global compilation module override directly inside the Podfile.
-            # This inline Ruby patch replaces the default macro with our non-modular header exception rules.
+            # 2. Inject an absolute global module override block directly into the Podfile.
+            # Fixed: Replaced raw target hooks with an internal configuration override pattern
             ruby -e '
             podfile = "ios/Podfile"
             content = File.read(podfile)
             
-            target_injection = "
-                flutter_additional_ios_build_settings(target)
-                target.build_configurations.each do |config|
-                  config.build_settings[\"CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES\"] = \"YES\"
-                  config.build_settings[\"DEFINES_MODULE\"] = \"YES\"
-                  config.build_settings[\"CLANG_ENABLE_MODULES\"] = \"YES\"
-                end"
-                
             project_injection = "
               installer.pods_project.build_configurations.each do |config|
                 config.build_settings[\"CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES\"] = \"YES\"
               end
-              installer.pod_targets.each do |target|
+              installer.aggregate_targets.each do |target|
                 flutter_additional_ios_build_settings(target)
-                target.build_configurations.each do |config|
+                target.user_project.build_configurations.each do |config|
                   config.build_settings[\"CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES\"] = \"YES\"
                   config.build_settings[\"DEFINES_MODULE\"] = \"YES\"
                   config.build_settings[\"CLANG_ENABLE_MODULES\"] = \"YES\"
@@ -60,8 +52,10 @@ jobs:
               end"
 
             if content.include?("flutter_additional_ios_build_settings(target)") && !content.include?("CLANG_ALLOW_NON_MODULAR_INCLUDES")
-              content.gsub!("flutter_additional_ios_build_settings(target)", target_injection)
-              content.gsub!(/post_install\s+do\s+\|installer\|/, "post_install do |installer|#{project_injection}\n#")
+              # Completely remove the raw un-encapsulated native loop block placeholder
+              content.gsub!(/post_install\s+do\s+\|installer\|.*?end/m, "")
+              # Append a clean, fully-formed, error-free post_install block to the end of the file
+              content += \"\npost_install do |installer|\\n#{project_injection}\\nend\\n\"
               File.write(podfile, content)
               puts "Successfully patched the native post_install block."
             end
