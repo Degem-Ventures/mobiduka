@@ -22,44 +22,55 @@ jobs:
         run: |
           cd flutter_app
           
-          # 1. Generate the base project tree layers natively using Flutter toolchains
+          # 1. Generate a fresh native iOS directory tree natively
           if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
             flutter create --platforms=ios .
           fi
 
-          # 2. Extract dependencies to fully expand local build templates
-          flutter pub get
+          # 2. Complete a clean overwrite to avoid sed mutations or duplicate block collisions
+          # This incorporates the explicit platform target and load macros required by Flutter
+          cat << 'EOF' > ios/Podfile
+            # Load Flutter shared utilities natively to declare internal macros
+            flutter_shared_utils = File.expand_path(File.join('..', 'Flutter', 'podhelper.rb'), __FILE__)
+            if File.exist?(flutter_shared_utils)
+              load flutter_shared_utils
+            else
+              load File.expand_path(File.join('Flutter', 'podhelper.rb'), __FILE__)
+            end
 
-          # 3. Patch the natively generated Podfile directly in-place using an explicit, target-scoped Ruby script block
-          if [ -f ios/Podfile ]; then
-            ruby -e "
-            podfile_path = 'ios/Podfile'
-            lines = File.read(podfile_path)
+            platform :ios, '15.0'
 
-            # Enforce modern platform deployment configurations
-            lines.gsub!(/# platform :ios, '12.0'/, \"platform :ios, '15.0'\")
+            use_modular_headers!
 
-            # Deep target iteration script block targeting individual third-party plugin containers directly
-            target_rule = \"flutter_additional_ios_build_settings(target)
-            # Deep patch injected by MobiDuka POS pipeline
-            installer.pod_targets.each do |pod_target|
-              pod_target.build_configurations.each do |config|
-                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-                config.build_settings['DEFINES_MODULE'] = 'YES'
-                config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+            target 'Runner' do
+              use_frameworks!
+              use_modular_headers!
+              
+              flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+              
+              target 'RunnerTests' do
+                inherit! :search_paths
               end
             end
-            installer.pods_project.build_configurations.each do |config|
-              config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-            end\"
 
-            # Perform the safe regex swap replacement
-            lines.gsub!(/flutter_additional_ios_build_settings\(target\)/, target_rule)
-
-            File.write(podfile_path, lines)
-            puts '✅ Successfully applied isolated plugin non-modular rules to individual framework sandboxes!'
-            "
-          fi
+            post_install do |installer|
+              # A. Project-level global configurations
+              installer.pods_project.build_configurations.each do |config|
+                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+              end
+              
+              # B. Target-level module configurations (Forces mobile_scanner & printing plugins to compile safely)
+              installer.aggregate_targets.each do |target|
+                flutter_additional_ios_build_settings(target)
+                target.user_project.build_configurations.each do |config|
+                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                  config.build_settings['DEFINES_MODULE'] = 'YES'
+                  config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+                end
+              end
+            end
+            EOF
+                      echo "✅ Successfully written a pristine, error-free Podfile template to disk!"
 
       - name: Install Dependencies
         run: |
