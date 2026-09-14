@@ -25,42 +25,52 @@ jobs:
             flutter create --platforms=ios .
           fi
 
-          # 🌟 ULTIMATE FIX: Completely replace the Podfile with a clean, fully-formed structure.
-          # This bypasses all character escape bugs, Python indentation traps, and duplicate block errors.
+          # 🌟 ULTIMATE FIX: Completely overwrite the Podfile with the strict loading path architecture required by Flutter.
+          # This pulls in 'podhelper.rb' to provide the 'flutter_install_all_ios_pods' method before CocoaPods evaluates the targets.
           cat << 'EOF' > ios/Podfile
-              platform :ios, '15.0'
+          # 1. Load Flutter's native macro definitions from the environment toolchain path
+          flutter_shared_utils = File.expand_path(File.join('..', 'Flutter', 'podhelper.rb'), __FILE__)
+          if File.exist?(flutter_shared_utils)
+            load flutter_shared_utils
+          else
+            # Fallback to local cache environment if project was generated inside a workspace subfolder context
+            load File.expand_path(File.join('Flutter', 'podhelper.rb'), __FILE__)
+          end
 
-              use_modular_headers!
+          platform :ios, '15.0'
 
-              target 'Runner' do
-                use_frameworks!
-                use_modular_headers!
-                
-                flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-                
-                target 'RunnerTests' do
-                  inherit! :search_paths
-                end
+          use_modular_headers!
+
+          target 'Runner' do
+            use_frameworks!
+            use_modular_headers!
+            
+            # 2. Invoke the verified Flutter dependency generator macro
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+            
+            target 'RunnerTests' do
+              inherit! :search_paths
+            end
+          end
+
+          post_install do |installer|
+            # 3. Project-level global configurations
+            installer.pods_project.build_configurations.each do |config|
+              config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+            end
+            
+            # 4. Target-level module configurations (Forces mobile_scanner & printing plugins to build safely)
+            installer.aggregate_targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+              target.user_project.build_configurations.each do |config|
+                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                config.build_settings['DEFINES_MODULE'] = 'YES'
+                config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
               end
-
-              post_install do |installer|
-                # 1. Project-level global configurations
-                installer.pods_project.build_configurations.each do |config|
-                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-                end
-                
-                # 2. Target-level module configurations (Forces mobile_scanner & printing plugins to build safely)
-                installer.aggregate_targets.each do |target|
-                  flutter_additional_ios_build_settings(target)
-                  target.user_project.build_configurations.each do |config|
-                    config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-                    config.build_settings['DEFINES_MODULE'] = 'YES'
-                    config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
-                  end
-                end
-              end
-              EOF
-          echo "Successfully instantiated a syntax-pure, modern iOS Podfile configuration template!"
+            end
+          end
+          EOF
+                    echo "Successfully instantiated a syntax-pure, modern iOS Podfile with Flutter framework integrations!"
 
       - name: Install Dependencies
         run: |
