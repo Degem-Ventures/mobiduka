@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 const expenses = [
   { id: 1, desc: 'Electricity Bill', category: 'Utilities', amount: 8500, date: '8 Jul 2026', method: 'M-Pesa', icon: '⚡', recurring: true },
@@ -19,9 +20,10 @@ const categoryColors: Record<string, string> = {
 interface Props { onNavigate: (s: string) => void }
 
 export default function ExpensesScreen({ onNavigate }: Props) {
+  const c = useColors()
   const [cat, setCat] = useState('All')
   const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', method: 'Cash', date: '', recurring: false })
+  const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: '', recurring: false })
 
   const filtered = expenses.filter(e => cat === 'All' || e.category === cat)
   const total = filtered.reduce((s, e) => s + e.amount, 0)
@@ -29,7 +31,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
 
   if (showAdd) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -41,37 +43,42 @@ export default function ExpensesScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Description *</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Description *</label>
               <input className="input" placeholder="e.g. Electricity Bill" value={form.desc} onChange={e => setForm(f => ({ ...f, desc: e.target.value }))} />
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Amount (KSh) *</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Amount (KSh) *</label>
               <input className="input" type="number" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={{ fontSize: 24, fontWeight: 800, textAlign: 'center' }} />
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Category *</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {['Utilities', 'Payroll', 'Rent', 'Supplies', 'Logistics', 'Other'].map(c => (
-                  <button key={c} className="btn" onClick={() => setForm(f => ({ ...f, category: c }))} style={{ padding: '7px 14px', borderRadius: 100, border: form.category === c ? 'none' : '1.5px solid #E8ECF4', background: form.category === c ? '#123A8F' : 'white', color: form.category === c ? 'white' : '#6B7A99', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{c}</button>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: form.category === 'Other' ? 10 : 0 }}>
+                {['Utilities', 'Payroll', 'Rent', 'Supplies', 'Logistics', 'Other'].map(catOpt => (
+                  <button key={catOpt} className="btn" onClick={() => setForm(f => ({ ...f, category: catOpt }))} style={{ padding: '7px 14px', borderRadius: 100, border: form.category === catOpt ? 'none' : '1.5px solid #E8ECF4', background: form.category === catOpt ? '#123A8F' : c.card, color: form.category === catOpt ? 'white' : c.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{catOpt}</button>
                 ))}
               </div>
+              {form.category === 'Other' && (
+                <div style={{ marginTop: 10 }}>
+                  <input className="input" placeholder="Specify category (e.g. Marketing, Insurance…)" value={form.categoryOther} onChange={e => setForm(f => ({ ...f, categoryOther: e.target.value }))} />
+                </div>
+              )}
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Payment Method</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Payment Method</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 {['Cash', 'M-Pesa', 'Bank'].map(m => (
-                  <button key={m} className="btn" onClick={() => setForm(f => ({ ...f, method: m }))} style={{ flex: 1, padding: '10px', borderRadius: 10, border: form.method === m ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: form.method === m ? 'rgba(18,58,143,0.08)' : 'white', color: form.method === m ? '#123A8F' : '#6B7A99', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{m}</button>
+                  <button key={m} className="btn" onClick={() => setForm(f => ({ ...f, method: m }))} style={{ flex: 1, padding: '10px', borderRadius: 10, border: form.method === m ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: form.method === m ? 'rgba(18,58,143,0.08)' : c.card, color: form.method === m ? '#123A8F' : c.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{m}</button>
                 ))}
               </div>
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Date</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Date</label>
               <input className="input" type="date" defaultValue="2026-07-08" />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', background: '#F5F7FA', borderRadius: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', background: c.cardAlt, borderRadius: 12 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>Recurring Expense</div>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 2 }}>Repeats monthly</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>Recurring Expense</div>
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>Repeats monthly</div>
               </div>
               <button className="btn" onClick={() => setForm(f => ({ ...f, recurring: !f.recurring }))} style={{ width: 46, height: 26, borderRadius: 13, background: form.recurring ? '#123A8F' : '#D0D7E8', border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
                 <div style={{ position: 'absolute', top: 3, left: form.recurring ? 23 : 3, width: 20, height: 20, borderRadius: '50%', background: 'white', transition: 'left 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }} />
@@ -87,7 +94,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   }
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
@@ -107,24 +114,24 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           <div style={{ color: '#FF6B6B', fontSize: 28, fontWeight: 900, marginTop: 2 }}>KSh {monthTotal.toLocaleString()}</div>
         </div>
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          {categories.map(c => (
-            <button key={c} className="btn" onClick={() => setCat(c)} style={{ padding: '6px 14px', borderRadius: 100, border: 'none', background: cat === c ? '#D4AF37' : 'rgba(255,255,255,0.12)', color: cat === c ? '#0D1B3D' : 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>{c}</button>
+          {categories.map(catOpt => (
+            <button key={catOpt} className="btn" onClick={() => setCat(catOpt)} style={{ padding: '6px 14px', borderRadius: 100, border: 'none', background: cat === catOpt ? '#D4AF37' : 'rgba(255,255,255,0.12)', color: cat === catOpt ? '#0D1B3D' : 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>{catOpt}</button>
           ))}
         </div>
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7A99', marginBottom: 8, letterSpacing: 0.4 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 8, letterSpacing: 0.4 }}>
           {cat === 'All' ? 'All Expenses' : cat} · KSh {total.toLocaleString()}
         </div>
         {filtered.map(e => (
           <div key={e.id} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: `${(categoryColors[e.category] || '#6B7A99')}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{e.icon}</div>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(categoryColors[e.category] || '#6B7A99'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{e.icon}</div>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>{e.desc}</div>
-                {e.recurring && <span style={{ fontSize: 9, background: '#E3EAF8', color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>RECURRING</span>}
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{e.desc}</div>
+                {e.recurring && <span style={{ fontSize: 9, background: c.iconBg, color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>RECURRING</span>}
               </div>
-              <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 2 }}>{e.category} · {e.method} · {e.date}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{e.category} · {e.method} · {e.date}</div>
             </div>
             <div style={{ fontSize: 15, fontWeight: 800, color: '#D32F2F', flexShrink: 0 }}>KSh {e.amount.toLocaleString()}</div>
           </div>

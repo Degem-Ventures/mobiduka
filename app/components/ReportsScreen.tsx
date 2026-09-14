@@ -4,6 +4,7 @@ import {
   PieChart, Pie, ReferenceLine,
 } from 'recharts'
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 // ─── Real-time anchors ────────────────────────────────────────────────────────
 const NOW        = new Date()
@@ -114,14 +115,16 @@ interface Props { onNavigate: (s: string) => void }
 
 export default function ReportsScreen({ onNavigate }: Props) {
   const [tab, setTab] = useState<'daily' | 'monthly' | 'profit'>('daily')
+  const c = useColors()
 
-  const todaySales    = weekData.find(d => d.isToday)?.sales  ?? 0
-  const weekSales     = weekData.filter(d => !d.future).reduce((s, d) => s + d.sales,  0)
+  const todaySales   = weekData.find(d => d.isToday)?.sales  ?? 0
+  // todayProfit available for future use
+  const weekSales    = weekData.filter(d => !d.future).reduce((s, d) => s + d.sales,  0)
   const weekProfit   = weekData.filter(d => !d.future).reduce((s, d) => s + d.profit, 0)
   const avgMargin    = weekSales > 0 ? ((weekProfit / weekSales) * 100).toFixed(1) : '0'
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
 
       {/* ── Header ── */}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 20px', flexShrink: 0 }}>
@@ -160,12 +163,12 @@ export default function ReportsScreen({ onNavigate }: Props) {
       </div>
 
       {/* ── Tabs ── */}
-      <div style={{ background: 'white', borderBottom: '1px solid #E8ECF4', display: 'flex', flexShrink: 0 }}>
+      <div style={{ background: c.card, borderBottom: c.divider, display: 'flex', flexShrink: 0 }}>
         {[['daily','Daily'],['monthly','Monthly'],['profit','Profit']].map(([key, label]) => (
           <button key={key} className="btn" onClick={() => setTab(key as typeof tab)} style={{
             flex: 1, padding: '12px 8px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit',
             borderBottom: tab === key ? '2px solid #123A8F' : '2px solid transparent',
-            color: tab === key ? '#123A8F' : '#6B7A99', fontSize: 13, fontWeight: 600,
+            color: tab === key ? '#123A8F' : c.muted, fontSize: 13, fontWeight: 600,
           }}>{label}</button>
         ))}
       </div>
@@ -179,8 +182,8 @@ export default function ReportsScreen({ onNavigate }: Props) {
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Sales & Profit — This Week</div>
-                  <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 1 }}>KSh · data through {todayLabel} · future days dimmed</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>Sales & Profit — This Week</div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>KSh · data through {todayLabel} · future days dimmed</div>
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={160}>
@@ -210,27 +213,27 @@ export default function ReportsScreen({ onNavigate }: Props) {
                 </AreaChart>
               </ResponsiveContainer>
               <div style={{ display: 'flex', gap: 16, marginTop: 6, justifyContent: 'center' }}>
-                {[['#123A8F','Sales'],['#D4AF37','Profit']].map(([c,l]) => (
+                {[['#123A8F','Sales'],['#D4AF37','Profit']].map(([clr,l]) => (
                   <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <div style={{ width: 10, height: 3, borderRadius: 2, background: c }} />
-                    <div style={{ fontSize: 11, color: '#6B7A99' }}>{l}</div>
+                    <div style={{ width: 10, height: 3, borderRadius: 2, background: clr }} />
+                    <div style={{ fontSize: 11, color: c.muted }}>{l}</div>
                   </div>
                 ))}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <div style={{ width: 14, borderTop: '2px dashed #D4AF37' }} />
-                  <div style={{ fontSize: 11, color: '#6B7A99' }}>Today</div>
+                  <div style={{ fontSize: 11, color: c.muted }}>Today</div>
                 </div>
               </div>
             </div>
 
             {/* Day-by-day breakdown bars */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 14 }}>Daily Breakdown</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Daily Breakdown</div>
               {weekData.map((d, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: i < 6 ? 10 : 0 }}>
                   <div style={{ width: 38, fontSize: 11, display: 'flex', alignItems: 'center', gap: 3,
                     fontWeight: d.isToday ? 800 : 600,
-                    color: d.isToday ? '#123A8F' : d.future ? '#C8D0E0' : '#6B7A99' }}>
+                    color: d.isToday ? '#123A8F' : d.future ? '#C8D0E0' : c.muted }}>
                     {d.day}
                     {d.isToday && <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#D4AF37', flexShrink: 0 }} />}
                   </div>
@@ -247,7 +250,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                     </div>
                   </div>
                   <div style={{ width: 65, textAlign: 'right', fontSize: 12, fontWeight: 700,
-                    color: d.future ? '#C8D0E0' : '#0D1B3D' }}>
+                    color: d.future ? '#C8D0E0' : c.text }}>
                     {d.future ? '—' : `KSh ${(d.sales / 1000).toFixed(0)}K`}
                   </div>
                   <div style={{ width: 42, textAlign: 'right', fontSize: 11, fontWeight: 600,
@@ -260,7 +263,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
             {/* Category pie */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 16 }}>Sales by Category</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 16 }}>Sales by Category</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <PieChart width={120} height={120}>
                   <Pie data={categoryData} cx={55} cy={55} innerRadius={30} outerRadius={55} dataKey="value" strokeWidth={2} stroke="white">
@@ -268,11 +271,11 @@ export default function ReportsScreen({ onNavigate }: Props) {
                   </Pie>
                 </PieChart>
                 <div style={{ flex: 1 }}>
-                  {categoryData.map((c, i) => (
+                  {categoryData.map((cat, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: 3, background: c.color, flexShrink: 0 }} />
-                      <div style={{ fontSize: 12, color: '#0D1B3D', flex: 1 }}>{c.name}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7A99' }}>{c.value}%</div>
+                      <div style={{ width: 10, height: 10, borderRadius: 3, background: cat.color, flexShrink: 0 }} />
+                      <div style={{ fontSize: 12, color: c.text, flex: 1 }}>{cat.name}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: c.muted }}>{cat.value}%</div>
                     </div>
                   ))}
                 </div>
@@ -285,8 +288,8 @@ export default function ReportsScreen({ onNavigate }: Props) {
         {tab === 'monthly' && (
           <>
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 4 }}>Monthly Sales {YEAR}</div>
-              <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Sales {YEAR}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 14 }}>
                 KSh Millions · data through {curMonthLabel} · remaining months empty
               </div>
               <ResponsiveContainer width="100%" height={180}>
@@ -307,10 +310,10 @@ export default function ReportsScreen({ onNavigate }: Props) {
                 </BarChart>
               </ResponsiveContainer>
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 8 }}>
-                {[['#123A8F','Past'],['#D4AF37','Current'],['#EDF0F7','Upcoming']].map(([c,l]) => (
+                {[['#123A8F','Past'],['#D4AF37','Current'],['#EDF0F7','Upcoming']].map(([clr,l]) => (
                   <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: 3, background: c, border: l === 'Upcoming' ? '1px solid #D0D7E8' : 'none' }} />
-                    <div style={{ fontSize: 10, color: '#6B7A99' }}>{l}</div>
+                    <div style={{ width: 10, height: 10, borderRadius: 3, background: clr, border: l === 'Upcoming' ? '1px solid #D0D7E8' : 'none' }} />
+                    <div style={{ fontSize: 10, color: c.muted }}>{l}</div>
                   </div>
                 ))}
               </div>
@@ -318,12 +321,12 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
             {/* Month list */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 14 }}>Monthly Breakdown</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Monthly Breakdown</div>
               {monthData.map((m, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: i < 11 ? 10 : 0 }}>
                   <div style={{ width: 32, fontSize: 11, display: 'flex', alignItems: 'center', gap: 3,
                     fontWeight: m.isNow ? 800 : 600,
-                    color: m.isNow ? '#D4AF37' : m.future ? '#C8D0E0' : '#6B7A99' }}>
+                    color: m.isNow ? '#D4AF37' : m.future ? '#C8D0E0' : c.muted }}>
                     {m.month}
                     {m.isNow && <div style={{ width: 4, height: 4, borderRadius: '50%', background: '#D4AF37', flexShrink: 0 }} />}
                   </div>
@@ -340,7 +343,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                     </div>
                   </div>
                   <div style={{ width: 72, textAlign: 'right', fontSize: 12, fontWeight: 700,
-                    color: m.future ? '#C8D0E0' : '#0D1B3D' }}>
+                    color: m.future ? '#C8D0E0' : c.text }}>
                     {m.future ? '—' : `KSh ${(m.sales * 1000000).toLocaleString()}`}
                   </div>
                 </div>
@@ -354,11 +357,11 @@ export default function ReportsScreen({ onNavigate }: Props) {
               { label: `Days left in ${curMonthLabel}`, value: `${DAYS_IN_MON - CUR_DATE} days`, sub: `${CUR_DATE} of ${DAYS_IN_MON} elapsed`, icon: '📅', color: '#123A8F' },
             ].map((s, i) => (
               <div key={i} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 12, background: `${s.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{s.icon}</div>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(s.color), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{s.icon}</div>
                 <div>
-                  <div style={{ fontSize: 11, color: '#6B7A99' }}>{s.label}</div>
+                  <div style={{ fontSize: 11, color: c.muted }}>{s.label}</div>
                   <div style={{ fontSize: 16, fontWeight: 800, color: s.color }}>{s.value}</div>
-                  <div style={{ fontSize: 11, color: '#6B7A99' }}>{s.sub}</div>
+                  <div style={{ fontSize: 11, color: c.muted }}>{s.sub}</div>
                 </div>
               </div>
             ))}
@@ -370,8 +373,8 @@ export default function ReportsScreen({ onNavigate }: Props) {
           <>
             {/* Weekly profit bars */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 4 }}>Profit This Week</div>
-              <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 12 }}>KSh · through {todayLabel} · future days empty</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Profit This Week</div>
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 12 }}>KSh · through {todayLabel} · future days empty</div>
               <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={weekData} margin={{ top: 8, right: 5, bottom: 0, left: -20 }}>
                   <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#6B7A99' }} axisLine={false} tickLine={false} />
@@ -390,10 +393,10 @@ export default function ReportsScreen({ onNavigate }: Props) {
                 </BarChart>
               </ResponsiveContainer>
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 8 }}>
-                {[['#2E7D32','Profit'],['#D4AF37','Today'],['#EDF0F7','Upcoming']].map(([c,l]) => (
+                {[['#2E7D32','Profit'],['#D4AF37','Today'],['#EDF0F7','Upcoming']].map(([clr,l]) => (
                   <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: 3, background: c, border: l === 'Upcoming' ? '1px solid #D0D7E8' : 'none' }} />
-                    <div style={{ fontSize: 10, color: '#6B7A99' }}>{l}</div>
+                    <div style={{ width: 10, height: 10, borderRadius: 3, background: clr, border: l === 'Upcoming' ? '1px solid #D0D7E8' : 'none' }} />
+                    <div style={{ fontSize: 10, color: c.muted }}>{l}</div>
                   </div>
                 ))}
               </div>
@@ -407,7 +410,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
             ].map((s, i) => (
               <div key={i} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <div style={{ fontSize: 11, color: '#6B7A99' }}>{s.label}</div>
+                  <div style={{ fontSize: 11, color: c.muted }}>{s.label}</div>
                   <div style={{ fontSize: 17, fontWeight: 800, color: s.color, marginTop: 2 }}>{s.value}</div>
                 </div>
                 <span className={`badge ${s.err ? 'badge-error' : 'badge-success'}`} style={{ fontSize: 13, padding: '5px 12px' }}>{s.margin}</span>
@@ -416,8 +419,8 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
             {/* Monthly profit area */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 4 }}>Monthly Profit {YEAR}</div>
-              <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 12 }}>KSh Millions · future months empty</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Profit {YEAR}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 12 }}>KSh Millions · future months empty</div>
               <ResponsiveContainer width="100%" height={150}>
                 <AreaChart data={monthData} margin={{ top: 8, right: 5, bottom: 0, left: -20 }}>
                   <defs>

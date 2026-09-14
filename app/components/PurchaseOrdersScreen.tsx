@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 const orders = [
   { id: 'PO-2026-084', supplier: 'Unga Limited', date: '8 Jul 2026', items: 6, total: 48000, status: 'pending', dueDate: '10 Jul 2026' },
@@ -33,6 +34,7 @@ const statusBg: Record<string, string> = {
 interface Props { onNavigate: (s: string) => void }
 
 export default function PurchaseOrdersScreen({ onNavigate }: Props) {
+  const c = useColors()
   const [filter, setFilter] = useState<'all' | 'pending' | 'delivered'>('all')
   const [selected, setSelected] = useState<typeof orders[0] | null>(null)
   const [showNew, setShowNew] = useState(false)
@@ -42,7 +44,7 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
 
   if (showNew) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setShowNew(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -53,9 +55,9 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 16 }}>Order Details</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 16 }}>Order Details</div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Supplier *</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Supplier *</label>
               <select className="input" style={{ appearance: 'none' }} value={newForm.supplier} onChange={e => setNewForm(f => ({ ...f, supplier: e.target.value }))}>
                 <option value="">Select supplier...</option>
                 {['Unga Limited', 'Bidco Africa', 'Procter & Gamble', 'Dawa Limited', 'Brookside Dairy'].map(s => (
@@ -64,21 +66,21 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
               </select>
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Expected Delivery Date *</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Expected Delivery Date *</label>
               <input className="input" type="date" defaultValue="2026-07-12" />
             </div>
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Notes</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Notes</label>
               <textarea className="input" rows={3} placeholder="Optional notes..." value={newForm.notes} onChange={e => setNewForm(f => ({ ...f, notes: e.target.value }))} style={{ resize: 'none' }} />
             </div>
           </div>
 
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 10 }}>Order Items</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 10 }}>Order Items</div>
           {orderItems.slice(0, 4).map((item, i) => (
             <div key={i} className="card" style={{ padding: '12px 14px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{item.name}</div>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 1 }}>KSh {item.cost} / {item.unit}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{item.name}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>KSh {item.cost} / {item.unit}</div>
               </div>
               <input type="number" defaultValue={item.qty}
                 style={{ width: 60, padding: '6px 8px', borderRadius: 8, border: '1.5px solid #E8ECF4', textAlign: 'center', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
@@ -92,9 +94,9 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
 
           <div className="card" style={{ padding: '14px 16px', marginBottom: 20 }}>
             {[['Subtotal', 'KSh 34,200'], ['Tax (16% VAT)', 'KSh 5,472'], ['Total', 'KSh 39,672']].map(([k, v], i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? '1px solid #F0F3F9' : 'none' }}>
-                <div style={{ fontSize: i === 2 ? 14 : 13, fontWeight: i === 2 ? 800 : 400, color: i === 2 ? '#0D1B3D' : '#6B7A99' }}>{k}</div>
-                <div style={{ fontSize: i === 2 ? 14 : 13, fontWeight: i === 2 ? 800 : 600, color: i === 2 ? '#123A8F' : '#0D1B3D' }}>{v}</div>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: i > 0 ? c.divider : 'none' }}>
+                <div style={{ fontSize: i === 2 ? 14 : 13, fontWeight: i === 2 ? 800 : 400, color: i === 2 ? c.text : c.muted }}>{k}</div>
+                <div style={{ fontSize: i === 2 ? 14 : 13, fontWeight: i === 2 ? 800 : 600, color: i === 2 ? '#123A8F' : c.text }}>{v}</div>
               </div>
             ))}
           </div>
@@ -109,7 +111,7 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
 
   if (selected) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
             <button className="btn" onClick={() => setSelected(null)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -131,21 +133,21 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 10 }}>Order Items</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 10 }}>Order Items</div>
           {orderItems.map((item, i) => (
             <div key={i} className="card" style={{ padding: '12px 14px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{item.name}</div>
-                <div style={{ fontSize: 11, color: '#6B7A99' }}>{item.qty} {item.unit} × KSh {item.cost}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{item.name}</div>
+                <div style={{ fontSize: 11, color: c.muted }}>{item.qty} {item.unit} × KSh {item.cost}</div>
               </div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#123A8F' }}>KSh {item.total.toLocaleString()}</div>
             </div>
           ))}
           <div className="card" style={{ padding: '14px 16px', marginTop: 4, marginBottom: 16 }}>
             {[['Subtotal', `KSh ${selected.total.toLocaleString()}`], ['Received', selected.status === 'delivered' ? `KSh ${selected.total.toLocaleString()}` : 'KSh 0'], ['Balance', selected.status === 'delivered' ? 'KSh 0' : `KSh ${selected.total.toLocaleString()}`]].map(([k, v], i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderTop: i > 0 ? '1px solid #F0F3F9' : 'none' }}>
-                <div style={{ fontSize: 13, color: '#6B7A99' }}>{k}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>{v}</div>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderTop: i > 0 ? c.divider : 'none' }}>
+                <div style={{ fontSize: 13, color: c.muted }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{v}</div>
               </div>
             ))}
           </div>
@@ -161,7 +163,7 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
   }
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div>
@@ -184,10 +186,10 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          {[['KSh 191K', 'This Month', '#123A8F'], ['3', 'Pending', '#F9A825'], ['2', 'Delivered', '#2E7D32']].map(([v, l, c], i) => (
+          {[['KSh 191K', 'This Month', '#123A8F'], ['3', 'Pending', '#F9A825'], ['2', 'Delivered', '#2E7D32']].map(([v, l, col], i) => (
             <div key={i} className="card" style={{ flex: 1, padding: '10px', textAlign: 'center' }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: c }}>{v}</div>
-              <div style={{ fontSize: 10, color: '#6B7A99', marginTop: 2 }}>{l}</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: col }}>{v}</div>
+              <div style={{ fontSize: 10, color: c.muted, marginTop: 2 }}>{l}</div>
             </div>
           ))}
         </div>
@@ -195,16 +197,16 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
           <button key={o.id} className="btn card" onClick={() => setSelected(o)} style={{ width: '100%', padding: '14px 16px', marginBottom: 10, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: '#0D1B3D' }}>{o.id}</div>
-                <div style={{ fontSize: 12, color: '#6B7A99', marginTop: 2 }}>{o.supplier}</div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: c.text }}>{o.id}</div>
+                <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>{o.supplier}</div>
               </div>
               <span className={`badge ${statusBg[o.status]}`}>{o.status.charAt(0).toUpperCase() + o.status.slice(1)}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontSize: 11, color: '#6B7A99' }}>{o.items} items · Due {o.dueDate}</div>
+              <div style={{ fontSize: 11, color: c.muted }}>{o.items} items · Due {o.dueDate}</div>
               <div style={{ fontSize: 14, fontWeight: 800, color: '#123A8F' }}>KSh {o.total.toLocaleString()}</div>
             </div>
-            <div style={{ marginTop: 10, height: 4, background: '#F0F3F9', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ marginTop: 10, height: 4, background: c.cardAlt, borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: o.status === 'delivered' ? '100%' : o.status === 'partial' ? '60%' : '10%', height: '100%', background: statusColor[o.status], borderRadius: 2, transition: 'width 0.4s' }} />
             </div>
           </button>

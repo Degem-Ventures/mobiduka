@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 const suppliers = [
   { id: 1, name: 'Unga Limited', category: 'Flour & Grains', contact: 'James Mwenda', phone: '+254 20 330 0000', email: 'orders@unga.com', orders: 12, outstanding: 48000, initials: 'UL', color: '#123A8F', rating: 5, terms: 'Net 30' },
@@ -12,6 +13,7 @@ const suppliers = [
 interface Props { onNavigate: (s: string) => void }
 
 export default function SuppliersScreen({ onNavigate }: Props) {
+  const c = useColors()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<typeof suppliers[0] | null>(null)
   const [showAdd, setShowAdd] = useState(false)
@@ -22,7 +24,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
 
   if (showAdd) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -41,12 +43,12 @@ export default function SuppliersScreen({ onNavigate }: Props) {
               { label: 'Email Address', key: 'email', placeholder: 'supplier@email.com' },
             ].map((f) => (
               <div key={f.key} style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>{f.label}</label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>{f.label}</label>
                 <input className="input" placeholder={f.placeholder} value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               </div>
             ))}
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Payment Terms</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Payment Terms</label>
               <select className="input" value={form.terms} onChange={e => setForm(p => ({ ...p, terms: e.target.value }))} style={{ appearance: 'none' }}>
                 {['COD', 'Prepaid', 'Net 7', 'Net 14', 'Net 21', 'Net 30', 'Net 60'].map(t => <option key={t}>{t}</option>)}
               </select>
@@ -62,7 +64,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
 
   if (selected) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
             <button className="btn" onClick={() => setSelected(null)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -86,26 +88,26 @@ export default function SuppliersScreen({ onNavigate }: Props) {
         </div>
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-            {[['Total Orders', selected.orders, '#123A8F'], ['Outstanding', selected.outstanding > 0 ? `KSh ${selected.outstanding.toLocaleString()}` : 'Cleared', selected.outstanding > 0 ? '#D32F2F' : '#2E7D32']].map(([l, v, c], i) => (
+            {[['Total Orders', selected.orders, '#123A8F'], ['Outstanding', selected.outstanding > 0 ? `KSh ${selected.outstanding.toLocaleString()}` : 'Cleared', selected.outstanding > 0 ? '#D32F2F' : '#2E7D32']].map(([l, v, col], i) => (
               <div key={i} className="card" style={{ padding: '14px', textAlign: 'center' }}>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 4 }}>{l}</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: String(c) }}>{v}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{l}</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: String(col) }}>{v}</div>
               </div>
             ))}
           </div>
           <div className="card" style={{ padding: '16px', marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 12 }}>Contact Information</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 12 }}>Contact Information</div>
             {[['Contact Person', selected.contact], ['Phone', selected.phone], ['Email', selected.email], ['Payment Terms', selected.terms]].map(([k, v], i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < 3 ? '1px solid #F0F3F9' : 'none' }}>
-                <div style={{ fontSize: 12, color: '#6B7A99' }}>{k}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{v}</div>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < 3 ? c.divider : 'none' }}>
+                <div style={{ fontSize: 12, color: c.muted }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{v}</div>
               </div>
             ))}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => onNavigate('purchases')} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>New Order</button>
             <button className="btn" style={{ width: 48, padding: '13px', background: '#E8F5E9', border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>📞</button>
-            <button className="btn" style={{ width: 48, padding: '13px', background: '#E3EAF8', border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>✉️</button>
+            <button className="btn" style={{ width: 48, padding: '13px', background: c.iconBg, border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>✉️</button>
           </div>
         </div>
       </div>
@@ -113,7 +115,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
   }
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
@@ -148,12 +150,12 @@ export default function SuppliersScreen({ onNavigate }: Props) {
           <button key={s.id} className="btn card" onClick={() => setSelected(s)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
             <div style={{ width: 48, height: 48, borderRadius: 14, background: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, color: 'white', flexShrink: 0 }}>{s.initials}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#0D1B3D' }}>{s.name}</div>
-              <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 1 }}>{s.category} · {s.terms}</div>
-              <div style={{ display: 'flex', gap: 1, marginTop: 3 }}>{[1,2,3,4,5].map(i => <span key={i} style={{ fontSize: 9, color: i <= s.rating ? '#D4AF37' : '#E8ECF4' }}>★</span>)}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{s.name}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{s.category} · {s.terms}</div>
+              <div style={{ display: 'flex', gap: 1, marginTop: 3 }}>{[1,2,3,4,5].map(i => <span key={i} style={{ fontSize: 9, color: i <= s.rating ? '#D4AF37' : c.faint }}>★</span>)}</div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 4 }}>{s.orders} orders</div>
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{s.orders} orders</div>
               {s.outstanding > 0 ? <span className="badge badge-error">KSh {(s.outstanding / 1000).toFixed(0)}K</span> : <span className="badge badge-success">Settled</span>}
             </div>
           </button>

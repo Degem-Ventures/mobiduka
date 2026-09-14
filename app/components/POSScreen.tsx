@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 const products = [
   { id: 1, name: 'Unga Jogoo 2kg', price: 200, category: 'Flour', stock: 45, emoji: '🌾' },
@@ -23,13 +24,14 @@ interface Props {
   onNavigate: (screen: string) => void
 }
 
-export default function POSScreen({ onNavigate: _onNavigate }: Props) {
+export default function POSScreen({ onNavigate }: Props) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
   const [view, setView] = useState<'pos' | 'cart' | 'payment' | 'receipt'>('pos')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'credit'>('cash')
   const [discount, setDiscount] = useState(0)
+  const c = useColors()
 
   const filtered = products.filter(p =>
     (category === 'All' || p.category === category) &&
@@ -37,15 +39,15 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
   )
 
   const addToCart = (p: typeof products[0]) => {
-    setCart(c => {
-      const existing = c.find(x => x.id === p.id)
-      if (existing) return c.map(x => x.id === p.id ? { ...x, qty: x.qty + 1 } : x)
-      return [...c, { id: p.id, name: p.name, price: p.price, qty: 1, emoji: p.emoji }]
+    setCart(prev => {
+      const existing = prev.find(x => x.id === p.id)
+      if (existing) return prev.map(x => x.id === p.id ? { ...x, qty: x.qty + 1 } : x)
+      return [...prev, { id: p.id, name: p.name, price: p.price, qty: 1, emoji: p.emoji }]
     })
   }
 
   const updateQty = (id: number, delta: number) => {
-    setCart(c => c.map(x => x.id === id ? { ...x, qty: Math.max(0, x.qty + delta) } : x).filter(x => x.qty > 0))
+    setCart(prev => prev.map(x => x.id === id ? { ...x, qty: Math.max(0, x.qty + delta) } : x).filter(x => x.qty > 0))
   }
 
   const subtotal = cart.reduce((s, x) => s + x.price * x.qty, 0)
@@ -55,7 +57,7 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
 
   if (view === 'receipt') {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #2E7D32, #388E3C)', padding: '52px 20px 28px', flexShrink: 0 }}>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 8 }}>✅</div>
@@ -66,21 +68,21 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 13, color: '#6B7A99', marginBottom: 4 }}>MobiDuka Store · Nairobi CBD</div>
-              <div style={{ fontSize: 12, color: '#B0BAD3' }}>Tue 8 Jul 2026, 14:45</div>
+              <div style={{ fontSize: 13, color: c.muted, marginBottom: 4 }}>MobiDuka Store · Nairobi CBD</div>
+              <div style={{ fontSize: 12, color: c.faint }}>Tue 8 Jul 2026, 14:45</div>
             </div>
             <div style={{ borderTop: '1px dashed #E8ECF4', paddingTop: 16, marginBottom: 16 }}>
               {cart.map((item, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, color: '#0D1B3D' }}>{item.name} × {item.qty}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>KSh {item.price * item.qty}</div>
+                  <div style={{ fontSize: 13, color: c.text }}>{item.name} × {item.qty}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>KSh {item.price * item.qty}</div>
                 </div>
               ))}
             </div>
             <div style={{ borderTop: '1px dashed #E8ECF4', paddingTop: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <div style={{ fontSize: 13, color: '#6B7A99' }}>Subtotal</div>
-                <div style={{ fontSize: 13, color: '#0D1B3D' }}>KSh {subtotal}</div>
+                <div style={{ fontSize: 13, color: c.muted }}>Subtotal</div>
+                <div style={{ fontSize: 13, color: c.text }}>KSh {subtotal}</div>
               </div>
               {discountAmt > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -89,11 +91,11 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: '2px solid #123A8F', marginTop: 8 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#0D1B3D' }}>TOTAL</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: c.text }}>TOTAL</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: '#123A8F' }}>KSh {total.toLocaleString()}</div>
               </div>
               <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: 12, color: '#6B7A99' }}>Payment</div>
+                <div style={{ fontSize: 12, color: c.muted }}>Payment</div>
                 <span className={`badge ${paymentMethod === 'mpesa' ? 'badge-success' : paymentMethod === 'credit' ? 'badge-error' : 'badge-blue'}`}>
                   {paymentMethod === 'mpesa' ? 'M-Pesa' : paymentMethod === 'credit' ? 'Credit' : 'Cash'}
                 </span>
@@ -101,6 +103,14 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <button className="btn" onClick={() => onNavigate('dashboard')} style={{
+              padding: '14px 12px',
+              background: 'rgba(13,27,61,0.08)', border: '1px solid #D0D7E8',
+              borderRadius: 14, fontSize: 14, fontWeight: 600, color: c.muted,
+              cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+            </button>
             <button className="btn" style={{
               flex: 1, padding: '14px',
               background: 'rgba(18,58,143,0.1)', border: '1px solid #123A8F',
@@ -121,7 +131,7 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
 
   if (view === 'payment') {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setView('cart')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -136,7 +146,7 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7A99', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Select Payment Method</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Select Payment Method</div>
           {[
             { key: 'cash', label: 'Cash', sub: 'Physical cash payment', icon: '💵', color: '#123A8F' },
             { key: 'mpesa', label: 'M-Pesa', sub: 'Mobile money transfer', icon: '📱', color: '#2E7D32' },
@@ -145,15 +155,15 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
             <button key={m.key} className="btn" onClick={() => setPaymentMethod(m.key as 'cash' | 'mpesa' | 'credit')} style={{
               width: '100%', display: 'flex', alignItems: 'center', gap: 14,
               padding: '14px 16px', marginBottom: 10, borderRadius: 14,
-              background: paymentMethod === m.key ? `${m.color}12` : 'white',
+              background: paymentMethod === m.key ? `${m.color}12` : c.card,
               border: paymentMethod === m.key ? `2px solid ${m.color}` : '1.5px solid #E8ECF4',
               cursor: 'pointer', fontFamily: 'inherit',
               boxShadow: paymentMethod === m.key ? `0 0 0 4px ${m.color}10` : '0 1px 4px rgba(0,0,0,0.06)'
             }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: `${m.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{m.icon}</div>
               <div style={{ flex: 1, textAlign: 'left' }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#0D1B3D' }}>{m.label}</div>
-                <div style={{ fontSize: 12, color: '#6B7A99' }}>{m.sub}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: c.text }}>{m.label}</div>
+                <div style={{ fontSize: 12, color: c.muted }}>{m.sub}</div>
               </div>
               {paymentMethod === m.key && <div style={{ width: 22, height: 22, borderRadius: '50%', background: m.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20,6 9,17 4,12"/></svg>
@@ -162,14 +172,14 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
           ))}
 
           <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7A99', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Discount</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Discount</div>
             <div style={{ display: 'flex', gap: 8 }}>
               {[0, 5, 10, 15, 20].map(d => (
                 <button key={d} className="btn" onClick={() => setDiscount(d)} style={{
                   flex: 1, padding: '10px 4px', borderRadius: 10,
-                  background: discount === d ? '#123A8F' : 'white',
+                  background: discount === d ? '#123A8F' : c.card,
                   border: discount === d ? 'none' : '1.5px solid #E8ECF4',
-                  color: discount === d ? 'white' : '#6B7A99',
+                  color: discount === d ? 'white' : c.muted,
                   fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
                 }}>{d}%</button>
               ))}
@@ -192,7 +202,7 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
 
   if (view === 'cart') {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setView('pos')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -203,39 +213,39 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
         </div>
         <div className="scroll-area" style={{ padding: '16px', flex: 1 }}>
           {cart.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: '#B0BAD3' }}>
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: c.faint }}>
               <div style={{ fontSize: 48, marginBottom: 12 }}>🛒</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: '#6B7A99' }}>Cart is empty</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: c.muted }}>Cart is empty</div>
             </div>
           ) : cart.map((item) => (
             <div key={item.id} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: '#E3EAF8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{item.emoji}</div>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{item.emoji}</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>{item.name}</div>
-                <div style={{ fontSize: 12, color: '#6B7A99' }}>KSh {item.price} each</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{item.name}</div>
+                <div style={{ fontSize: 12, color: c.muted }}>KSh {item.price} each</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <button className="btn" onClick={() => updateQty(item.id, -1)} style={{ width: 28, height: 28, borderRadius: 8, background: '#F0F3F9', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
-                <div style={{ width: 24, textAlign: 'center', fontSize: 15, fontWeight: 700, color: '#0D1B3D' }}>{item.qty}</div>
+                <div style={{ width: 24, textAlign: 'center', fontSize: 15, fontWeight: 700, color: c.text }}>{item.qty}</div>
                 <button className="btn" onClick={() => updateQty(item.id, 1)} style={{ width: 28, height: 28, borderRadius: 8, background: '#123A8F', border: 'none', cursor: 'pointer', fontSize: 16, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
               </div>
-              <div style={{ width: 70, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>
+              <div style={{ width: 70, textAlign: 'right', fontSize: 13, fontWeight: 700, color: c.text }}>
                 KSh {(item.price * item.qty).toLocaleString()}
               </div>
             </div>
           ))}
         </div>
         {/* Summary footer */}
-        <div style={{ background: 'white', borderTop: '1px solid #E8ECF4', padding: '16px', flexShrink: 0 }}>
+        <div style={{ background: c.card, borderTop: c.divider, padding: '16px', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-            <div style={{ fontSize: 14, color: '#6B7A99' }}>Subtotal ({cartCount} items)</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#0D1B3D' }}>KSh {subtotal.toLocaleString()}</div>
+            <div style={{ fontSize: 14, color: c.muted }}>Subtotal ({cartCount} items)</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>KSh {subtotal.toLocaleString()}</div>
           </div>
           <button className="btn" onClick={() => setView('payment')} disabled={cart.length === 0} style={{
             width: '100%', padding: '16px',
             background: cart.length === 0 ? '#E8ECF4' : 'linear-gradient(135deg, #123A8F, #1A4FBF)',
             border: 'none', borderRadius: 14, fontSize: 16, fontWeight: 700,
-            color: cart.length === 0 ? '#B0BAD3' : 'white', cursor: 'pointer', fontFamily: 'inherit',
+            color: cart.length === 0 ? c.faint : 'white', cursor: 'pointer', fontFamily: 'inherit',
             boxShadow: cart.length > 0 ? '0 4px 16px rgba(18,58,143,0.3)' : 'none'
           }}>
             Proceed to Payment →
@@ -247,7 +257,7 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
 
   // Main POS view
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       {/* Search header */}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
@@ -278,13 +288,13 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
 
         {/* Categories */}
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          {categories.map(c => (
-            <button key={c} className="btn" onClick={() => setCategory(c)} style={{
+          {categories.map(cat => (
+            <button key={cat} className="btn" onClick={() => setCategory(cat)} style={{
               padding: '6px 14px', borderRadius: 100, flexShrink: 0, border: 'none',
-              background: category === c ? '#D4AF37' : 'rgba(255,255,255,0.12)',
-              color: category === c ? '#0D1B3D' : 'rgba(255,255,255,0.8)',
+              background: category === cat ? '#D4AF37' : 'rgba(255,255,255,0.12)',
+              color: category === cat ? c.text : 'rgba(255,255,255,0.8)',
               fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
-            }}>{c}</button>
+            }}>{cat}</button>
           ))}
         </div>
       </div>
@@ -293,7 +303,7 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
           {filtered.map(p => {
-            const inCart = cart.find(c => c.id === p.id)
+            const inCart = cart.find(x => x.id === p.id)
             const lowStock = p.stock <= 5
             return (
               <button key={p.id} className="btn card" onClick={() => addToCart(p)} style={{
@@ -307,9 +317,9 @@ export default function POSScreen({ onNavigate: _onNavigate }: Props) {
                   <span className="badge badge-blue" style={{ fontSize: 9 }}>×{inCart.qty}</span>
                 </div>}
                 <div style={{ fontSize: 28, marginBottom: 6, textAlign: 'center' }}>{p.emoji}</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#0D1B3D', lineHeight: 1.3, marginBottom: 4 }}>{p.name}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: c.text, lineHeight: 1.3, marginBottom: 4 }}>{p.name}</div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: '#123A8F' }}>KSh {p.price}</div>
-                <div style={{ fontSize: 10, color: lowStock ? '#F9A825' : '#6B7A99', marginTop: 2, fontWeight: lowStock ? 600 : 400 }}>{lowStock ? `Low: ${p.stock}` : `${p.stock} in stock`}</div>
+                <div style={{ fontSize: 10, color: lowStock ? '#F9A825' : c.muted, marginTop: 2, fontWeight: lowStock ? 600 : 400 }}>{lowStock ? `Low: ${p.stock}` : `${p.stock} in stock`}</div>
               </button>
             )
           })}

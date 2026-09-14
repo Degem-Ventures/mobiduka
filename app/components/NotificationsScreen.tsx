@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 const notifications = [
   { id: 1, type: 'critical', title: 'Critical Stock Alert', body: 'Panadol 500mg has only 3 units remaining. Reorder level is 50 units.', time: '14:30', date: 'Today', read: false, icon: '🔴' },
@@ -23,6 +24,7 @@ const typeColors: Record<string, { bg: string; border: string; dot: string }> = 
 interface Props { onNavigate: (s: string) => void }
 
 export default function NotificationsScreen({ onNavigate }: Props) {
+  const c = useColors()
   const [items, setItems] = useState(notifications)
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
 
@@ -36,23 +38,23 @@ export default function NotificationsScreen({ onNavigate }: Props) {
 
   const Section = ({ title, data }: { title: string; data: typeof items }) => data.length === 0 ? null : (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</div>
       {data.map(n => (
         <button key={n.id} className="btn" onClick={() => markRead(n.id)} style={{
           width: '100%', padding: '14px 16px', marginBottom: 8, textAlign: 'left', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-          background: n.read ? 'white' : typeColors[n.type].bg,
+          background: n.read ? c.card : typeColors[n.type].bg,
           borderRadius: 14, borderLeft: `3px solid ${n.read ? 'transparent' : typeColors[n.type].dot}`,
           boxShadow: n.read ? '0 1px 4px rgba(0,0,0,0.06)' : `0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px ${typeColors[n.type].border}`
         }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-            <div style={{ width: 38, height: 38, borderRadius: 10, background: n.read ? '#F5F7FA' : `${typeColors[n.type].bg}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{n.icon}</div>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: n.read ? c.cardAlt : `${typeColors[n.type].bg}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{n.icon}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: n.read ? 600 : 700, color: '#0D1B3D', flex: 1 }}>{n.title}</div>
+                <div style={{ fontSize: 13, fontWeight: n.read ? 600 : 700, color: c.text, flex: 1 }}>{n.title}</div>
                 {!n.read && <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColors[n.type].dot, flexShrink: 0, marginTop: 4 }} />}
               </div>
-              <div style={{ fontSize: 12, color: '#6B7A99', marginTop: 3, lineHeight: 1.5 }}>{n.body}</div>
-              <div style={{ fontSize: 11, color: '#B0BAD3', marginTop: 4 }}>{n.time}</div>
+              <div style={{ fontSize: 12, color: c.muted, marginTop: 3, lineHeight: 1.5 }}>{n.body}</div>
+              <div style={{ fontSize: 11, color: c.faint, marginTop: 4 }}>{n.time}</div>
             </div>
           </div>
         </button>
@@ -61,7 +63,7 @@ export default function NotificationsScreen({ onNavigate }: Props) {
   )
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
@@ -88,9 +90,9 @@ export default function NotificationsScreen({ onNavigate }: Props) {
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {today.length === 0 && yesterday.length === 0 && older.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#B0BAD3' }}>
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: c.faint }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>🔔</div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: '#6B7A99' }}>No notifications</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: c.muted }}>No notifications</div>
           </div>
         ) : (
           <>
