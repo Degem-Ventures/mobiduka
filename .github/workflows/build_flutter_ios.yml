@@ -26,20 +26,47 @@ jobs:
           fi
 
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
-          podfile = Path("ios/Podfile")
-          text = podfile.read_text()
-          modular_headers = "use_modular_headers!\n"
+          podfile_path = Path("ios/Podfile")
+          if not podfile_path.exists():
+              print("Podfile does not exist yet.")
+              exit(0)
+
+          text = podfile_path.read_text()
+          
+          # 1. Enforce global modular headers explicitly
           if "use_modular_headers!" not in text:
-              text = modular_headers + text
-          marker = "    flutter_additional_ios_build_settings(target)\n"
-          setting = marker + "    target.build_configurations.each do |config|\n" + "      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n" + "      config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'\n" + "    end\n"
-          if marker not in text:
-              raise SystemExit("Expected Flutter Podfile post_install hook was not found")
-          text = text.replace(marker, setting, 1)
-          text = text.replace("post_install do |installer|\n", "post_install do |installer|\n  installer.pods_project.build_configurations.each do |config|\n    config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'\n  end\n", 1)
-          podfile.write_text(text)
+              text = "use_modular_headers!\n" + text
+
+          # 2. Advanced Injection: Relax module checks across ALL configuration blocks
+          # This forces Xcode to accept non-modular header imports inside third-party binary frameworks
+          build_settings_injection = """
+              # Project-level target compilation settings
+              installer.pods_project.build_configurations.each do |config|
+                config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+              end
+              # Isolated library-level target compilation settings
+              installer.pod_targets.each do |target|
+                target.build_configurations.each do |config|
+                  config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+                  config.build_settings['DEFINES_MODULE'] = 'YES'
+                  config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+                end
+              end
+          """
+          
+          # Match post_install block syntax variants safely
+          post_install_regex = r"(post_install\s+do\s+\|installer\|)"
+          if re.search(post_install_regex, text):
+              text = re.sub(post_install_regex, r"\1" + build_settings_injection, text, count=1)
+              print("Successfully injected dual-layer non-modular header overrides.")
+          else:
+              text += f"\npost_install do |installer|{build_settings_injection}end\n"
+              print("Created a new structural post_install hook configuration.")
+
+          podfile_path.write_text(text)
           PY
 
       - name: Install Dependencies
