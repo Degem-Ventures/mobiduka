@@ -49,24 +49,17 @@ jobs:
           fi
 
           # 2. Inject an absolute global compilation SDK override hook into the root Gradle script.
-          # This forces all external plugins (bluetooth_print_plus, mobile_scanner) to scale up to API 36.
+          # Fix: Uses safe reflection property setter injection to sidestep Kotlin type casting bugs
           if [ -f android/build.gradle.kts ]; then
             cat >> android/build.gradle.kts <<'EOF'
           subprojects {
               afterEvaluate {
-                  val androidExtension = extensions.findByName("android")
-                  if (androidExtension != null) {
-                      when (androidExtension) {
-                          is com.android.build.api.dsl.ApplicationExtension -> {
-                              androidExtension.compileSdk = 36
-                              androidExtension.buildToolsVersion = "36.0.0"
-                              androidExtension.defaultConfig.targetSdk = 36
-                          }
-                          is com.android.build.api.dsl.LibraryExtension -> {
-                              androidExtension.compileSdk = 36
-                              androidExtension.buildToolsVersion = "36.0.0"
-                              androidExtension.defaultConfig.targetSdk = 36
-                          }
+                  if (project.hasProperty("android")) {
+                      val androidExt = project.extensions.findByName("android") as? com.android.build.gradle.BaseExtension
+                      androidExt?.let {
+                          it.compileSdkVersion(36)
+                          it.buildToolsVersion("36.0.0")
+                          it.defaultConfig.targetSdkVersion(36)
                       }
                   }
               }
