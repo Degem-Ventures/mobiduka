@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 const backupHistory = [
   { date: 'Today, 06:00 AM', type: 'Auto', status: 'success', size: '4.2 MB', records: '12,450' },
@@ -12,6 +13,7 @@ const backupHistory = [
 interface Props { onNavigate: (s: string) => void }
 
 export default function BackupScreen({ onNavigate }: Props) {
+  const c = useColors()
   const [syncing, setSyncing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [lastSync, setLastSync] = useState('Today, 06:00 AM')
@@ -31,13 +33,13 @@ export default function BackupScreen({ onNavigate }: Props) {
   }
 
   const Toggle = ({ value, onChange }: { value: boolean; onChange: () => void }) => (
-    <button className="btn" onClick={onChange} style={{ width: 46, height: 26, borderRadius: 13, background: value ? '#123A8F' : '#D0D7E8', border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
+    <button className="btn" onClick={onChange} style={{ width: 46, height: 26, borderRadius: 13, background: value ? '#123A8F' : (c.isDark ? '#1A3366' : '#D0D7E8'), border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
       <div style={{ position: 'absolute', top: 3, left: value ? 23 : 3, width: 20, height: 20, borderRadius: '50%', background: 'white', transition: 'left 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }} />
     </button>
   )
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #0288D1)', padding: '52px 20px 24px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
           <button className="btn" onClick={() => onNavigate('more')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -84,24 +86,24 @@ export default function BackupScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
         {/* Backup now */}
-        <button className="btn" onClick={startBackup} disabled={syncing} style={{ width: '100%', padding: '16px', marginBottom: 16, background: syncing ? '#E8ECF4' : 'linear-gradient(135deg, #0288D1, #0277BD)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: syncing ? '#B0BAD3' : 'white', cursor: syncing ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: syncing ? 'none' : '0 4px 16px rgba(2,136,209,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+        <button className="btn" onClick={startBackup} disabled={syncing} style={{ width: '100%', padding: '16px', marginBottom: 16, background: syncing ? '#E8ECF4' : 'linear-gradient(135deg, #0288D1, #0277BD)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: syncing ? c.faint : 'white', cursor: syncing ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: syncing ? 'none' : '0 4px 16px rgba(2,136,209,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
           <span style={{ fontSize: 20 }}>{syncing ? '⏳' : '☁️'}</span>
           {syncing ? `Backing Up... ${progress}%` : 'Backup Now'}
         </button>
 
         {/* Cloud Provider */}
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Cloud Provider</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Cloud Provider</div>
         <div className="card" style={{ padding: '0', marginBottom: 16, overflow: 'hidden' }}>
           {[
             { key: 'google', label: 'Google Drive', sub: 'admin@gmail.com · Connected', icon: '🔵' },
             { key: 'dropbox', label: 'Dropbox', sub: 'Not connected', icon: '🟦' },
             { key: 'local', label: 'Local Storage', sub: 'Device memory only', icon: '📱' },
           ].map((p, i, arr) => (
-            <button key={p.key} className="btn" onClick={() => setProvider(p.key as 'google' | 'dropbox' | 'local')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? '1px solid #F0F3F9' : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-              <div style={{ width: 38, height: 38, borderRadius: 10, background: '#E3EAF8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{p.icon}</div>
+            <button key={p.key} className="btn" onClick={() => setProvider(p.key as 'google' | 'dropbox' | 'local')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? c.divider : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <div style={{ width: 38, height: 38, borderRadius: 10, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{p.icon}</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{p.label}</div>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 1 }}>{p.sub}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{p.label}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{p.sub}</div>
               </div>
               {provider === p.key && <div style={{ width: 22, height: 22, borderRadius: '50%', background: '#0288D1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20,6 9,17 4,12"/></svg>
@@ -111,16 +113,16 @@ export default function BackupScreen({ onNavigate }: Props) {
         </div>
 
         {/* Settings */}
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Sync Settings</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Sync Settings</div>
         <div className="card" style={{ padding: '0', marginBottom: 16, overflow: 'hidden' }}>
           {[
             { label: 'Auto Backup', sub: 'Backup automatically every day at 6:00 AM', value: autoBackup, onChange: () => setAutoBackup(v => !v) },
             { label: 'Wi-Fi Only', sub: 'Only sync when connected to Wi-Fi', value: wifiOnly, onChange: () => setWifiOnly(v => !v) },
           ].map((s, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: i === 0 ? '1px solid #F0F3F9' : 'none', gap: 14 }}>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: i === 0 ? c.divider : 'none', gap: 14 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{s.label}</div>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 2 }}>{s.sub}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{s.label}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{s.sub}</div>
               </div>
               <Toggle value={s.value} onChange={s.onChange} />
             </div>
@@ -128,20 +130,20 @@ export default function BackupScreen({ onNavigate }: Props) {
         </div>
 
         {/* Backup history */}
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Backup History</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Backup History</div>
         <div className="card" style={{ overflow: 'hidden' }}>
           {backupHistory.map((b, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < backupHistory.length - 1 ? '1px solid #F0F3F9' : 'none' }}>
-              <div style={{ width: 34, height: 34, borderRadius: 9, background: b.status === 'success' ? '#E8F5E9' : '#FFEBEE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < backupHistory.length - 1 ? c.divider : 'none' }}>
+              <div style={{ width: 34, height: 34, borderRadius: 9, background: b.status === 'success' ? c.successBg : c.errorBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
                 {b.status === 'success' ? '✅' : '❌'}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#0D1B3D' }}>{b.date}</div>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: c.text }}>{b.date}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>
                   {b.status === 'success' ? `${b.records} records · ${b.size}` : 'Backup failed — retried'}
                 </div>
               </div>
-              <span style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, fontWeight: 700, background: b.type === 'Manual' ? '#E3EAF8' : '#F5F7FA', color: b.type === 'Manual' ? '#123A8F' : '#6B7A99' }}>{b.type}</span>
+              <span style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, fontWeight: 700, background: b.type === 'Manual' ? c.iconBg : c.cardAlt, color: b.type === 'Manual' ? '#123A8F' : c.muted }}>{b.type}</span>
             </div>
           ))}
         </div>

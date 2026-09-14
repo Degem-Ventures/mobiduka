@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 type ProductItem = { id: number; name: string; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: string }
 
@@ -35,6 +36,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
   const [editProduct, setEditProduct] = useState<ProductItem | null>(null)
   const [newCat, setNewCat] = useState({ name: '', emoji: '📦' })
   const [productForm, setProductForm] = useState({ name: '', category: 'Flour', cost: '', price: '', stock: '', reorder: '', emoji: '📦' })
+  const c = useColors()
 
   const filtered = products.filter(p => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
@@ -45,7 +47,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
   if (selected) {
     const margin = Math.round((selected.price - selected.cost) / selected.price * 100)
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
             <button className="btn" onClick={() => setSelected(null)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -70,22 +72,22 @@ export default function InventoryScreen({ onNavigate }: Props) {
               { label: 'Current Stock', value: `${selected.stock} units`, color: selected.status === 'critical' ? '#D32F2F' : selected.status === 'low' ? '#F9A825' : '#2E7D32' },
             ].map((s, i) => (
               <div key={i} className="card" style={{ padding: '14px 16px' }}>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{s.label}</div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</div>
               </div>
             ))}
           </div>
 
           <div className="card" style={{ padding: '16px', marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 12 }}>Stock Information</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 12 }}>Stock Information</div>
             {[
               ['Reorder Level', `${selected.reorder} units`],
               ['Stock Status', selected.status === 'critical' ? '🔴 Critical' : selected.status === 'low' ? '🟡 Low Stock' : '🟢 In Stock'],
               ['Units Below Reorder', selected.stock < selected.reorder ? `${selected.reorder - selected.stock} units` : 'None'],
             ].map(([k, v], i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < 2 ? '1px solid #F0F3F9' : 'none' }}>
-                <div style={{ fontSize: 13, color: '#6B7A99' }}>{k}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{v}</div>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < 2 ? c.divider : 'none' }}>
+                <div style={{ fontSize: 13, color: c.muted }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{v}</div>
               </div>
             ))}
           </div>
@@ -123,7 +125,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
   // Add Category modal
   if (showAddCategory) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setShowAddCategory(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -135,29 +137,29 @@ export default function InventoryScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
             <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Category Name *</label>
-              <input className="input" placeholder="e.g. Beverages" value={newCat.name} onChange={e => setNewCat(c => ({ ...c, name: e.target.value }))} />
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category Name *</label>
+              <input className="input" placeholder="e.g. Beverages" value={newCat.name} onChange={e => setNewCat(prev => ({ ...prev, name: e.target.value }))} />
             </div>
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 8 }}>Icon / Emoji</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>Icon / Emoji</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {emojis.map(e => (
-                  <button key={e} className="btn" onClick={() => setNewCat(c => ({ ...c, emoji: e }))} style={{ width: 42, height: 42, borderRadius: 10, border: newCat.emoji === e ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: newCat.emoji === e ? 'rgba(18,58,143,0.08)' : 'white', fontSize: 22, cursor: 'pointer' }}>{e}</button>
+                  <button key={e} className="btn" onClick={() => setNewCat(prev => ({ ...prev, emoji: e }))} style={{ width: 42, height: 42, borderRadius: 10, border: newCat.emoji === e ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: newCat.emoji === e ? 'rgba(18,58,143,0.08)' : c.card, fontSize: 22, cursor: 'pointer' }}>{e}</button>
                 ))}
               </div>
             </div>
           </div>
           <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7A99', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Existing Categories</div>
-            {categories.map((c, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < categories.length - 1 ? '1px solid #F0F3F9' : 'none' }}>
-                <div style={{ fontSize: 13, color: '#0D1B3D', fontWeight: 500 }}>{c}</div>
-                <div style={{ fontSize: 11, color: '#B0BAD3' }}>{products.filter(p => p.category === c).length} items</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Existing Categories</div>
+            {categories.map((cat, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < categories.length - 1 ? c.divider : 'none' }}>
+                <div style={{ fontSize: 13, color: c.text, fontWeight: 500 }}>{cat}</div>
+                <div style={{ fontSize: 11, color: c.faint }}>{products.filter(p => p.category === cat).length} items</div>
               </div>
             ))}
           </div>
           <button className="btn" onClick={() => {
-            if (newCat.name) { setCategories(c => [...c, newCat.name]); setNewCat({ name: '', emoji: '📦' }) }
+            if (newCat.name) { setCategories(prev => [...prev, newCat.name]); setNewCat({ name: '', emoji: '📦' }) }
             setShowAddCategory(false)
           }} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
             Save Category
@@ -170,7 +172,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
   // Add/Edit Product screen
   if (showAddProduct) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => { setShowAddProduct(false); setEditProduct(null) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -182,33 +184,33 @@ export default function InventoryScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           {/* Emoji picker */}
           <div className="card" style={{ padding: '16px', marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7A99', marginBottom: 10 }}>Product Icon</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>Product Icon</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
               {emojis.map(e => (
-                <button key={e} className="btn" onClick={() => setProductForm(f => ({ ...f, emoji: e }))} style={{ width: 40, height: 40, borderRadius: 10, border: productForm.emoji === e ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: productForm.emoji === e ? 'rgba(18,58,143,0.1)' : 'white', fontSize: 20, cursor: 'pointer' }}>{e}</button>
+                <button key={e} className="btn" onClick={() => setProductForm(f => ({ ...f, emoji: e }))} style={{ width: 40, height: 40, borderRadius: 10, border: productForm.emoji === e ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: productForm.emoji === e ? 'rgba(18,58,143,0.1)' : c.card, fontSize: 20, cursor: 'pointer' }}>{e}</button>
               ))}
             </div>
           </div>
 
           <div className="card" style={{ padding: '20px', marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 14 }}>Product Details</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Product Details</div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Product Name *</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name *</label>
               <input className="input" placeholder="e.g. Unga Jogoo 2kg" value={productForm.name} onChange={e => setProductForm(f => ({ ...f, name: e.target.value }))} />
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Category *</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <select className="input" style={{ flex: 1, appearance: 'none' }} value={productForm.category} onChange={e => setProductForm(f => ({ ...f, category: e.target.value }))}>
-                  {categories.map(c => <option key={c}>{c}</option>)}
+                  {categories.map(cat => <option key={cat}>{cat}</option>)}
                 </select>
-                <button className="btn" onClick={() => setShowAddCategory(true)} style={{ padding: '11px 12px', background: '#E3EAF8', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ Cat</button>
+                <button className="btn" onClick={() => setShowAddCategory(true)} style={{ padding: '11px 12px', background: c.iconBg, border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ Cat</button>
               </div>
             </div>
           </div>
 
           <div className="card" style={{ padding: '20px', marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 14 }}>Pricing & Stock</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Pricing & Stock</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               {[
                 { label: 'Cost Price (KSh) *', key: 'cost', placeholder: '0' },
@@ -217,7 +219,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
                 { label: 'Reorder Level', key: 'reorder', placeholder: '10' },
               ].map(f => (
                 <div key={f.key}>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 5 }}>{f.label}</label>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 5 }}>{f.label}</label>
                   <input className="input" type="number" placeholder={f.placeholder}
                     value={productForm[f.key as keyof typeof productForm] as string}
                     onChange={e => setProductForm(p => ({ ...p, [f.key]: e.target.value }))}
@@ -226,7 +228,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
               ))}
             </div>
             {productForm.cost && productForm.price && Number(productForm.price) > Number(productForm.cost) && (
-              <div style={{ background: '#E8F5E9', borderRadius: 10, padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ background: c.successBg, borderRadius: 10, padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontSize: 12, color: '#2E7D32', fontWeight: 600 }}>Profit Margin</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: '#2E7D32' }}>{Math.round((Number(productForm.price) - Number(productForm.cost)) / Number(productForm.price) * 100)}%</div>
               </div>
@@ -242,7 +244,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
   }
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Inventory</div>
@@ -279,13 +281,13 @@ export default function InventoryScreen({ onNavigate }: Props) {
       </div>
 
       {/* Filter tabs */}
-      <div style={{ background: 'white', borderBottom: '1px solid #E8ECF4', display: 'flex', flexShrink: 0 }}>
+      <div style={{ background: c.card, borderBottom: c.divider, display: 'flex', flexShrink: 0 }}>
         {[['all', 'All Products'], ['low', 'Low Stock'], ['critical', 'Critical']].map(([key, label]) => (
           <button key={key} className="btn" onClick={() => setFilter(key as 'all' | 'low' | 'critical')} style={{
             flex: 1, padding: '12px 8px', border: 'none',
             background: 'none', cursor: 'pointer', fontFamily: 'inherit',
             borderBottom: filter === key ? '2px solid #123A8F' : '2px solid transparent',
-            color: filter === key ? '#123A8F' : '#6B7A99',
+            color: filter === key ? '#123A8F' : c.muted,
             fontSize: 12, fontWeight: 600
           }}>{label}</button>
         ))}
@@ -297,10 +299,10 @@ export default function InventoryScreen({ onNavigate }: Props) {
             width: '100%', marginBottom: 8, padding: '12px 14px',
             display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
           }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: '#E3EAF8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{p.emoji}</div>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{p.emoji}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D', marginBottom: 2 }}>{p.name}</div>
-              <div style={{ fontSize: 11, color: '#6B7A99' }}>{p.category} · Cost: KSh {p.cost}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 2 }}>{p.name}</div>
+              <div style={{ fontSize: 11, color: c.muted }}>{p.category} · Cost: KSh {p.cost}</div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: '#123A8F', marginBottom: 3 }}>KSh {p.price}</div>
@@ -314,7 +316,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
 
       {/* FAB */}
       <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" style={{
+        <button className="btn" onClick={() => { setProductForm({ name: '', category: 'Flour', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{
           width: 52, height: 52, borderRadius: '50%',
           background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
           border: 'none', fontSize: 24, color: '#0D1B3D',

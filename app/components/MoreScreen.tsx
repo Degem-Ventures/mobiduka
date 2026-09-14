@@ -1,3 +1,5 @@
+import { useColors } from '../utils/theme'
+
 interface Props {
   onLogout: () => void
   onNavigate: (s: string) => void
@@ -24,8 +26,9 @@ const menuItems = [
 ]
 
 export default function MoreScreen({ onLogout, onNavigate }: Props) {
+  const c = useColors()
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       {/* Header */}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
@@ -59,22 +62,22 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {menuItems.map((section) => (
           <div key={section.section} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{section.section}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{section.section}</div>
             <div className="card" style={{ overflow: 'hidden' }}>
               {section.items.map((item, i) => (
                 <button key={i} className="btn" onClick={() => onNavigate(item.screen)} style={{
                   width: '100%', padding: '14px 16px',
                   display: 'flex', alignItems: 'center', gap: 14,
                   border: 'none', background: 'none',
-                  borderBottom: i < section.items.length - 1 ? '1px solid #F0F3F9' : 'none',
+                  borderBottom: i < section.items.length - 1 ? c.divider : 'none',
                   cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
                 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 11, background: `${item.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{item.icon}</div>
-                  <div style={{ flex: 1, fontSize: 14, fontWeight: 600, color: '#0D1B3D' }}>{item.label}</div>
+                  <div style={{ width: 40, height: 40, borderRadius: 11, background: c.tint(item.color), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{item.icon}</div>
+                  <div style={{ flex: 1, fontSize: 14, fontWeight: 600, color: c.text }}>{item.label}</div>
                   {'badge' in item && item.badge && (
                     <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#D32F2F', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'white' }}>{item.badge}</div>
                   )}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B0BAD3" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.faint} strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
                 </button>
               ))}
             </div>
@@ -84,7 +87,8 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
         {/* Logout */}
         <button className="btn" onClick={onLogout} style={{
           width: '100%', padding: '16px',
-          background: '#FFF5F5', border: '1px solid #FFCDD2',
+          background: c.isDark ? 'rgba(211,47,47,0.15)' : '#FFF5F5',
+          border: `1px solid ${c.isDark ? 'rgba(211,47,47,0.3)' : '#FFCDD2'}`,
           borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
           cursor: 'pointer', fontFamily: 'inherit'
         }}>
@@ -93,8 +97,8 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
         </button>
 
         <div style={{ textAlign: 'center', marginTop: 20, padding: '0 20px 8px' }}>
-          <div style={{ fontSize: 12, color: '#B0BAD3' }}>MobiDuka POS v2.4.1</div>
-          <div style={{ fontSize: 11, color: '#C8D0E0', marginTop: 2 }}>© 2026 MobiTech Solutions Ltd · Kenya</div>
+          <div style={{ fontSize: 12, color: c.faint }}>MobiDuka POS v2.4.1</div>
+          <div style={{ fontSize: 11, color: c.faint, marginTop: 2 }}>© 2026 MobiTech Solutions Ltd · Kenya</div>
         </div>
       </div>
     </div>

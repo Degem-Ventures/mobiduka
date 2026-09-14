@@ -49,7 +49,7 @@ jobs:
           fi
 
           # Intercept plugin dependencies to ensure they inherit identical API level parameters
-          # Fixed: Replaced raw Heredoc appending blocks with clean, indentation-safe echo string routing
+          # Fixes the Kotlin DSL layout assignment block syntax mapping safely
           if [ -f android/build.gradle.kts ]; then
             if ! grep -q "subprojects" android/build.gradle.kts; then
               printf "\nsubprojects {\n  plugins.withId(\"com.android.application\") {\n    extensions.configure<com.android.build.api.dsl.ApplicationExtension> {\n      compileSdk = 36\n      buildToolsVersion = \"36.0.0\"\n      defaultConfig {\n        targetSdk = 36\n      }\n    }\n  }\n  plugins.withId(\"com.android.library\") {\n    extensions.configure<com.android.build.api.dsl.LibraryExtension> {\n      compileSdk = 36\n      buildToolsVersion = \"36.0.0\"\n      defaultConfig {\n        targetSdk = 36\n      }\n    }\n  }\n}\n" >> android/build.gradle.kts

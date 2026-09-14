@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { useColors } from '../utils/theme'
 
 interface Props { onNavigate: (s: string) => void }
 
 export default function UserProfileScreen({ onNavigate }: Props) {
+  const c = useColors()
   const [editing, setEditing] = useState(false)
   const [changingPin, setChangingPin] = useState(false)
   const [form, setForm] = useState({ name: 'Admin User', phone: '0712 345 678', email: 'admin@mobiduka.co.ke', store: 'MobiDuka Store', branch: 'Nairobi CBD' })
@@ -17,7 +19,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
 
   if (changingPin) {
     return (
-      <div className="screen" style={{ background: '#F5F7FA' }}>
+      <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setChangingPin(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -34,7 +36,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
               { label: 'Confirm New PIN', key: 'confirm', placeholder: '••••' },
             ].map(f => (
               <div key={f.key} style={{ marginBottom: 20 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 8 }}>{f.label}</label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>{f.label}</label>
                 <input type="password" maxLength={4} placeholder={f.placeholder}
                   value={pinForm[f.key as keyof typeof pinForm]}
                   onChange={e => setPinForm(p => ({ ...p, [f.key]: e.target.value }))}
@@ -52,7 +54,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
   }
 
   return (
-    <div className="screen" style={{ background: '#F5F7FA' }}>
+    <div className="screen" style={{ background: c.bg }}>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 28px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
           <button className="btn" onClick={() => onNavigate('more')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -81,13 +83,13 @@ export default function UserProfileScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
         {saved && (
-          <div style={{ background: '#E8F5E9', border: '1px solid #C8E6C9', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ background: c.successBg, border: '1px solid #C8E6C9', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 18 }}>✅</span>
             <span style={{ fontSize: 13, fontWeight: 600, color: '#2E7D32' }}>Profile updated successfully</span>
           </div>
         )}
 
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Personal Information</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Personal Information</div>
         <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
           {[
             { label: 'Full Name', key: 'name' },
@@ -95,11 +97,11 @@ export default function UserProfileScreen({ onNavigate }: Props) {
             { label: 'Email Address', key: 'email' },
           ].map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>{f.label}</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>{f.label}</label>
               {editing ? (
                 <input className="input" value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               ) : (
-                <div style={{ fontSize: 14, fontWeight: 600, color: '#0D1B3D', padding: '10px 0', borderBottom: '1px solid #F0F3F9' }}>{form[f.key as keyof typeof form]}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form]}</div>
               )}
             </div>
           ))}
@@ -108,41 +110,41 @@ export default function UserProfileScreen({ onNavigate }: Props) {
           )}
         </div>
 
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Store Information</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Store Information</div>
         <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
           {[{ label: 'Store Name', key: 'store' }, { label: 'Branch', key: 'branch' }].map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>{f.label}</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>{f.label}</label>
               {editing ? (
                 <input className="input" value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               ) : (
-                <div style={{ fontSize: 14, fontWeight: 600, color: '#0D1B3D', padding: '10px 0', borderBottom: '1px solid #F0F3F9' }}>{form[f.key as keyof typeof form]}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form]}</div>
               )}
             </div>
           ))}
         </div>
 
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7A99', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Security</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Security</div>
         <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
           {[
             { label: 'Change PIN', sub: 'Update your 4-digit login PIN', icon: '🔐', action: () => setChangingPin(true) },
             { label: 'Active Sessions', sub: '1 device currently logged in', icon: '📱', action: () => {} },
             { label: 'Two-Factor Auth', sub: 'Not enabled', icon: '🛡️', action: () => {} },
           ].map((item, i, arr) => (
-            <button key={i} className="btn" onClick={item.action} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? '1px solid #F0F3F9' : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-              <div style={{ width: 40, height: 40, borderRadius: 11, background: '#E3EAF8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{item.icon}</div>
+            <button key={i} className="btn" onClick={item.action} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? c.divider : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 11, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{item.icon}</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#0D1B3D' }}>{item.label}</div>
-                <div style={{ fontSize: 11, color: '#6B7A99', marginTop: 1 }}>{item.sub}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{item.label}</div>
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{item.sub}</div>
               </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B0BAD3" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.faint} strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
             </button>
           ))}
         </div>
 
-        <div style={{ background: '#F5F7FA', borderRadius: 12, padding: '14px 16px', textAlign: 'center' }}>
-          <div style={{ fontSize: 12, color: '#B0BAD3' }}>Member since January 2024</div>
-          <div style={{ fontSize: 12, color: '#B0BAD3', marginTop: 2 }}>MobiDuka POS · Store Manager</div>
+        <div style={{ background: c.cardAlt, borderRadius: 12, padding: '14px 16px', textAlign: 'center' }}>
+          <div style={{ fontSize: 12, color: c.faint }}>Member since January 2024</div>
+          <div style={{ fontSize: 12, color: c.faint, marginTop: 2 }}>MobiDuka POS · Store Manager</div>
         </div>
       </div>
     </div>
