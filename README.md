@@ -58,7 +58,15 @@ The Swagger UI assets are bundled locally under `public/swagger-ui/` so the docs
 
 ## Prisma and database sync
 
-The project uses Prisma with SQLite for local development. The canonical schema lives in `prisma/schema.prisma`.
+The project uses Prisma with PostgreSQL. Set `DATABASE_URL` to the pooled PostgreSQL connection string in local development and in Vercel Project Settings. The canonical schema lives in `prisma/schema.prisma`.
+
+For a new database, apply the schema once before deploying API routes:
+
+```bash
+DATABASE_URL="postgresql://user:password@host:5432/mobiduka?sslmode=require" pnpm exec prisma db push
+```
+
+In Vercel, add the same connection string as the `DATABASE_URL` environment variable for every environment that serves the API. Do not rely on `prisma/dev.db`; a Vercel function filesystem is not a durable application database.
 
 ### Common commands
 
@@ -68,7 +76,7 @@ npx prisma db push
 npx prisma validate
 ```
 
-For local bootstrapping and data seeding:
+For local or controlled bootstrapping and data seeding:
 
 ```bash
 npx prisma db push
