@@ -115,6 +115,16 @@ class AuthService {
     }
   }
 
+  Future<String?> getActiveBusinessId() async {
+    final encodedUser = await _storage.read(key: _userKey);
+    if (encodedUser == null) return null;
+    try {
+      return (jsonDecode(encodedUser) as Map<String, dynamic>)['businessId']?.toString();
+    } on Object {
+      return null;
+    }
+  }
+
   Future<void> clearSession() async {
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _userKey);

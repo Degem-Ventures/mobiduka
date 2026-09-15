@@ -176,7 +176,7 @@ export async function POST(request: Request) {
               select: { id: true },
             });
 
-            if (!creditCustomer || dataPayload.action !== "RECORD_PAYMENT") {
+            if (!creditCustomer || !["RECORD_PAYMENT", "RECORD_SALE"].includes(dataPayload.action)) {
               throw new Error("Invalid credit repayment customer or action.");
             }
 
@@ -184,6 +184,31 @@ export async function POST(request: Request) {
               where: { customerId: dataPayload.customerId },
             });
             const paymentAmount = Number(dataPayload.amount);
+
+            if (dataPayload.action === "RECORD_SALE") {
+              if (!account || !Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+                throw new Error("Invalid credit sale customer or amount.");
+              }
+
+              await tx.creditAccount.update({
+                where: { customerId: dataPayload.customerId },
+                data: {
+                  balance: { increment: paymentAmount },
+                  status: "ACTIVE",
+                },
+              });
+              await tx.creditLedgerEntry.create({
+                data: {
+                  id: dataPayload.id,
+                  businessId,
+                  customerId: dataPayload.customerId,
+                  type: "SALE",
+                  amount: paymentAmount,
+                  status: "PENDING",
+                },
+              });
+              break;
+            }
 
             if (!account || !Number.isFinite(paymentAmount) || paymentAmount <= 0 || paymentAmount > account.balance) {
               throw new Error("Credit repayment exceeds the outstanding balance.");
