@@ -6,9 +6,11 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'api_config.dart';
+
 class SyncService {
   static Database? _database;
-  final String baseUrl = 'http://localhost:3000/api';
+  final String baseUrl = ApiConfig.apiBase;
 
   Future<Database> get database async {
     if (_database != null) return _database!;

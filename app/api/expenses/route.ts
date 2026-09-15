@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { sendPushNotification } from "@/lib/firebase-admin";
 
 export async function GET(request: Request) {
   try {
@@ -65,6 +66,21 @@ export async function POST(request: Request) {
       });
       return record;
     });
+
+    const alertThreshold = Number.parseFloat(process.env.EXPENSE_ALERT_THRESHOLD_KES ?? "5000");
+    if (parsedAmount >= (Number.isFinite(alertThreshold) ? alertThreshold : 5000)) {
+      await sendPushNotification(
+        `business_expenses_${businessId}`,
+        "⚠️ Large Store Outflow Logged",
+        `${String(category).trim()}: KSh ${parsedAmount.toFixed(2)}. ${normalizedDescription}`,
+        {
+          businessId,
+          expenseId: expense.id,
+          amount: parsedAmount.toFixed(2),
+          category: String(category).trim(),
+        },
+      );
+    }
 
     return NextResponse.json({ success: true, expenseId: expense.id }, { status: 201 });
   } catch (error) {

@@ -104,6 +104,16 @@ class CreditService {
     )).toList();
   }
 
+  Future<List<Map<String, dynamic>>> loadCreditLedger({String? customerId}) async {
+    final db = await database;
+    return db.query(
+      'local_credit_ledger',
+      where: customerId == null ? null : 'customerId = ?',
+      whereArgs: customerId == null ? null : [customerId],
+      orderBy: 'createdAt DESC',
+    );
+  }
+
   Future<void> saveCreditAccount(CreditAccount account) async {
     final db = await database;
     await db.insert(

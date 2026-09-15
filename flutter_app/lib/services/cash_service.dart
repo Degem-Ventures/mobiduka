@@ -114,23 +114,34 @@ class CashService {
 
     final queueRows = await db.query('sync_queue');
     double totalCashSales = 0.0;
+    double totalCashExpenses = 0.0;
 
     for (final row in queueRows) {
       final entityName = row['entityName'] as String? ?? '';
       final payloadText = row['payload'] as String? ?? '';
-      if (entityName != 'Sale' || payloadText.isEmpty) continue;
+      if (payloadText.isEmpty) continue;
 
       try {
         final payload = jsonDecode(payloadText) as Map<String, dynamic>;
-        if (payload['paymentMode'] == 'CASH') {
-          totalCashSales += (payload['totalAmount'] as num? ?? 0).toDouble();
+        final createdAt = DateTime.tryParse(row['createdAt'] as String? ?? '');
+        if (createdAt == null || createdAt.isBefore(DateTime.tryParse(openedAt) ?? createdAt)) continue;
+        final businessMatches = payload['businessId'] == null || payload['businessId'] == 'demo-business';
+        if (!businessMatches) continue;
+        final paymentMode = (payload['paymentMode'] ?? payload['paymentMethod'] ?? '').toString().toUpperCase();
+        if (entityName == 'Sale' && paymentMode == 'CASH') {
+          final amount = payload['totalAmount'] ?? payload['total'] ?? 0;
+          totalCashSales += (amount as num).toDouble();
+        }
+        if (entityName == 'Expense' && paymentMode == 'CASH') {
+          final amount = payload['amount'];
+          totalCashExpenses += amount is num ? amount.toDouble() : double.tryParse(amount?.toString() ?? '') ?? 0;
         }
       } catch (_) {
         continue;
       }
     }
 
-    final expectedBalance = openingCash + totalCashSales;
+    final expectedBalance = openingCash + totalCashSales - totalCashExpenses;
     final variance = closingCash - expectedBalance;
 
     await db.update(
@@ -161,6 +172,7 @@ class CashService {
       'sessionId': sessionId,
       'openingCash': openingCash,
       'totalCashSales': totalCashSales,
+      'totalCashExpenses': totalCashExpenses,
       'expectedBalance': expectedBalance,
       'actualCounted': closingCash,
       'variance': variance,

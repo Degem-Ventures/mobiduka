@@ -3,9 +3,43 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-async function main() {
-  console.log("🌱 Starting database seeding script...");
+const products = [
+  ["Jogoo Maize Flour 2kg", "JOG-2KG", "6191000000011", 145, 185, 18, 180],
+  ["Maji ya Premium 500ml", "MAJ-500", "6191000000028", 18, 30, 30, 300],
+  ["Chapa Mandashi Baking Powder 100g", "CHP-100", "6191000000035", 38, 55, 12, 100],
+  ["Kabras Brown Sugar 1kg", "KBR-1KG", "6191000000042", 118, 150, 15, 140],
+  ["Fresh Fri Cooking Oil 1L", "FFO-1L", "6191000000059", 245, 295, 10, 90],
+  ["Brookside Milk 500ml", "BRK-500", "6191000000066", 48, 65, 24, 220],
+  ["Kuku Paka Salt 500g", "KPS-500", "6191000000073", 28, 40, 18, 160],
+  ["Blue Band Margarine 500g", "BLB-500", "6191000000080", 155, 195, 10, 80],
+  ["Nescafe Classic 50g", "NES-050", "6191000000097", 170, 215, 8, 70],
+  ["Omo Detergent 500g", "OMO-500", "6191000000103", 105, 135, 10, 100],
+  ["Geisha Bathing Soap 125g", "GEI-125", "6191000000110", 52, 75, 20, 180],
+  ["Colgate Toothpaste 100ml", "COL-100", "6191000000127", 105, 145, 8, 70],
+  ["Royco Beef Cubes 10s", "ROY-010", "6191000000134", 42, 60, 15, 130],
+  ["Soko Maize Meal 2kg", "SOK-2KG", "6191000000141", 132, 175, 16, 150],
+  ["Safaricom Airtime 100 KES", "SAF-100", "6191000000158", 92, 100, 20, 250],
+] as const;
 
+function atStartOfDay(daysAgo: number) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - daysAgo);
+  return date;
+}
+
+function dateAt(day: Date, hour: number, minute: number) {
+  const date = new Date(day);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+}
+
+function pseudoRandom(seed: number) {
+  const value = Math.sin(seed * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+async function clearDatabase() {
   await prisma.syncQueue.deleteMany({});
   await prisma.mpesaTransaction.deleteMany({});
   await prisma.auditLog.deleteMany({});
@@ -19,8 +53,9 @@ async function main() {
   await prisma.stockMovement.deleteMany({});
   await prisma.inventory.deleteMany({});
   await prisma.product.deleteMany({});
-  await prisma.customer.deleteMany({});
+  await prisma.creditLedgerEntry.deleteMany({});
   await prisma.creditAccount.deleteMany({});
+  await prisma.customer.deleteMany({});
   await prisma.expense.deleteMany({});
   await prisma.cashSession.deleteMany({});
   await prisma.user.deleteMany({});
@@ -30,6 +65,11 @@ async function main() {
   await prisma.category.deleteMany({});
   await prisma.business.deleteMany({});
   await prisma.role.deleteMany({});
+}
+
+async function main() {
+  console.log("Starting 30-day MobiDuka demo seed...");
+  await clearDatabase();
 
   const business = await prisma.business.create({
     data: {
@@ -45,112 +85,162 @@ async function main() {
       status: "ACTIVE",
     },
   });
-  console.log(`🏢 Created Business Tenant ID: ${business.id}`);
 
-  const device = await prisma.device.create({
+  const [ownerRole, managerRole, cashierRole] = await Promise.all([
+    prisma.role.create({ data: { name: "OWNER", description: "Store owner" } }),
+    prisma.role.create({ data: { name: "MANAGER", description: "Store manager" } }),
+    prisma.role.create({ data: { name: "CASHIER", description: "Shift cashier" } }),
+  ]);
+
+  const passwordHash = await bcrypt.hash("OwnerPass123", 10);
+  const [owner, cashierOne, cashierTwo] = await Promise.all([
+    prisma.user.create({
+      data: { businessId: business.id, email: "owner@mobiduka.com", fullName: "John Kamau", roleId: ownerRole.id, passwordHash, status: "ACTIVE" },
+    }),
+    prisma.user.create({
+      data: { businessId: business.id, email: "cashier1@mobiduka.com", username: "cashier1", fullName: "Faith Mutua", roleId: cashierRole.id, pinHash: await bcrypt.hash("2540", 10), status: "ACTIVE" },
+    }),
+    prisma.user.create({
+      data: { businessId: business.id, email: "cashier2@mobiduka.com", username: "cashier2", fullName: "Kevin Ochieng", roleId: cashierRole.id, pinHash: await bcrypt.hash("2541", 10), status: "ACTIVE" },
+    }),
+  ]);
+  void managerRole;
+
+  await prisma.device.create({
     data: {
       id: "f9fe7e90-cff9-4e99-8335-d33eea68a8ec",
       businessId: business.id,
+      userId: cashierOne.id,
       deviceUuid: "flutter-pos-hardware-token-12345",
-      deviceName: "Main Counter Tablet (X3)",
+      deviceName: "Main Counter Tablet",
       deviceModel: "Android Tablet",
       platform: "android",
       status: "ACTIVE",
     },
   });
-  console.log(`📱 Registered Hardware Device Profile: ${device.deviceName}`);
-
-  const ownerRole = await prisma.role.upsert({
-    where: { name: "OWNER" },
-    update: {},
-    create: { name: "OWNER", description: "Store owner" },
-  });
-
-  const cashierRole = await prisma.role.upsert({
-    where: { name: "CASHIER" },
-    update: {},
-    create: { name: "CASHIER", description: "Shift cashier" },
-  });
 
   const supplier = await prisma.supplier.create({
     data: {
-      id: "d5ff2b9c-f5a1-49d4-bf9a-c3c2d7ef051d",
       businessId: business.id,
       name: "MobiDuka Distribution Hub",
       phone: "+254700112233",
       email: "supplies@mobiduka.com",
       location: "Nairobi",
       contactPerson: "Grace Achieng",
-      notes: "Primary wholesale supplier for seed inventory",
     },
   });
-  console.log(`🏪 Created Supplier Profile: ${supplier.name} (${supplier.id})`);
 
-  const ownerPasswordHash = await bcrypt.hash("OwnerPass123", 10);
-  const owner = await prisma.user.create({
-    data: {
-      businessId: business.id,
-      email: "owner@mobiduka.com",
-      fullName: "John Kamau",
-      roleId: ownerRole.id,
-      passwordHash: ownerPasswordHash,
-      status: "ACTIVE",
-    },
-  });
-  console.log(`🔐 Created Admin Owner Account: ${owner.email}`);
-
-  const cashier = await prisma.user.create({
-    data: {
-      businessId: business.id,
-      email: "cashier1@mobiduka.com",
-      username: "cashier1",
-      fullName: "Faith Mutua",
-      roleId: cashierRole.id,
-      pinHash: await bcrypt.hash("2540", 10),
-      status: "ACTIVE",
-    },
-  });
-  console.log(`🔢 Created Shift Cashier Profile: ${cashier.fullName} (PIN: 2540)`);
-
-  const items = [
-    { name: "Safaricom Airtime 100 KES", sku: "SAF-100", barcode: "6001234567891", sellingPrice: 100.0, costPrice: 92.0, minimumStock: 10, stock: 150 },
-    { name: "Taifa Maize Flour 2KG", sku: "TFA-2KG", barcode: "6191234567812", sellingPrice: 190.0, costPrice: 165.0, minimumStock: 12, stock: 85 },
-    { name: "Kasuku Cooking Oil 1L", sku: "KAS-1L", barcode: "6198765432109", sellingPrice: 320.0, costPrice: 285.0, minimumStock: 8, stock: 40 },
-  ];
-
-  for (const item of items) {
+  const category = await prisma.category.create({ data: { businessId: business.id, name: "Fast Moving Consumer Goods" } });
+  const productRecords = [];
+  for (const [name, sku, barcode, costPrice, sellingPrice, minimumStock, stock] of products) {
     const product = await prisma.product.create({
       data: {
         businessId: business.id,
-        name: item.name,
-        sku: item.sku,
-        barcode: item.barcode,
-        sellingPrice: item.sellingPrice,
-        costPrice: item.costPrice,
-        minimumStock: item.minimumStock,
+        categoryId: category.id,
+        supplierId: supplier.id,
+        name,
+        sku,
+        barcode,
+        unit: "piece",
+        costPrice,
+        sellingPrice,
+        minimumStock,
         trackStock: true,
         status: "ACTIVE",
         syncStatus: "SYNCED",
+        inventory: { create: { businessId: business.id, quantity: stock, reservedQuantity: 0 } },
       },
+      include: { inventory: true },
     });
-
-    await prisma.inventory.create({
-      data: {
-        businessId: business.id,
-        productId: product.id,
-        quantity: item.stock,
-        reservedQuantity: 0,
-      },
-    });
+    productRecords.push(product);
   }
 
-  console.log("📦 Seeded baseline inventory catalogue products successfully!");
-  console.log("🏁 Database seeding execution complete.");
+  const cashPayment = await prisma.paymentMethod.create({ data: { name: "CASH" } });
+  const mpesaPayment = await prisma.paymentMethod.create({ data: { name: "MPESA" } });
+  let saleCount = 0;
+  let expenseCount = 0;
+
+  for (let daysAgo = 29; daysAgo >= 0; daysAgo -= 1) {
+    const day = atStartOfDay(daysAgo);
+    const cashier = daysAgo % 2 === 0 ? cashierOne : cashierTwo;
+    const openingBalance = 2500 + (daysAgo % 4) * 500;
+    const salesCount = 3 + (daysAgo % 6);
+    const saleRows = [] as { total: number }[];
+
+    for (let saleIndex = 0; saleIndex < salesCount; saleIndex += 1) {
+      const selected = [0, 1, 2].map((offset) => productRecords[(daysAgo * 3 + saleIndex + offset) % productRecords.length]);
+      const createdAt = dateAt(day, 8 + (saleIndex % 9), (saleIndex * 13) % 60);
+      const items = selected.map((product, itemIndex) => {
+        const quantity = 1 + ((daysAgo + saleIndex + itemIndex) % 3);
+        const unitPrice = product.sellingPrice ?? 0;
+        return { productId: product.id, quantity, unitPrice, total: unitPrice * quantity };
+      });
+      const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+      const discount = saleIndex % 5 === 0 ? 10 : 0;
+      const total = subtotal - discount;
+      const paymentMethod = (saleIndex + daysAgo) % 3 === 0 ? mpesaPayment : cashPayment;
+      const sale = await prisma.sale.create({
+        data: {
+          businessId: business.id,
+          cashierId: cashier.id,
+          saleNumber: `DEMO-${daysAgo + 1}-${saleIndex + 1}`,
+          subtotal,
+          discount,
+          total,
+          paymentStatus: "PAID",
+          saleStatus: "COMPLETED",
+          createdAt,
+          items: { create: items.map((item) => ({ ...item, discount: 0, tax: 0 })) },
+          payments: { create: { paymentMethodId: paymentMethod.id, amount: total, reference: paymentMethod.name === "MPESA" ? `QX${daysAgo}${saleIndex}DEMO` : null, receivedAt: createdAt } },
+        },
+      });
+      saleRows.push({ total: sale.total });
+      saleCount += 1;
+    }
+
+    const cashSales = saleRows.reduce((sum, sale) => sum + sale.total, 0) * 0.66;
+    const hasExpense = (29 - daysAgo) % 5 === 0;
+    const expenseAmount = hasExpense ? (daysAgo % 10 === 0 ? 6500 : 2800 + (daysAgo % 3) * 400) : 0;
+    const expectedBalance = openingBalance + cashSales - expenseAmount;
+    const variance = daysAgo % 7 === 0 ? -100 : daysAgo % 11 === 0 ? 150 : 0;
+    await prisma.cashSession.create({
+      data: {
+        businessId: business.id,
+        cashierId: cashier.id,
+        openingBalance,
+        expectedBalance,
+        closingBalance: expectedBalance + variance,
+        variance,
+        openedAt: dateAt(day, 7, 30),
+        closedAt: dateAt(day, 20, 15),
+      },
+    });
+
+    if (hasExpense) {
+      await prisma.expense.create({
+        data: {
+          businessId: business.id,
+          category: daysAgo % 10 === 0 ? "STOCK" : "UTILITIES",
+          description: daysAgo % 10 === 0 ? "Bulk replenishment of fast-moving shelf items" : "Electricity and water utility settlement",
+          amount: expenseAmount,
+          paidTo: daysAgo % 10 === 0 ? supplier.name : "Local Utilities Provider",
+          recordedBy: cashier.id,
+          createdAt: dateAt(day, 18, 30),
+        },
+      });
+      expenseCount += 1;
+    }
+  }
+
+  console.log(`Created tenant ${business.id}`);
+  console.log(`Seeded ${productRecords.length} products, ${saleCount} sales, and ${expenseCount} expenses across 30 days.`);
+  console.log(`Owner login: owner@mobiduka.com / OwnerPass123`);
+  console.log("Cashier PINs: 2540 and 2541");
 }
 
 main()
   .catch((error) => {
-    console.error("❌ Seeding execution exception thrown:", error);
+    console.error("Seed failed:", error);
     process.exit(1);
   })
   .finally(async () => {

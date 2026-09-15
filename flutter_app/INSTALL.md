@@ -42,7 +42,7 @@ This project was validated using:
 export PATH="$HOME/flutter/bin:$PATH"
 cd /workspaces/mobiduka/flutter_app
 flutter pub get
-flutter run -d web-server --web-port 8080
+flutter run -d web-server --web-port 8080 --dart-define=MOBIDUKA_API_ORIGIN=https://mobiduka.vercel.app
 ```
 
 ## Docker (recommended for clean setup)
@@ -195,7 +195,7 @@ Browser-independent web server preview:
 ```bash
 flutter config --enable-web
 flutter create . --platforms web
-flutter run -d web-server --web-port 8080
+flutter run -d web-server --web-port 8080 --dart-define=MOBIDUKA_API_ORIGIN=https://mobiduka.vercel.app
 ```
 
 Open the forwarded port `8080` in your browser. If the port is busy, choose another one, for example `8081`.
@@ -203,7 +203,7 @@ Open the forwarded port `8080` in your browser. If the port is busy, choose anot
 If you see `No supported devices found with name or id matching 'chrome'`, use the web-server target instead of Chrome:
 
 ```bash
-flutter run -d web-server --web-port 8080
+flutter run -d web-server --web-port 8080 --dart-define=MOBIDUKA_API_ORIGIN=https://mobiduka.vercel.app
 ```
 
 If you see `Address already in use`, stop the process using the port or change ports:
@@ -292,7 +292,7 @@ flutter run -d chrome
 If Chrome is not installed or is not detected, use the web server target:
 
 ```powershell
-flutter run -d web-server --web-port 8080
+flutter run -d web-server --web-port 8080 --dart-define=MOBIDUKA_API_ORIGIN=https://mobiduka.vercel.app
 ```
 
 If a port is already in use, change the port:
@@ -353,7 +353,7 @@ For Windows, add the path permanently through **System Properties > Environment 
 Chrome is not installed or Flutter cannot find it. Use:
 
 ```bash
-flutter run -d web-server --web-port 8080
+flutter run -d web-server --web-port 8080 --dart-define=MOBIDUKA_API_ORIGIN=https://mobiduka.vercel.app
 ```
 
 If you want Chrome support on Linux, install Chromium/Google Chrome and make sure `CHROME_EXECUTABLE` or the browser is on your `PATH`:

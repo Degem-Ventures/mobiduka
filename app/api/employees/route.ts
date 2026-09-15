@@ -1,0 +1,101 @@
+import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
+import { prisma } from "@/lib/prisma";
+
+const ALLOWED_ROLES = ["OWNER", "MANAGER", "CASHIER"] as const;
+
+type AllowedRole = (typeof ALLOWED_ROLES)[number];
+
+function normalizeRole(value: unknown): AllowedRole | null {
+  const role = String(value ?? "").trim().toUpperCase();
+  return (ALLOWED_ROLES as readonly string[]).includes(role) ? (role as AllowedRole) : null;
+}
+
+export async function GET(request: Request) {
+  try {
+    const businessId = new URL(request.url).searchParams.get("businessId");
+    if (!businessId) return NextResponse.json({ error: "businessId is required." }, { status: 400 });
+
+    const employees = await prisma.user.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        status: true,
+        createdAt: true,
+        role: { select: { name: true } },
+      },
+      orderBy: { fullName: "asc" },
+    });
+
+    return NextResponse.json({
+      success: true,
+      employees: employees.map((employee) => ({
+        ...employee,
+        role: employee.role?.name ?? "CASHIER",
+        isActive: employee.status === "ACTIVE",
+      })),
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: "Failed to load business employee roster.", details: error instanceof Error ? error.message : "Unknown error" },
+      { status: 500 },
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const id = typeof body.id === "string" && body.id.length > 0 ? body.id : undefined;
+    const businessId = String(body.businessId ?? "").trim();
+    const fullName = String(body.name ?? body.fullName ?? "").trim();
+    const role = normalizeRole(body.role);
+    const email = typeof body.email === "string" && body.email.trim() ? body.email.trim().toLowerCase() : null;
+    const phone = typeof body.phone === "string" && body.phone.trim() ? body.phone.trim() : null;
+    const pin = typeof body.pin === "string" && body.pin.length > 0 ? body.pin : undefined;
+    const status = body.isActive === false ? "INACTIVE" : "ACTIVE";
+
+    if (!businessId || !fullName || !role) {
+      return NextResponse.json({ error: "businessId, name, and a valid role are required." }, { status: 400 });
+    }
+
+    const employee = await prisma.$transaction(async (tx) => {
+      const business = await tx.business.findUnique({ where: { id: businessId }, select: { id: true } });
+      if (!business) throw new Error("Target business was not found.");
+
+      const existingRole = await tx.role.upsert({
+        where: { name: role },
+        update: {},
+        create: { name: role },
+      });
+      const pinHash = pin ? await bcrypt.hash(pin, 10) : undefined;
+      const data = {
+        businessId,
+        fullName,
+        email,
+        phone,
+        roleId: existingRole.id,
+        status,
+        ...(pinHash ? { pinHash } : {}),
+      };
+
+      if (id) {
+        const existing = await tx.user.findUnique({ where: { id }, select: { businessId: true } });
+        if (existing && existing.businessId !== businessId) throw new Error("Employee does not belong to this business.");
+        return tx.user.upsert({ where: { id }, update: data, create: { id, ...data } });
+      }
+
+      return tx.user.create({ data });
+    });
+
+    return NextResponse.json({ success: true, employeeId: employee.id }, { status: 201 });
+  } catch (error) {
+    return NextResponse.json(
+      { error: "Staff profile orchestration failed.", details: error instanceof Error ? error.message : "Unknown error" },
+      { status: 400 },
+    );
+  }
+}

@@ -337,6 +337,73 @@
         }
       }
     },
+    "/reports/summary": {
+      "get": {
+        "summary": "Tenant Analytical Sales and Profit Summary",
+        "description": "Returns tenant-scoped revenue, cost, expense, profit, low-stock, open-shift, and daily trend metrics.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Tenant business identifier." },
+          { "name": "days", "in": "query", "required": false, "schema": { "type": "integer", "enum": [7, 30, 90], "default": 7 }, "description": "Trend window in days." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analytical summary and chronological daily trend frames returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "summary": { "type": "object" },
+                    "trends": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "businessId is missing." },
+          "500": { "description": "Analytical aggregation failed." }
+        }
+      }
+    },
+    "/employees": {
+      "get": {
+        "summary": "Retrieve Multi-Tenant Staff Directory Roster",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Roster array generated successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "summary": "Provision or Update a Staff Employee Account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "name", "role"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string" },
+                  "name": { "type": "string", "example": "Kamau Mwangi" },
+                  "email": { "type": "string", "format": "email" },
+                  "phone": { "type": "string" },
+                  "role": { "type": "string", "enum": ["OWNER", "MANAGER", "CASHIER"] },
+                  "pin": { "type": "string", "example": "2541" },
+                  "isActive": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Staff employee profile saved." },
+          "400": { "description": "Invalid role, tenant, or employee configuration." }
+        }
+      }
+    },
     "/expenses": {
       "get": {
         "summary": "Fetch Store Expense Ledger History",
