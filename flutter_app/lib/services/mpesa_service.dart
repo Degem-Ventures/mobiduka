@@ -33,7 +33,14 @@ class MpesaService {
       );
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return {'success': false, 'message': data['error'] ?? 'M-Pesa gateway request failed.'};
+        final darajaResult = data['darajaResult'] as Map<String, dynamic>? ?? const {};
+        return {
+          'success': false,
+          'message': data['error'] ??
+              darajaResult['errorMessage'] ??
+              darajaResult['ResponseDescription'] ??
+              'M-Pesa gateway request failed.',
+        };
       }
 
       final result = data['darajaResult'] as Map<String, dynamic>? ?? const {};

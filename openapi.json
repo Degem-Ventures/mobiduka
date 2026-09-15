@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "http://localhost:3000/api",
-      "description": "Local Dev Codespace Core Instance Router"
+      "url": "/api",
+      "description": "Current app origin API router"
     }
   ],
   "paths": {
@@ -49,19 +49,26 @@
                 "type": "object",
                 "required": ["businessId", "deviceId", "userId", "records"],
                 "properties": {
-                  "businessId": { "type": "string", "format": "uuid" },
-                  "deviceId": { "type": "string" },
-                  "userId": { "type": "string", "format": "uuid" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "1e0af718-c3ab-4b14-bf3f-62b5a1e34dd3" },
+                  "deviceId": { "type": "string", "example": "f9fe7e90-cff9-4e99-8335-d33eea68a8ec" },
+                  "userId": { "type": "string", "format": "uuid", "example": "76d7c47c-aaa1-4239-b181-c93dc9346b72" },
                   "records": {
                     "type": "array",
                     "items": {
                       "type": "object",
                       "properties": {
-                        "id": { "type": "string" },
-                        "entityName": { "type": "string", "example": "Sale" },
-                        "operation": { "type": "string", "example": "CREATE" },
-                        "payload": { "type": "object" },
-                        "createdAt": { "type": "string", "format": "date-time" }
+                        "id": { "type": "string", "example": "sync-product-001" },
+                        "entityName": { "type": "string", "example": "Product" },
+                        "operation": { "type": "string", "example": "UPDATE" },
+                        "payload": {
+                          "type": "object",
+                          "example": {
+                            "id": "436f78b0-0c83-49a7-b30d-c46fa79fdee2",
+                            "name": "Safaricom Airtime 100 KES",
+                            "sellingPrice": 100
+                          }
+                        },
+                        "createdAt": { "type": "string", "format": "date-time", "example": "2026-09-12T17:46:03.643Z" }
                       }
                     }
                   }
@@ -87,13 +94,24 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "businessId": { "type": "string" },
-                  "userId": { "type": "string" },
-                  "invoiceNo": { "type": "string", "example": "INV-83749" },
-                  "totalAmount": { "type": "number", "example": 510.0 },
-                  "paymentMode": { "type": "string", "example": "MPESA" },
+                  "businessId": { "type": "string", "example": "1e0af718-c3ab-4b14-bf3f-62b5a1e34dd3" },
+                  "userId": { "type": "string", "example": "72b707d7-2d89-4e91-b443-379b5bae0f89" },
+                  "invoiceNo": { "type": "string", "example": "INV-1001" },
+                  "totalAmount": { "type": "number", "example": 100.0 },
+                  "paymentMode": { "type": "string", "example": "CASH" },
                   "mpesaRef": { "type": "string", "example": "QX728HJ92K" },
-                  "items": { "type": "array", "items": { "type": "object" } }
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "example": {
+                        "productId": "436f78b0-0c83-49a7-b30d-c46fa79fdee2",
+                        "quantity": 1,
+                        "unitPrice": 100,
+                        "total": 100
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -116,10 +134,11 @@
                 "type": "object",
                 "required": ["action", "businessId", "userId"],
                 "properties": {
-                  "action": { "type": "string", "example": "CLOSE" },
-                  "businessId": { "type": "string" },
-                  "userId": { "type": "string" },
-                  "sessionId": { "type": "string" },
+                  "action": { "type": "string", "example": "OPEN" },
+                  "businessId": { "type": "string", "example": "1e0af718-c3ab-4b14-bf3f-62b5a1e34dd3" },
+                  "userId": { "type": "string", "example": "72b707d7-2d89-4e91-b443-379b5bae0f89" },
+                  "sessionId": { "type": "string", "example": "a4df91bf-47fd-4ff4-87ac-dde9d6d55be6" },
+                  "openingCash": { "type": "number", "example": 5000.0 },
                   "closingCash": { "type": "number", "example": 14200.0 }
                 }
               }
@@ -129,6 +148,302 @@
         "responses": {
           "200": { "description": "Session closed out cleanly, returns computed float variances." },
           "201": { "description": "New open shift session generated." }
+        }
+      }
+    },
+    "/purchase-orders": {
+      "post": {
+        "summary": "Supply Chain & Restock Procurement System",
+        "description": "Logs new wholesale distributor order sheets or automatically closes them out to increment store stock items.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId"],
+                "properties": {
+                  "action": { "type": "string", "example": "CREATE" },
+                  "businessId": { "type": "string", "example": "1e0af718-c3ab-4b14-bf3f-62b5a1e34dd3" },
+                  "orderId": { "type": "string", "example": "c6dc1d58-4b16-4b0d-b4f3-f74f6d1d3c6c" },
+                  "supplierId": { "type": "string", "example": "d5ff2b9c-f5a1-49d4-bf9a-c3c2d7ef051d" },
+                  "orderNo": { "type": "string", "example": "PO-9002" },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "example": {
+                        "productId": "436f78b0-0c83-49a7-b30d-c46fa79fdee2",
+                        "quantity": 12,
+                        "costPrice": 92
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Order batch received and inventory stock level metrics updated." },
+          "201": { "description": "Purchase order successfully created in REQUESTED state." }
+        }
+      }
+    },
+    "/customers/credit": {
+      "post": {
+        "summary": "Customer Credit Ledger & Debt Book Tracking",
+        "description": "Records credit charges generated during point-of-sale checkout or applies repayments to a customer's outstanding balance.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId", "customerId", "amount"],
+                "properties": {
+                  "action": { "type": "string", "enum": ["CHARGE_CREDIT", "RECORD_PAYMENT"], "example": "RECORD_PAYMENT" },
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "customerId": { "type": "string", "format": "uuid" },
+                  "amount": { "type": "number", "minimum": 0.01, "example": 1250.00 },
+                  "dueDate": { "type": "string", "format": "date-time" },
+                  "creditBookId": { "type": "string", "format": "uuid" },
+                  "userId": { "type": "string", "format": "uuid" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Payment applied successfully and the outstanding balance returned." },
+          "201": { "description": "New pending store credit debt logged under the customer account." },
+          "400": { "description": "Invalid amount, unsupported action, or repayment exceeds the outstanding balance." },
+          "404": { "description": "Customer was not found in the requested business." }
+        }
+      }
+    },
+    "/payments/stk-push": {
+      "post": {
+        "summary": "Initiate Safaricom M-Pesa STK Push",
+        "description": "Requests a customer PIN prompt through the Daraja sandbox and stores the pending checkout correlation record. Replace the businessId example with the tenant ID from your authenticated session when using a different business.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "phoneNumber", "amount"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                  "phoneNumber": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$", "example": "254712345678" },
+                  "amount": { "type": "number", "minimum": 1, "example": 1250 },
+                  "accountReference": { "type": "string", "maxLength": 12, "example": "MobiDuka POS" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "STK request accepted by Safaricom." },
+          "400": { "description": "Invalid business, phone number, or amount." },
+          "404": { "description": "The supplied businessId does not belong to a known business tenant." },
+          "502": { "description": "Safaricom rejected the STK request." }
+        }
+      }
+    },
+    "/payments/mpesa-callback": {
+      "post": {
+        "summary": "Receive Safaricom M-Pesa Callback",
+        "description": "Processes the asynchronous Daraja callback and records the transaction result and receipt number.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["Body"],
+                "properties": {
+                  "Body": { "type": "object", "description": "Safaricom stkCallback envelope." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Callback acknowledged and transaction status recorded." }
+        }
+      }
+    },
+    "/payments/stk-query": {
+      "post": {
+        "summary": "Query M-Pesa STK Transaction Status",
+        "description": "Checks the webhook cache first, then queries Safaricom for a pending STK transaction until it completes or fails.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["checkoutRequestId"],
+                "properties": {
+                  "checkoutRequestId": { "type": "string", "example": "ws_CO_130920261234567890" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns SUCCESS, PENDING, CANCELLED, or FAILED." },
+          "404": { "description": "Transaction correlation record was not found." }
+        }
+      }
+    },
+    "/customers": {
+      "get": {
+        "summary": "Query or Search Registered Customer Profiles",
+        "description": "Returns customers for a tenant, optionally filtered by name or phone number.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "query", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Customer profiles returned successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "summary": "Register or Update Customer Profile",
+        "description": "Creates or updates a customer and ensures an associated CreditAccount exists.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "name"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string" },
+                  "name": { "type": "string", "example": "Wanjiku Njoroge" },
+                  "phone": { "type": "string", "example": "0722000111" },
+                  "initialCreditLimit": { "type": "number", "minimum": 0, "example": 5000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Customer profile registered successfully." },
+          "400": { "description": "Invalid profile data or duplicate phone number." }
+        }
+      }
+    },
+    "/reports/summary": {
+      "get": {
+        "summary": "Tenant Analytical Sales and Profit Summary",
+        "description": "Returns tenant-scoped revenue, cost, expense, profit, low-stock, open-shift, and daily trend metrics.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Tenant business identifier." },
+          { "name": "days", "in": "query", "required": false, "schema": { "type": "integer", "enum": [7, 30, 90], "default": 7 }, "description": "Trend window in days." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analytical summary and chronological daily trend frames returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "summary": { "type": "object" },
+                    "trends": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "businessId is missing." },
+          "500": { "description": "Analytical aggregation failed." }
+        }
+      }
+    },
+    "/employees": {
+      "get": {
+        "summary": "Retrieve Multi-Tenant Staff Directory Roster",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Roster array generated successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "summary": "Provision or Update a Staff Employee Account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "name", "role"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string" },
+                  "name": { "type": "string", "example": "Kamau Mwangi" },
+                  "email": { "type": "string", "format": "email" },
+                  "phone": { "type": "string" },
+                  "role": { "type": "string", "enum": ["OWNER", "MANAGER", "CASHIER"] },
+                  "pin": { "type": "string", "example": "2541" },
+                  "isActive": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Staff employee profile saved." },
+          "400": { "description": "Invalid role, tenant, or employee configuration." }
+        }
+      }
+    },
+    "/expenses": {
+      "get": {
+        "summary": "Fetch Store Expense Ledger History",
+        "description": "Returns tenant-scoped operational outflows ordered from newest to oldest.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Expense records fetched successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "summary": "Log a New Cash or M-Pesa Store Outflow",
+        "description": "Creates an expense record and an associated audit entry for the tenant user.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "userId", "category", "amount", "description"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string" },
+                  "userId": { "type": "string" },
+                  "category": { "type": "string", "example": "RENT" },
+                  "amount": { "type": "number", "minimum": 0.01, "example": 15000 },
+                  "description": { "type": "string", "example": "September shop rent payment" },
+                  "paidTo": { "type": "string", "example": "Landlord" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Expense logged successfully." },
+          "400": { "description": "Invalid expense data." },
+          "404": { "description": "User was not found in the requested business." }
         }
       }
     }

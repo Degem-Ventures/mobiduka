@@ -47,13 +47,8 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { phoneNumber, amount, accountReference, businessId } = body;
     const shortcode = process.env.MPESA_SHORTCODE || "174379";
-    const transactionType = process.env.MPESA_TRANSACTION_TYPE === "CustomerBuyGoodsOnline"
-      ? "CustomerBuyGoodsOnline"
-      : "CustomerPayBillOnline";
-    const isBuyGoods = transactionType === "CustomerBuyGoodsOnline";
-    const partyB = isBuyGoods
-      ? process.env.MPESA_TILL_NUMBER || shortcode
-      : shortcode;
+    const transactionType = "CustomerPayBillOnline";
+    const partyB = shortcode;
     const passkey = process.env.MPESA_PASSKEY;
     const callbackUrl = process.env.MPESA_CALLBACK_URL;
     const parsedAmount = Number(amount);
@@ -96,7 +91,14 @@ export async function POST(request: Request) {
 
     const result = await darajaResponse.json();
     if (!darajaResponse.ok || result.ResponseCode !== "0") {
-      return NextResponse.json({ success: false, darajaResult: result }, { status: 502 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: result.errorMessage || result.ResponseDescription || "Safaricom rejected the STK request.",
+          darajaResult: result,
+        },
+        { status: 502 },
+      );
     }
 
     const transaction = await prisma.mpesaTransaction.create({

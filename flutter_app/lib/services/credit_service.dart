@@ -180,6 +180,53 @@ class CreditService {
     return updated;
   }
 
+  Future<CreditAccount?> recordOfflineCreditSale({
+    required String customerId,
+    required double amount,
+    required String invoiceNo,
+  }) async {
+    if (amount <= 0) return null;
+
+    final db = await database;
+    final rows = await db.query(
+      'local_credit_accounts',
+      where: 'customerId = ?',
+      whereArgs: [customerId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+
+    final account = _accountFromRow(rows.first);
+    final now = DateTime.now().toIso8601String();
+    final updated = account.copyWith(
+      balance: account.balance + amount,
+      lastTransactionAt: now,
+      transactionCount: account.transactionCount + 1,
+    );
+
+    await db.transaction((transaction) async {
+      await transaction.update(
+        'local_credit_accounts',
+        {
+          'balance': updated.balance,
+          'lastTransactionAt': now,
+          'transactionCount': updated.transactionCount,
+        },
+        where: 'customerId = ?',
+        whereArgs: [customerId],
+      );
+      await transaction.insert('local_credit_ledger', {
+        'id': 'credit-sale-$invoiceNo',
+        'customerId': customerId,
+        'type': 'SALE',
+        'amount': amount,
+        'createdAt': now,
+      });
+    });
+
+    return updated;
+  }
+
   CreditAccount _accountFromRow(Map<String, dynamic> row) => CreditAccount(
     customerId: row['customerId'] as String,
     customer: row['customer'] as String,

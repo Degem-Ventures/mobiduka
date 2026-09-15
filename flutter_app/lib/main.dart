@@ -2,8 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:bluetooth_print_plus/bluetooth_print_plus.dart' show BluetoothDevice;
+import 'package:pdf/pdf.dart' as pdf;
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import 'services/cash_service.dart';
 import 'services/credit_service.dart';
@@ -16,6 +20,7 @@ import 'services/mpesa_service.dart';
 import 'services/product_repository.dart';
 import 'services/purchase_order_service.dart';
 import 'services/printer_service.dart';
+import 'services/receipt_pdf_downloader.dart';
 import 'services/sms_watcher_service.dart';
 import 'services/sync_service.dart';
 import 'widgets/barcode_scanner_view.dart';
@@ -112,6 +117,14 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   Future<void> _loadCatalog() async {
+    if (kIsWeb) {
+      if (!mounted) return;
+      setState(() {
+        products = List<Product>.from(defaultProducts);
+      });
+      return;
+    }
+
     final cachedProducts = await ProductRepository.instance.loadProducts();
     if (cachedProducts.isNotEmpty) {
       setState(() {
@@ -127,8 +140,20 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   Future<void> _handleLoginAttempt() async {
+    if (!mounted) return;
+    setState(() {
+      loggedIn = true;
+      tab = 0;
+      detail = null;
+      activeSessionId = null;
+    });
+
     final role = await _authService.getActiveUserRole();
-    if (mounted) setState(() => activeRole = role);
+    if (!mounted) return;
+    setState(() => activeRole = role);
+
+    if (kIsWeb) return;
+
     final session = await _cashService.getActiveSession(
       businessId: 'demo-business',
       userId: 'demo-user',
@@ -143,10 +168,8 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
         builder: (sheetContext) => _CashShiftGateSheet(
           onOpened: (sessionId) {
             _activateNotifications();
+            if (!mounted) return;
             setState(() {
-              loggedIn = true;
-              tab = 0;
-              detail = null;
               activeSessionId = sessionId;
             });
           },
@@ -158,9 +181,6 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     if (!mounted) return;
     _activateNotifications();
     setState(() {
-      loggedIn = true;
-      tab = 0;
-      detail = null;
       activeSessionId = session['id'] as String?;
     });
   }
@@ -213,7 +233,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     );
   }
 
-  bool _canOpen(String value) => activeRole != 'CASHIER' || value == 'Expense Tracking';
+  bool _canOpen(String value) => activeRole != 'CASHIER' || value == 'Expense Tracking' || value == 'Credit Book';
 
   void open(String value) {
     if (!_canOpen(value)) {
@@ -691,7 +711,7 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({required this.onLogin});
-  final VoidCallback onLogin;
+  final Future<void> Function() onLogin;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -719,6 +739,13 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   bool get hasLoginFeedback => loginError != null || loginSucceeded;
+
+  void _clearLoginFeedback() {
+    setState(() {
+      loginError = null;
+      loginSucceeded = false;
+    });
+  }
 
   void _handlePinPress(String digit) {
     if (isAuthenticating || pin.length >= 4) return;
@@ -767,17 +794,35 @@ class _LoginScreenState extends State<LoginScreen> {
         loginSucceeded = true;
         loginError = null;
       });
-      widget.onLogin();
+      await widget.onLogin();
     } catch (error) {
       if (!mounted) return;
+      final message = error.toString().replaceFirst('Exception: ', '');
+      final isPinLogin = step == 'pin';
       setState(() {
         loginSucceeded = false;
-        loginError = error.toString().replaceFirst('Exception: ', '');
+        loginError = isPinLogin ? null : message;
         pin = '';
         emailController.clear();
         passwordController.clear();
         isAuthenticating = false;
       });
+      if (isPinLogin) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFFD32F2F),
+              content: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.white),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(message)),
+                ],
+              ),
+            ),
+          );
+      }
     }
   }
 
@@ -849,6 +894,40 @@ class _LoginScreenState extends State<LoginScreen> {
                           fontSize: 13,
                         ),
                       ),
+                      if (loginSucceeded) ...[
+                        const SizedBox(height: 18),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: loginSucceeded ? const Color(0x332E7D32) : const Color(0x33D32F2F),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: loginSucceeded ? const Color(0xFF66BB6A) : const Color(0xFFEF9A9A),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                loginSucceeded ? Icons.check_circle_outline : Icons.error_outline,
+                                color: loginSucceeded ? const Color(0xFFA5D6A7) : const Color(0xFFFFCDD2),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'PIN accepted. Redirecting...',
+                                  style: TextStyle(
+                                    color: loginSucceeded ? const Color(0xFFA5D6A7) : const Color(0xFFFFCDD2),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 48),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -915,7 +994,10 @@ class _LoginScreenState extends State<LoginScreen> {
               SizedBox(
                 width: 220,
                 child: TextButton(
-                  onPressed: () => setState(() => step = 'login'),
+                  onPressed: () {
+                    _clearLoginFeedback();
+                    setState(() => step = 'login');
+                  },
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.white,
                     padding: EdgeInsets.zero,
@@ -1142,7 +1224,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     SizedBox(
                       width: 220,
                       child: TextButton(
-                        onPressed: () => setState(() => step = 'pin'),
+                        onPressed: () {
+                          _clearLoginFeedback();
+                          setState(() => step = 'pin');
+                        },
                         style: TextButton.styleFrom(
                           backgroundColor: const Color(0x0D123A8F),
                           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1874,6 +1959,9 @@ class POSScreen extends StatefulWidget {
 }
 
 class _POSScreenState extends State<POSScreen> {
+  final AuthService _authService = AuthService();
+  final CreditService _creditService = CreditService.instance;
+  final CustomerService _customerService = CustomerService();
   final SyncService _syncService = SyncService();
   final MpesaService _mpesaService = MpesaService();
   final SmsWatcherService _smsWatcherService = SmsWatcherService();
@@ -1885,9 +1973,13 @@ class _POSScreenState extends State<POSScreen> {
   String search = '';
   String category = 'All';
   String paymentMethod = 'cash';
+  CreditAccount? _selectedCreditAccount;
+  Map<String, dynamic> _lastReceiptSnapshot = const {};
   bool _mpesaRequestPending = false;
   String? _receiptToken;
   String? _completedSaleId;
+  String? _receiptNumber;
+  DateTime? _completedAt;
   List<Map<String, dynamic>> _completedSaleItems = const [];
   int _completedSubtotal = 0;
   int _completedDiscountAmount = 0;
@@ -1965,6 +2057,102 @@ class _POSScreenState extends State<POSScreen> {
     }));
   }
 
+  Future<void> _downloadReceiptPdf() async {
+    final receiptNumber = _receiptNumber ?? _receiptToken ?? 'Pending';
+    final document = pw.Document();
+    final generatedAt = _formatReceiptDate(_completedAt);
+    final paymentLabel = _completedPaymentMethod == 'mpesa'
+        ? 'M-Pesa'
+        : _completedPaymentMethod == 'credit'
+            ? 'Credit'
+            : 'Cash';
+    final green = pdf.PdfColor.fromInt(0xFF2E7D32);
+    final mutedGrey = pdf.PdfColor.fromInt(0xFF6B7A99);
+    final inkBlack = pdf.PdfColor.fromInt(0xFF0D1B3D);
+
+    document.addPage(
+      pw.Page(
+        pageFormat: pdf.PdfPageFormat(
+          80 * pdf.PdfPageFormat.mm,
+          180 * pdf.PdfPageFormat.mm,
+          marginAll: 5 * pdf.PdfPageFormat.mm,
+        ),
+        build: (context) => pw.Padding(
+          padding: pw.EdgeInsets.zero,
+          child: pw.Column(
+            children: [
+              pw.Container(
+                width: double.infinity,
+                padding: const pw.EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                color: green,
+                child: pw.Column(
+                  children: [
+                    pw.Text('MobiDuka POS', style: pw.TextStyle(color: pdf.PdfColors.white, fontSize: 17, fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 3),
+                    pw.Text('SALE COMPLETE', style: pw.TextStyle(color: pdf.PdfColors.white, fontSize: 10)),
+                  ],
+                ),
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text('MobiDuka Store · Nairobi CBD', style: pw.TextStyle(color: mutedGrey, fontSize: 9, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 3),
+              pw.Text('Receipt #$receiptNumber', style: pw.TextStyle(color: inkBlack, fontSize: 10, fontWeight: pw.FontWeight.bold)),
+              pw.Text(generatedAt, style: pw.TextStyle(color: mutedGrey, fontSize: 9)),
+              pw.SizedBox(height: 8),
+              pw.Divider(color: pdf.PdfColor.fromInt(0xFFE8ECF4)),
+              pw.SizedBox(height: 5),
+              ...receiptItems.map(
+                (item) => pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 5),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Expanded(child: pw.Text('${item['name']} x ${item['qty']}', style: pw.TextStyle(color: inkBlack, fontSize: 9))),
+                      pw.Text('KSh ${(item['price'] as int) * (item['qty'] as int)}', style: pw.TextStyle(color: inkBlack, fontSize: 9)),
+                    ],
+                  ),
+                ),
+              ),
+              pw.Divider(color: pdf.PdfColor.fromInt(0xFFE8ECF4)),
+              pw.SizedBox(height: 5),
+              pw.Align(alignment: pw.Alignment.centerRight, child: pw.Text('Subtotal  KSh $receiptSubtotal', style: pw.TextStyle(color: mutedGrey, fontSize: 9))),
+              if (receiptDiscountAmount > 0)
+                pw.Align(alignment: pw.Alignment.centerRight, child: pw.Text('Discount  -KSh $receiptDiscountAmount', style: pw.TextStyle(color: pdf.PdfColors.red, fontSize: 9))),
+              pw.SizedBox(height: 4),
+              pw.Container(
+                width: double.infinity,
+                padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 6),
+                color: pdf.PdfColor.fromInt(0xFFE8F5E9),
+                child: pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text('TOTAL', style: pw.TextStyle(color: inkBlack, fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                    pw.Text('KSh $receiptTotal', style: pw.TextStyle(color: green, fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                  ],
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Text('Payment: $paymentLabel', style: pw.TextStyle(color: mutedGrey, fontSize: 9)),
+              pw.SizedBox(height: 12),
+              pw.Text('Thank you for shopping with us.', style: pw.TextStyle(color: mutedGrey, fontSize: 8)),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final pdfBytes = await document.save();
+    if (kIsWeb) {
+      await downloadReceiptPdf(pdfBytes, '$receiptNumber.pdf');
+    } else {
+      await Printing.sharePdf(bytes: pdfBytes, filename: '$receiptNumber.pdf');
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Receipt PDF is ready to download or share.')),
+    );
+  }
+
   @override
   void dispose() {
     _smsWatcherService.stopSmsWatcher();
@@ -2006,6 +2194,104 @@ class _POSScreenState extends State<POSScreen> {
 
   int get total => subtotal - discountAmount;
 
+  Future<CreditAccount?> _selectCreditCustomer() async {
+    if (kIsWeb) {
+      return _webCreditCustomerSheet();
+    }
+
+    final accounts = await _creditService.loadCreditAccounts();
+    if (!mounted) return null;
+    return _showCreditCustomerSheet(accounts);
+  }
+
+  Future<CreditAccount?> _showCreditCustomerSheet(List<CreditAccount> accounts) {
+    final searchController = TextEditingController();
+    return showModalBottomSheet<CreditAccount>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => _CreditCustomerSelectorSheet(
+        accounts: accounts,
+        searchController: searchController,
+        onSelected: (account) => Navigator.of(sheetContext).pop(account),
+        onAddCustomer: () async {
+          final account = await _onboardCreditCustomer(sheetContext);
+          if (account != null && sheetContext.mounted) Navigator.of(sheetContext).pop(account);
+        },
+      ),
+    );
+  }
+
+  Future<CreditAccount?> _webCreditCustomerSheet() async {
+    final nameController = TextEditingController(text: 'Web Preview Customer');
+    final name = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.of(sheetContext).viewInsets.bottom + 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Select Credit Customer', style: TextStyle(color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            const Text('Enter the customer name for this web preview credit sale.', style: TextStyle(color: muted, fontSize: 12)),
+            const SizedBox(height: 14),
+            TextField(controller: nameController, autofocus: true, decoration: const InputDecoration(labelText: 'Customer name', border: OutlineInputBorder())),
+            const SizedBox(height: 14),
+            SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.of(sheetContext).pop(nameController.text.trim()), child: const Text('Continue with Customer'))),
+          ],
+        ),
+      ),
+    );
+    nameController.dispose();
+    if (name == null || name.trim().isEmpty) return null;
+    return CreditAccount(customerId: 'web-preview-credit-customer', customer: name.trim(), phone: '', balance: 0, lastTransactionAt: null, transactionCount: 0, initials: name.trim().substring(0, 1).toUpperCase(), colorValue: 0xFFF9A825);
+  }
+
+  Future<CreditAccount?> _onboardCreditCustomer(BuildContext sheetContext) async {
+    final nameController = TextEditingController();
+    final phoneController = TextEditingController();
+    final result = await showDialog<List<String>>(
+      context: sheetContext,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add Credit Customer'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Customer name')),
+          TextField(controller: phoneController, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone number')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(dialogContext).pop([nameController.text.trim(), phoneController.text.trim()]), child: const Text('Add Customer')),
+        ],
+      ),
+    );
+    nameController.dispose();
+    phoneController.dispose();
+    if (result == null || result.first.isEmpty) return null;
+    final customerId = await _customerService.onboardOfflineCustomer(businessId: 'demo-business', name: result.first, phone: result.last);
+    final account = CreditAccount(customerId: customerId, customer: result.first, phone: result.last, balance: 0, lastTransactionAt: null, transactionCount: 0, initials: result.first.substring(0, 1).toUpperCase(), colorValue: 0xFF123A8F);
+    await _creditService.saveCreditAccount(account);
+    return account;
+  }
+
+  void _openCreditLedgerProfile() {
+    final customerId = _lastReceiptSnapshot['customerId']?.toString();
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        pageBuilder: (_, animation, __) => CreditBookScreen(
+          onBack: () => Navigator.of(context).pop(),
+          initialCustomerId: customerId,
+        ),
+        transitionsBuilder: (_, animation, __, child) => SlideTransition(
+          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero).animate(animation),
+          child: child,
+        ),
+      ),
+    );
+  }
+
   Future<Map<String, dynamic>> _awaitMpesaConfirmation({
     required String checkoutRequestId,
     required double amount,
@@ -2018,9 +2304,18 @@ class _POSScreenState extends State<POSScreen> {
     void handleResult(Map<String, dynamic> result) {
       if (completer.isCompleted) return;
       if (result['status'] == 'SUCCESS') {
+        _smsWatcherService.stopSmsWatcher();
         completer.complete(result);
         return;
       }
+
+      final status = result['status']?.toString();
+      if (status == 'FAILED' || status == 'CANCELLED') {
+        _smsWatcherService.stopSmsWatcher();
+        completer.complete(result);
+        return;
+      }
+
       lastFailure = result;
       finishedSources++;
       if (finishedSources == 2) completer.complete(lastFailure!);
@@ -2047,12 +2342,29 @@ class _POSScreenState extends State<POSScreen> {
   Future<void> _completeSale() async {
     if (cart.isEmpty) return;
 
+    if (paymentMethod == 'credit') {
+      _selectedCreditAccount ??= await _selectCreditCustomer();
+      if (!mounted || _selectedCreditAccount == null) return;
+    }
+
     if (paymentMethod == 'mpesa') {
       setState(() => _mpesaRequestPending = true);
+      final businessId = await _authService.getActiveBusinessId();
+      if (!mounted) return;
+      if (businessId == null || businessId.isEmpty) {
+        setState(() => _mpesaRequestPending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFFD32F2F),
+            content: Text('Your session has no business account. Please sign in again.'),
+          ),
+        );
+        return;
+      }
       final result = await _mpesaService.initiateStkPush(
         phoneNumber: _mpesaPhoneController.text,
         amount: total.toDouble(),
-        businessId: 'demo-business',
+        businessId: businessId,
         accountReference: 'MobiDuka POS',
       );
       if (!mounted) return;
@@ -2125,18 +2437,55 @@ class _POSScreenState extends State<POSScreen> {
     }
 
     final saleId = 'sale-${DateTime.now().millisecondsSinceEpoch}';
+    final receiptNumber = 'RCPT-${saleId.substring(5)}';
     final saleItems = cartItems;
     final saleSubtotal = subtotal;
     final saleDiscountAmount = discountAmount;
     final saleTotal = total;
     final saleDiscount = discount;
     final salePaymentMethod = paymentMethod;
+    final creditAccount = _selectedCreditAccount;
+    final creditUpdatedAccount = salePaymentMethod == 'credit' && !kIsWeb
+        ? await _creditService.recordOfflineCreditSale(
+            customerId: creditAccount!.customerId,
+            amount: saleTotal.toDouble(),
+            invoiceNo: receiptNumber,
+          )
+        : salePaymentMethod == 'credit'
+            ? creditAccount!.copyWith(
+                balance: creditAccount.balance + saleTotal,
+                lastTransactionAt: DateTime.now().toIso8601String(),
+                transactionCount: creditAccount.transactionCount + 1,
+              )
+            : null;
+    if (salePaymentMethod == 'credit' && creditUpdatedAccount == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(backgroundColor: Color(0xFFD32F2F), content: Text('Unable to update the customer credit ledger.')),
+      );
+      return;
+    }
+    if (salePaymentMethod == 'credit') {
+      _lastReceiptSnapshot = {
+        'invoiceNo': receiptNumber,
+        'paymentMethod': 'STORE CREDIT',
+        'customerId': creditAccount!.customerId,
+        'customerName': creditAccount.customer,
+        'outstandingBalance': creditUpdatedAccount!.balance,
+      };
+    } else {
+      _lastReceiptSnapshot = const {};
+    }
     final salePayload = {
       'id': saleId,
       'businessId': 'demo-business',
       'deviceId': 'mobile-device',
       'userId': 'demo-owner',
       'paymentMethod': salePaymentMethod,
+      'customerId': creditAccount?.customerId,
+      'saleNumber': receiptNumber,
+      'paymentStatus': 'COMPLETED',
+      'saleStatus': 'COMPLETED',
       'discount': saleDiscountAmount,
       'subtotal': saleSubtotal,
       'total': saleTotal,
@@ -2151,12 +2500,30 @@ class _POSScreenState extends State<POSScreen> {
       'createdAt': DateTime.now().toIso8601String(),
     };
 
-    await _syncService.queueChange(
-      id: saleId,
-      entityName: 'Sale',
-      operation: 'CREATE',
-      payload: salePayload,
-    );
+    if (salePaymentMethod == 'credit' && !kIsWeb) {
+      await _syncService.queueChange(
+        id: 'credit-sale-$receiptNumber',
+        entityName: 'Credit',
+        operation: 'CREATE',
+        payload: {
+          'id': 'credit-sale-$receiptNumber',
+          'action': 'RECORD_SALE',
+          'businessId': 'demo-business',
+          'customerId': creditAccount!.customerId,
+          'amount': saleTotal,
+          'invoiceNo': receiptNumber,
+        },
+      );
+    }
+
+    if (!kIsWeb) {
+      await _syncService.queueChange(
+        id: saleId,
+        entityName: 'Sale',
+        operation: 'CREATE',
+        payload: salePayload,
+      );
+    }
 
     for (final entry in cart.entries) {
       final index = products.indexWhere((item) => item.name == entry.key);
@@ -2175,22 +2542,27 @@ class _POSScreenState extends State<POSScreen> {
       );
     }
 
-    await ProductRepository.instance.saveProducts(products);
-    await _syncService.processCloudSync(
-      businessId: 'demo-business',
-      deviceId: 'mobile-device',
-      userId: 'demo-owner',
-    );
+    if (!kIsWeb) {
+      await ProductRepository.instance.saveProducts(products);
+      await _syncService.processCloudSync(
+        businessId: 'demo-business',
+        deviceId: 'mobile-device',
+        userId: 'demo-owner',
+      );
+    }
 
     if (mounted) {
       setState(() {
         _completedSaleId = saleId;
+        _receiptNumber = receiptNumber;
+        _completedAt = DateTime.now();
         _completedSaleItems = saleItems;
         _completedSubtotal = saleSubtotal;
         _completedDiscountAmount = saleDiscountAmount;
         _completedTotal = saleTotal;
         _completedDiscount = saleDiscount;
         _completedPaymentMethod = salePaymentMethod;
+        _selectedCreditAccount = null;
         cart.clear();
         discount = 0;
         view = 'receipt';
@@ -2215,6 +2587,27 @@ class _POSScreenState extends State<POSScreen> {
   int get receiptDiscountAmount => _completedDiscountAmount;
 
   int get receiptTotal => _completedTotal;
+
+  String _formatReceiptDate(DateTime? value) {
+    final date = value ?? DateTime.now();
+    const months = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '${date.day} ${months[date.month - 1]} ${date.year}, $hour:$minute';
+  }
 
   Widget _metricTile(String value, String label, Color tint) {
     return Expanded(
@@ -2257,10 +2650,10 @@ class _POSScreenState extends State<POSScreen> {
     );
   }
 
-  Widget _paymentOption(String key, String label, String subtitle, String icon, Color color) {
+  Widget _paymentOption(String key, String label, String subtitle, String icon, Color color, {VoidCallback? onTap}) {
     final selected = paymentMethod == key;
     return GestureDetector(
-      onTap: () => setState(() => paymentMethod = key),
+      onTap: onTap ?? () => setState(() => paymentMethod = key),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(12),
@@ -2325,7 +2718,7 @@ class _POSScreenState extends State<POSScreen> {
                   const SizedBox(height: 8),
                   const Text('Sale Complete!', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 4),
-                  Text('Receipt #${_receiptToken ?? (1000 + DateTime.now().millisecondsSinceEpoch % 9000)}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
+                  Text('Receipt #${_receiptNumber ?? _receiptToken ?? 'Pending'}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
                 ],
               ),
             ),
@@ -2344,7 +2737,7 @@ class _POSScreenState extends State<POSScreen> {
                       children: [
                         const Text('MobiDuka Store · Nairobi CBD', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 6),
-                        const Text('Tue 8 Jul 2026, 14:45', style: TextStyle(color: muted, fontSize: 11)),
+                        Text(_formatReceiptDate(_completedAt), style: const TextStyle(color: muted, fontSize: 11)),
                         const SizedBox(height: 18),
                         const Divider(color: Color(0xFFE8ECF4), thickness: 1),
                         const SizedBox(height: 12),
@@ -2418,6 +2811,22 @@ class _POSScreenState extends State<POSScreen> {
                             ),
                           ],
                         ),
+                        if (_lastReceiptSnapshot['paymentMethod'] == 'STORE CREDIT') ...[
+                          const SizedBox(height: 14),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF8E1),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFFFE082)),
+                            ),
+                            child: Text(
+                              'KSh $receiptTotal added to ${_lastReceiptSnapshot['customerName']}\'s ledger. Outstanding balance: KSh ${( _lastReceiptSnapshot['outstandingBalance'] as num).toStringAsFixed(0)}.',
+                              style: const TextStyle(color: Color(0xFF8D6E63), fontSize: 12, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2451,6 +2860,20 @@ class _POSScreenState extends State<POSScreen> {
                   Row(
                     children: [
                       Expanded(
+                        child: TextButton.icon(
+                          onPressed: _downloadReceiptPdf,
+                          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                          label: const Text('Download PDF'),
+                          style: TextButton.styleFrom(
+                            backgroundColor: const Color(0xFFE8F5E9),
+                            foregroundColor: const Color(0xFF2E7D32),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
                         child: TextButton(
                           onPressed: _printReceiptInBackground,
                           style: TextButton.styleFrom(
@@ -2462,7 +2885,28 @@ class _POSScreenState extends State<POSScreen> {
                           child: const Text('Print Receipt', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                    ],
+                  ),
+                  if (_lastReceiptSnapshot['paymentMethod'] == 'STORE CREDIT') ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _openCreditLedgerProfile,
+                        icon: const Icon(Icons.menu_book_outlined),
+                        label: const Text('View Credit Ledger Profile', style: TextStyle(fontWeight: FontWeight.w800)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF9A825),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
                       Expanded(
                         child: TextButton(
                           onPressed: () {
@@ -2471,6 +2915,9 @@ class _POSScreenState extends State<POSScreen> {
                               discount = 0;
                               _receiptToken = null;
                               _completedSaleId = null;
+                              _receiptNumber = null;
+                              _completedAt = null;
+                              _lastReceiptSnapshot = const {};
                               _completedSaleItems = const [];
                               view = 'pos';
                               paymentMethod = 'cash';
@@ -2562,7 +3009,19 @@ class _POSScreenState extends State<POSScreen> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  _paymentOption('credit', 'Credit / Tab', 'Add to customer account', '📋', const Color(0xFFD32F2F)),
+                  _paymentOption(
+                    'credit',
+                    'Credit / Tab',
+                    'Add to customer account',
+                    '📋',
+                    const Color(0xFFD32F2F),
+                    onTap: () async {
+                      setState(() => paymentMethod = 'credit');
+                      final account = await _selectCreditCustomer();
+                      if (mounted && account == null) setState(() => paymentMethod = 'cash');
+                      if (mounted && account != null) setState(() => _selectedCreditAccount = account);
+                    },
+                  ),
                   const SizedBox(height: 20),
                   const Text('Discount', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 10),
@@ -3837,6 +4296,63 @@ class CustomerEntry {
   final Color color;
 }
 
+class _CreditCustomerSelectorSheet extends StatefulWidget {
+  const _CreditCustomerSelectorSheet({required this.accounts, required this.searchController, required this.onSelected, required this.onAddCustomer});
+  final List<CreditAccount> accounts;
+  final TextEditingController searchController;
+  final ValueChanged<CreditAccount> onSelected;
+  final VoidCallback onAddCustomer;
+
+  @override
+  State<_CreditCustomerSelectorSheet> createState() => _CreditCustomerSelectorSheetState();
+}
+
+class _CreditCustomerSelectorSheetState extends State<_CreditCustomerSelectorSheet> {
+  String query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final accounts = widget.accounts.where((account) => account.customer.toLowerCase().contains(query.toLowerCase()) || account.phone.contains(query)).toList();
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Select Credit Customer', style: TextStyle(color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            const Text('Search an existing debtor or add a new customer profile.', style: TextStyle(color: muted, fontSize: 12)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: widget.searchController,
+              onChanged: (value) => setState(() => query = value),
+              decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search name or phone', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 230,
+              child: accounts.isEmpty
+                  ? const Center(child: Text('No matching credit accounts.', style: TextStyle(color: muted)))
+                  : ListView(
+                      children: accounts.map((account) => ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                            leading: CircleAvatar(backgroundColor: Color(account.colorValue), child: Text(account.initials, style: const TextStyle(color: Colors.white, fontSize: 12))),
+                            title: Text(account.customer, style: const TextStyle(color: ink, fontWeight: FontWeight.w700)),
+                            subtitle: Text('${account.phone} · Outstanding KSh ${account.balance.toStringAsFixed(0)}', style: const TextStyle(color: muted, fontSize: 11)),
+                            onTap: () => widget.onSelected(account),
+                          )).toList(),
+                    ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: widget.onAddCustomer, icon: const Icon(Icons.person_add_alt_1), label: const Text('Add New Customer'))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class CustomerTransaction {
   const CustomerTransaction({
     required this.date,
@@ -4549,7 +5065,7 @@ class MoreScreen extends StatelessWidget {
               .map((section) {
                 final items = (section['items'] as List<Map<String, dynamic>>).where((item) {
                   if (role != 'CASHIER') return true;
-                  return item['screen'] == 'Expense Tracking';
+                  return item['screen'] == 'Expense Tracking' || item['screen'] == 'Credit Book';
                 }).toList();
                 return items.isEmpty ? null : _menuSection(section['section'] as String, items);
               })
@@ -7964,8 +8480,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 }
 
 class CreditBookScreen extends StatefulWidget {
-  const CreditBookScreen({required this.onBack, super.key});
+  const CreditBookScreen({required this.onBack, this.initialCustomerId, super.key});
   final VoidCallback onBack;
+  final String? initialCustomerId;
 
   @override
   State<CreditBookScreen> createState() => _CreditBookScreenState();
@@ -7995,6 +8512,11 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
       _ledger = results[1] as List<Map<String, dynamic>>;
       _loading = false;
     });
+    final initialCustomerId = widget.initialCustomerId;
+    if (initialCustomerId != null && mounted && _accounts.any((account) => account.customerId == initialCustomerId)) {
+      // The current screen is list-based; preserve the selected customer for the next detail-screen extension.
+      setState(() {});
+    }
   }
 
   Future<void> _showRepaymentSheet(CreditAccount account) async {
@@ -8095,9 +8617,106 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
     return const Color(0xFF2E7D32);
   }
 
+  Widget _focusedAccountView(CreditAccount account) {
+    final entries = _ledger.where((entry) => entry['customerId'] == account.customerId).toList();
+    return Container(
+      color: const Color(0xFFF5F7FA),
+      child: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 52, 16, 22),
+            decoration: const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.12)),
+                ),
+                const SizedBox(width: 10),
+                const Text('Credit Ledger Profile', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundColor: Color(account.colorValue),
+                        child: Text(account.initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(account.customer, style: const TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 3),
+                            Text(account.phone, style: const TextStyle(color: muted, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(color: const Color(0xFFFFF8E1), borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFFFE082))),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Outstanding Balance', style: TextStyle(color: Color(0xFF8D6E63), fontSize: 12, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 4),
+                      Text('KSh ${account.balance.toStringAsFixed(0)}', style: TextStyle(color: _balanceColor(account.balance), fontSize: 28, fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 3),
+                      Text('${account.transactionCount} credit transactions', style: const TextStyle(color: Color(0xFF8D6E63), fontSize: 11)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text('Ledger History', style: TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                if (entries.isEmpty)
+                  const Text('No ledger entries recorded yet.', style: TextStyle(color: muted, fontSize: 12))
+                else
+                  ...entries.map(
+                    (entry) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(entry['type'] == 'SALE' ? Icons.receipt_long : Icons.payments_outlined, color: entry['type'] == 'SALE' ? const Color(0xFFF9A825) : const Color(0xFF2E7D32)),
+                      title: Text(entry['type'] == 'SALE' ? 'Credit sale' : 'Repayment', style: const TextStyle(color: ink, fontWeight: FontWeight.w700)),
+                      subtitle: Text(entry['createdAt']?.toString() ?? '', style: const TextStyle(color: muted, fontSize: 11)),
+                      trailing: Text('KSh ${(entry['amount'] as num?)?.toStringAsFixed(0) ?? '0'}', style: const TextStyle(color: ink, fontWeight: FontWeight.w800)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final total = _accounts.fold<double>(0, (sum, item) => sum + item.balance);
+
+    final initialCustomerId = widget.initialCustomerId;
+    if (!_loading && initialCustomerId != null) {
+      final account = _accounts.cast<CreditAccount?>().firstWhere(
+        (item) => item?.customerId == initialCustomerId,
+        orElse: () => null,
+      );
+      if (account != null) return _focusedAccountView(account);
+    }
 
     return ListView(
       padding: EdgeInsets.zero,
