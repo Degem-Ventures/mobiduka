@@ -107,8 +107,13 @@ docker run --rm -it -p 8081:8080 mobiduka-flutter
 Ubuntu/Debian:
 
 ```bash
-sudo apt update
-sudo apt install -y git curl unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev mesa-utils
+sudo apt-get update && sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa libgtk-3-dev
+```
+
+If you want the minimal Flutter setup command for Linux, run:
+
+```bash
+git clone https://github.com/flutter/flutter.git -b stable
 ```
 
 This project has been validated on Ubuntu 24.04 with the packages above. These are the missing items reported by Flutter doctor:

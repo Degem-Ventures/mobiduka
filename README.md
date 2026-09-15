@@ -75,6 +75,22 @@ npx prisma db push
 pnpm prisma:seed
 ```
 
+### Safe demo seed vs production safety guard
+
+Use the dedicated demo seeding runner for local or controlled test data only:
+
+```bash
+pnpm run seed:demo
+```
+
+This script includes a production safety check. It refuses to run when `NODE_ENV=production` or when `DATABASE_URL` looks like a live merchant database, unless the explicit override is passed:
+
+```bash
+pnpm run seed:demo -- --force-seed-demo
+```
+
+Production usage should avoid this demo runner entirely. The default Prisma seed path stays separate and is intended only for explicit, controlled seeding workflows.
+
 ## Backend business flow highlights
 
 ### Retail operations

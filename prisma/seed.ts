@@ -1,6 +1,25 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
+const requestedForceSeed = process.argv.includes("--force-seed-demo");
+const databaseUrl = (process.env.DATABASE_URL ?? "").trim();
+const nodeEnv = (process.env.NODE_ENV ?? "").trim();
+const isProductionLikeDatabase =
+  /(neon|postgres|prod|production|merchant|live)/i.test(databaseUrl) ||
+  nodeEnv === "production";
+
+if (isProductionLikeDatabase && !requestedForceSeed) {
+  console.error("\n⚠️ SEED ABORTED: live production-like database detected.");
+  console.error(`NODE_ENV: ${nodeEnv || "not set"}`);
+  console.error(`DATABASE_URL: ${databaseUrl ? `${databaseUrl.slice(0, 80)}...` : "not set"}`);
+  console.error("Re-run with --force-seed-demo to allow demo seeding only for a controlled environment.");
+  process.exit(1);
+}
+
+if (isProductionLikeDatabase && requestedForceSeed) {
+  console.warn("⚠️ WARNING: --force-seed-demo supplied. Seeding is running against a production-like database target.");
+}
+
 const prisma = new PrismaClient();
 
 const products = [
@@ -34,9 +53,8 @@ function dateAt(day: Date, hour: number, minute: number) {
   return date;
 }
 
-function pseudoRandom(seed: number) {
-  const value = Math.sin(seed * 12.9898) * 43758.5453;
-  return value - Math.floor(value);
+function toIso(date: Date) {
+  return new Date(date).toISOString();
 }
 
 async function clearDatabase() {
@@ -86,24 +104,48 @@ async function main() {
     },
   });
 
-  const [ownerRole, managerRole, cashierRole] = await Promise.all([
+  const [ownerRole, managerRole, cashierRole] = await prisma.$transaction([
     prisma.role.create({ data: { name: "OWNER", description: "Store owner" } }),
     prisma.role.create({ data: { name: "MANAGER", description: "Store manager" } }),
     prisma.role.create({ data: { name: "CASHIER", description: "Shift cashier" } }),
   ]);
 
   const passwordHash = await bcrypt.hash("OwnerPass123", 10);
-  const [owner, cashierOne, cashierTwo] = await Promise.all([
+  const [owner, cashierOne, cashierTwo] = await prisma.$transaction([
     prisma.user.create({
-      data: { businessId: business.id, email: "owner@mobiduka.com", fullName: "John Kamau", roleId: ownerRole.id, passwordHash, status: "ACTIVE" },
+      data: {
+        businessId: business.id,
+        email: "owner@mobiduka.com",
+        fullName: "John Kamau",
+        roleId: ownerRole.id,
+        passwordHash,
+        status: "ACTIVE",
+      },
     }),
     prisma.user.create({
-      data: { businessId: business.id, email: "cashier1@mobiduka.com", username: "cashier1", fullName: "Faith Mutua", roleId: cashierRole.id, pinHash: await bcrypt.hash("2540", 10), status: "ACTIVE" },
+      data: {
+        businessId: business.id,
+        email: "cashier1@mobiduka.com",
+        username: "cashier1",
+        fullName: "Faith Mutua",
+        roleId: cashierRole.id,
+        pinHash: await bcrypt.hash("2540", 10),
+        status: "ACTIVE",
+      },
     }),
     prisma.user.create({
-      data: { businessId: business.id, email: "cashier2@mobiduka.com", username: "cashier2", fullName: "Kevin Ochieng", roleId: cashierRole.id, pinHash: await bcrypt.hash("2541", 10), status: "ACTIVE" },
+      data: {
+        businessId: business.id,
+        email: "cashier2@mobiduka.com",
+        username: "cashier2",
+        fullName: "Kevin Ochieng",
+        roleId: cashierRole.id,
+        pinHash: await bcrypt.hash("2541", 10),
+        status: "ACTIVE",
+      },
     }),
   ]);
+  void owner;
   void managerRole;
 
   await prisma.device.create({
@@ -130,33 +172,45 @@ async function main() {
     },
   });
 
-  const category = await prisma.category.create({ data: { businessId: business.id, name: "Fast Moving Consumer Goods" } });
-  const productRecords = [];
-  for (const [name, sku, barcode, costPrice, sellingPrice, minimumStock, stock] of products) {
-    const product = await prisma.product.create({
-      data: {
-        businessId: business.id,
-        categoryId: category.id,
-        supplierId: supplier.id,
-        name,
-        sku,
-        barcode,
-        unit: "piece",
-        costPrice,
-        sellingPrice,
-        minimumStock,
-        trackStock: true,
-        status: "ACTIVE",
-        syncStatus: "SYNCED",
-        inventory: { create: { businessId: business.id, quantity: stock, reservedQuantity: 0 } },
-      },
-      include: { inventory: true },
-    });
-    productRecords.push(product);
-  }
+  const category = await prisma.category.create({
+    data: { businessId: business.id, name: "Fast Moving Consumer Goods" },
+  });
 
-  const cashPayment = await prisma.paymentMethod.create({ data: { name: "CASH" } });
-  const mpesaPayment = await prisma.paymentMethod.create({ data: { name: "MPESA" } });
+  const productRecords = await prisma.$transaction(
+    products.map(([name, sku, barcode, costPrice, sellingPrice, minimumStock, stock]) =>
+      prisma.product.create({
+        data: {
+          businessId: business.id,
+          categoryId: category.id,
+          supplierId: supplier.id,
+          name,
+          sku,
+          barcode,
+          unit: "piece",
+          costPrice,
+          sellingPrice,
+          minimumStock,
+          trackStock: true,
+          status: "ACTIVE",
+          syncStatus: "SYNCED",
+          inventory: {
+            create: {
+              businessId: business.id,
+              quantity: stock,
+              reservedQuantity: 0,
+            },
+          },
+        },
+        include: { inventory: true },
+      }),
+    ),
+  );
+
+  const [cashPayment, mpesaPayment] = await prisma.$transaction([
+    prisma.paymentMethod.create({ data: { name: "CASH" } }),
+    prisma.paymentMethod.create({ data: { name: "MPESA" } }),
+  ]);
+
   let saleCount = 0;
   let expenseCount = 0;
 
@@ -165,76 +219,119 @@ async function main() {
     const cashier = daysAgo % 2 === 0 ? cashierOne : cashierTwo;
     const openingBalance = 2500 + (daysAgo % 4) * 500;
     const salesCount = 3 + (daysAgo % 6);
-    const saleRows = [] as { total: number }[];
+    const saleRows: Array<{ total: number }> = [];
+    const dailyBatch: Array<ReturnType<typeof prisma.sale.create>> = [];
 
     for (let saleIndex = 0; saleIndex < salesCount; saleIndex += 1) {
-      const selected = [0, 1, 2].map((offset) => productRecords[(daysAgo * 3 + saleIndex + offset) % productRecords.length]);
+      const selected = [0, 1, 2].map(
+        (offset) => productRecords[(daysAgo * 3 + saleIndex + offset) % productRecords.length],
+      );
       const createdAt = dateAt(day, 8 + (saleIndex % 9), (saleIndex * 13) % 60);
       const items = selected.map((product, itemIndex) => {
         const quantity = 1 + ((daysAgo + saleIndex + itemIndex) % 3);
         const unitPrice = product.sellingPrice ?? 0;
-        return { productId: product.id, quantity, unitPrice, total: unitPrice * quantity };
+        return {
+          productId: product.id,
+          quantity,
+          unitPrice,
+          total: Number((unitPrice * quantity).toFixed(2)),
+        };
       });
-      const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+
+      const subtotal = Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2));
       const discount = saleIndex % 5 === 0 ? 10 : 0;
-      const total = subtotal - discount;
+      const total = Number((subtotal - discount).toFixed(2));
       const paymentMethod = (saleIndex + daysAgo) % 3 === 0 ? mpesaPayment : cashPayment;
-      const sale = await prisma.sale.create({
+
+      dailyBatch.push(
+        prisma.sale.create({
+          data: {
+            businessId: business.id,
+            cashierId: cashier.id,
+            saleNumber: `DEMO-${daysAgo + 1}-${saleIndex + 1}`,
+            subtotal,
+            discount,
+            total,
+            paymentStatus: "PAID",
+            saleStatus: "COMPLETED",
+            createdAt: toIso(createdAt),
+            items: {
+              create: items.map((item) => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                discount: 0,
+                tax: 0,
+                total: item.total,
+              })),
+            },
+            payments: {
+              create: {
+                paymentMethodId: paymentMethod.id,
+                amount: total,
+                reference: paymentMethod.name === "MPESA" ? `QX${daysAgo}${saleIndex}DEMO` : null,
+                receivedAt: toIso(createdAt),
+              },
+            },
+          },
+        }),
+      );
+
+      saleRows.push({ total });
+    }
+
+    const dailySales = await prisma.$transaction(dailyBatch);
+    saleCount += dailySales.length;
+
+    const cashSales = Number((saleRows.reduce((sum, sale) => sum + sale.total, 0) * 0.66).toFixed(2));
+    const hasExpense = (29 - daysAgo) % 5 === 0;
+    const expenseAmount = hasExpense ? (daysAgo % 10 === 0 ? 6500 : 2800 + (daysAgo % 3) * 400) : 0;
+    const expectedBalance = Number((openingBalance + cashSales - expenseAmount).toFixed(2));
+    const variance = daysAgo % 7 === 0 ? -100 : daysAgo % 11 === 0 ? 150 : 0;
+    const openedAt = dateAt(day, 7, 30);
+    const closedAt = dateAt(day, 20, 15);
+
+    const dailyOps = [
+      prisma.cashSession.create({
         data: {
           businessId: business.id,
           cashierId: cashier.id,
-          saleNumber: `DEMO-${daysAgo + 1}-${saleIndex + 1}`,
-          subtotal,
-          discount,
-          total,
-          paymentStatus: "PAID",
-          saleStatus: "COMPLETED",
-          createdAt,
-          items: { create: items.map((item) => ({ ...item, discount: 0, tax: 0 })) },
-          payments: { create: { paymentMethodId: paymentMethod.id, amount: total, reference: paymentMethod.name === "MPESA" ? `QX${daysAgo}${saleIndex}DEMO` : null, receivedAt: createdAt } },
+          openingBalance,
+          expectedBalance,
+          closingBalance: Number((expectedBalance + variance).toFixed(2)),
+          variance,
+          openedAt: toIso(openedAt),
+          closedAt: toIso(closedAt),
         },
-      });
-      saleRows.push({ total: sale.total });
-      saleCount += 1;
-    }
-
-    const cashSales = saleRows.reduce((sum, sale) => sum + sale.total, 0) * 0.66;
-    const hasExpense = (29 - daysAgo) % 5 === 0;
-    const expenseAmount = hasExpense ? (daysAgo % 10 === 0 ? 6500 : 2800 + (daysAgo % 3) * 400) : 0;
-    const expectedBalance = openingBalance + cashSales - expenseAmount;
-    const variance = daysAgo % 7 === 0 ? -100 : daysAgo % 11 === 0 ? 150 : 0;
-    await prisma.cashSession.create({
-      data: {
-        businessId: business.id,
-        cashierId: cashier.id,
-        openingBalance,
-        expectedBalance,
-        closingBalance: expectedBalance + variance,
-        variance,
-        openedAt: dateAt(day, 7, 30),
-        closedAt: dateAt(day, 20, 15),
-      },
-    });
+      }),
+    ];
 
     if (hasExpense) {
-      await prisma.expense.create({
-        data: {
-          businessId: business.id,
-          category: daysAgo % 10 === 0 ? "STOCK" : "UTILITIES",
-          description: daysAgo % 10 === 0 ? "Bulk replenishment of fast-moving shelf items" : "Electricity and water utility settlement",
-          amount: expenseAmount,
-          paidTo: daysAgo % 10 === 0 ? supplier.name : "Local Utilities Provider",
-          recordedBy: cashier.id,
-          createdAt: dateAt(day, 18, 30),
-        },
-      });
+      dailyOps.push(
+        prisma.expense.create({
+          data: {
+            businessId: business.id,
+            category: daysAgo % 10 === 0 ? "STOCK" : "UTILITIES",
+            description:
+              daysAgo % 10 === 0
+                ? "Bulk replenishment of fast-moving shelf items"
+                : "Electricity and water utility settlement",
+            amount: Number(expenseAmount.toFixed(2)),
+            paidTo: daysAgo % 10 === 0 ? supplier.name : "Local Utilities Provider",
+            recordedBy: cashier.id,
+            createdAt: toIso(dateAt(day, 18, 30)),
+          },
+        }),
+      );
       expenseCount += 1;
     }
+
+    await prisma.$transaction(dailyOps);
   }
 
   console.log(`Created tenant ${business.id}`);
   console.log(`Seeded ${productRecords.length} products, ${saleCount} sales, and ${expenseCount} expenses across 30 days.`);
-  console.log(`Owner login: owner@mobiduka.com / OwnerPass123`);
+  console.log("Owner login: owner@mobiduka.com / OwnerPass123");
   console.log("Cashier PINs: 2540 and 2541");
 }
 

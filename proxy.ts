@@ -10,7 +10,7 @@ function isAllowedOrigin(origin: string | null) {
   }
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const origin = request.headers.get("origin");
   const allowed = isAllowedOrigin(origin);
   const headers = new Headers();
