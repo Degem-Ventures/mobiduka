@@ -703,8 +703,22 @@ class _LoginScreenState extends State<LoginScreen> {
   String step = 'splash';
   String pin = '';
   bool isAuthenticating = false;
+  bool loginSucceeded = false;
+  String? loginError;
   final TextEditingController emailController = TextEditingController(text: 'admin@mobiduka.co.ke');
   final TextEditingController passwordController = TextEditingController();
+
+  BorderSide _inputBorder({required bool isPasswordField}) {
+    if (loginSucceeded) {
+      return const BorderSide(color: Color(0xFF2E7D32));
+    }
+    if (loginError != null) {
+      return const BorderSide(color: Color(0xFFD32F2F));
+    }
+    return const BorderSide(color: Color(0xFFE8ECF4));
+  }
+
+  bool get hasLoginFeedback => loginError != null || loginSucceeded;
 
   void _handlePinPress(String digit) {
     if (isAuthenticating || pin.length >= 4) return;
@@ -727,6 +741,7 @@ class _LoginScreenState extends State<LoginScreen> {
     await _authenticate(() => _authService.loginWithPIN(
           pin: inputCode,
           deviceToken: _deviceToken,
+          identifier: 'cashier1',
         ));
   }
 
@@ -740,32 +755,29 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _authenticate(Future<AuthSession> Function() request) async {
     if (isAuthenticating) return;
-    setState(() => isAuthenticating = true);
+    setState(() {
+      isAuthenticating = true;
+      loginError = null;
+      loginSucceeded = false;
+    });
     try {
       await request();
       if (!mounted) return;
+      setState(() {
+        loginSucceeded = true;
+        loginError = null;
+      });
       widget.onLogin();
     } catch (error) {
       if (!mounted) return;
       setState(() {
+        loginSucceeded = false;
+        loginError = error.toString().replaceFirst('Exception: ', '');
         pin = '';
         emailController.clear();
         passwordController.clear();
         isAuthenticating = false;
       });
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Sign in failed'),
-          content: Text(error.toString().replaceFirst('Exception: ', '')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
     }
   }
 
@@ -995,6 +1007,38 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 6),
+                    if (hasLoginFeedback)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: loginSucceeded ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: loginSucceeded ? const Color(0xFF66BB6A) : const Color(0xFFEF9A9A),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              loginSucceeded ? Icons.check_circle_outline : Icons.error_outline,
+                              color: loginSucceeded ? const Color(0xFF1B5E20) : const Color(0xFFB71C1C),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                loginSucceeded ? 'Signed in successfully. Redirecting...' : loginError ?? '',
+                                style: TextStyle(
+                                  color: loginSucceeded ? const Color(0xFF1B5E20) : const Color(0xFFB71C1C),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     TextField(
                       controller: emailController,
                       keyboardType: TextInputType.emailAddress,
@@ -1004,15 +1048,19 @@ class _LoginScreenState extends State<LoginScreen> {
                         fillColor: Colors.white,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                          borderSide: _inputBorder(isPasswordField: false),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                          borderSide: _inputBorder(isPasswordField: false),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: navy),
+                          borderSide: loginSucceeded
+                              ? const BorderSide(color: Color(0xFF2E7D32))
+                              : loginError != null
+                                  ? const BorderSide(color: Color(0xFFD32F2F))
+                                  : const BorderSide(color: navy),
                         ),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
                       ),
@@ -1035,15 +1083,19 @@ class _LoginScreenState extends State<LoginScreen> {
                         fillColor: Colors.white,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                          borderSide: _inputBorder(isPasswordField: true),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Color(0xFFE8ECF4)),
+                          borderSide: _inputBorder(isPasswordField: true),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: navy),
+                          borderSide: loginSucceeded
+                              ? const BorderSide(color: Color(0xFF2E7D32))
+                              : loginError != null
+                                  ? const BorderSide(color: Color(0xFFD32F2F))
+                                  : const BorderSide(color: navy),
                         ),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
                       ),

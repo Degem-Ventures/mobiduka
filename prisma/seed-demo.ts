@@ -111,7 +111,7 @@ async function main() {
   ]);
 
   const passwordHash = await bcrypt.hash("OwnerPass123", 10);
-  const [owner, cashierOne, cashierTwo] = await prisma.$transaction([
+  const [, cashierOne, cashierTwo] = await prisma.$transaction([
     prisma.user.create({
       data: {
         businessId: business.id,
@@ -145,7 +145,6 @@ async function main() {
       },
     }),
   ]);
-  void owner;
   void managerRole;
 
   await prisma.device.create({
@@ -218,11 +217,11 @@ async function main() {
     const day = atStartOfDay(daysAgo);
     const cashier = daysAgo % 2 === 0 ? cashierOne : cashierTwo;
     const openingBalance = 2500 + (daysAgo % 4) * 500;
-    const salesCount = 3 + (daysAgo % 6);
-    const saleRows: Array<{ total: number }> = [];
+    const saleCountForDay = 3 + (daysAgo % 6);
     const dailyBatch: Array<ReturnType<typeof prisma.sale.create>> = [];
+    const saleRows: Array<{ total: number }> = [];
 
-    for (let saleIndex = 0; saleIndex < salesCount; saleIndex += 1) {
+    for (let saleIndex = 0; saleIndex < saleCountForDay; saleIndex += 1) {
       const selected = [0, 1, 2].map(
         (offset) => productRecords[(daysAgo * 3 + saleIndex + offset) % productRecords.length],
       );
@@ -283,7 +282,9 @@ async function main() {
     const dailySales = await prisma.$transaction(dailyBatch);
     saleCount += dailySales.length;
 
-    const cashSales = Number((saleRows.reduce((sum, sale) => sum + sale.total, 0) * 0.66).toFixed(2));
+    const cashSales = Number(
+      (saleRows.reduce((sum, sale) => sum + sale.total, 0) * 0.66).toFixed(2),
+    );
     const hasExpense = (29 - daysAgo) % 5 === 0;
     const expenseAmount = hasExpense ? (daysAgo % 10 === 0 ? 6500 : 2800 + (daysAgo % 3) * 400) : 0;
     const expectedBalance = Number((openingBalance + cashSales - expenseAmount).toFixed(2));

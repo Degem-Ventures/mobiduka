@@ -27,9 +27,10 @@ class AuthService {
   Future<AuthSession> loginWithPIN({
     required String pin,
     required String deviceToken,
+    String identifier = 'cashier1',
   }) async {
     return _authenticate(
-      identifier: 'admin@mobiduka.co.ke',
+      identifier: identifier,
       pin: pin,
       deviceToken: deviceToken,
     );
