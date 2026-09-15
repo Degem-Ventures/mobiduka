@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { sendPushNotification } from "@/lib/firebase-admin";
 
 export async function POST(request: Request) {
   try {
@@ -118,7 +119,16 @@ export async function POST(request: Request) {
       });
 
       const totalCashSales = sales.reduce((sum, sale) => sum + Number(sale.total ?? 0), 0);
-      const expectedCashBalance = Number(activeSession.openingBalance) + totalCashSales;
+      const cashExpenses = await prisma.expense.findMany({
+        where: {
+          businessId,
+          recordedBy: userId,
+          createdAt: { gte: activeSession.openedAt },
+        },
+        select: { amount: true },
+      });
+      const totalCashExpenses = cashExpenses.reduce((sum, expense) => sum + Number(expense.amount ?? 0), 0);
+      const expectedCashBalance = Number(activeSession.openingBalance) + totalCashSales - totalCashExpenses;
       const actualCashCount = Number(closingCash);
       const variance = actualCashCount - expectedCashBalance;
 
@@ -143,6 +153,20 @@ export async function POST(request: Request) {
         },
       });
 
+      await sendPushNotification(
+        `business_shifts_${businessId}`,
+        "🏧 Shift Account Closure Summary",
+        `Opening: KSh ${Number(activeSession.openingBalance).toFixed(2)}. Cash sales: KSh ${totalCashSales.toFixed(2)}. Cash expenses: KSh ${totalCashExpenses.toFixed(2)}. Expected: KSh ${expectedCashBalance.toFixed(2)}. Counted: KSh ${actualCashCount.toFixed(2)}. Variance: KSh ${variance.toFixed(2)}.`,
+        {
+          businessId,
+          sessionId: closedSession.id,
+          openingBalance: Number(activeSession.openingBalance).toFixed(2),
+          totalCashSales: totalCashSales.toFixed(2),
+          totalCashExpenses: totalCashExpenses.toFixed(2),
+          variance: variance.toFixed(2),
+        },
+      );
+
       return NextResponse.json(
         {
           success: true,
@@ -152,6 +176,7 @@ export async function POST(request: Request) {
             closedAt: closedSession.closedAt,
             openingCash: activeSession.openingBalance,
             totalCashSales,
+            totalCashExpenses,
             expectedBalance: expectedCashBalance,
             actualCounted: actualCashCount,
             variance,

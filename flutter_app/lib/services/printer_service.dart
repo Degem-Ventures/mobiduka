@@ -31,7 +31,9 @@ class PrinterService {
 
     for (final item in items) {
       final name = item['name']?.toString() ?? 'Item';
-      final quantity = (item['qty'] as num?)?.toInt() ?? 0;
+        final quantity = (item['qty'] ?? item['quantity']) is num
+          ? ((item['qty'] ?? item['quantity']) as num).toInt()
+          : int.tryParse((item['qty'] ?? item['quantity'])?.toString() ?? '') ?? 0;
       final price = (item['price'] as num?)?.toDouble() ?? 0;
       await _escCommand.text(content: name);
       await _escCommand.text(content: '$quantity x KES ${price.toStringAsFixed(0)}    KES ${(quantity * price).toStringAsFixed(0)}');

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "843625682257",
+    "project_id": "mobiduka-ff280",
+    "storage_bucket": "mobiduka-ff280.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:843625682257:android:b259f62655a09427a62f70",
+        "android_client_info": {
+          "package_name": "com.example.mobiduka_pos"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAE1n-tfAnTqCO-bloTlQuG0gREYzOIkNY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,46 @@
+name: Deploy Full-Stack Backend API to Vercel
+
+on:
+  push:
+    branches: [dev, main]
+
+jobs:
+  deploy_vercel_cloud:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js runtime environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm Package Manager
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Runtime Workspace Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Production Prisma Client Database Model Maps
+        run: pnpm exec prisma generate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Install Vercel CLI Toolchain
+        run: pnpm add --global vercel
+
+      - name: Pull Vercel Project Environment Configuration
+        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+        env:
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+
+      - name: Compile and Deploy Production Application
+        run: vercel deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}"
+        env:
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}

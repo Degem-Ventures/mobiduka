@@ -2,8 +2,10 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'api_config.dart';
+
 class MpesaService {
-  MpesaService({String? baseUrl}) : baseUrl = baseUrl ?? 'http://localhost:3000/api/payments/stk-push';
+  MpesaService({String? baseUrl}) : baseUrl = baseUrl ?? '${ApiConfig.apiBase}/payments/stk-push';
 
   final String baseUrl;
 

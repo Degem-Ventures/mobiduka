@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 
 interface SyncRecord {
   id: string;
-  entityName: "Category" | "Supplier" | "Product" | "Customer" | "Sale" | "Expense" | "Credit";
+  entityName: "Category" | "Supplier" | "Product" | "Customer" | "Sale" | "Expense" | "Credit" | "Employee";
   operation: "CREATE" | "UPDATE" | "DELETE";
   payload: any;
   createdAt: string;
@@ -206,6 +206,40 @@ export async function POST(request: Request) {
                 type: "PAYMENT",
                 amount: paymentAmount,
                 status: "COMPLETED",
+              },
+            });
+            break;
+          }
+
+          case "Employee": {
+            if (operation !== "CREATE" && operation !== "UPDATE") break;
+            const employeeRole = String(dataPayload.role ?? "CASHIER").toUpperCase();
+            if (!["OWNER", "MANAGER", "CASHIER"].includes(employeeRole)) {
+              throw new Error("Invalid employee role.");
+            }
+            const role = await tx.role.upsert({
+              where: { name: employeeRole },
+              update: {},
+              create: { name: employeeRole },
+            });
+            await tx.user.upsert({
+              where: { id: dataPayload.id },
+              create: {
+                id: dataPayload.id,
+                businessId,
+                fullName: dataPayload.fullName,
+                email: dataPayload.email || null,
+                phone: dataPayload.phone || null,
+                roleId: role.id,
+                status: dataPayload.status ?? "ACTIVE",
+              },
+              update: {
+                fullName: dataPayload.fullName,
+                email: dataPayload.email || null,
+                phone: dataPayload.phone || null,
+                roleId: role.id,
+                status: dataPayload.status ?? "ACTIVE",
+                updatedAt: new Date(),
               },
             });
             break;

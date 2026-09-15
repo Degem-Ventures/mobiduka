@@ -8,6 +8,10 @@ import 'package:bluetooth_print_plus/bluetooth_print_plus.dart' show BluetoothDe
 import 'services/cash_service.dart';
 import 'services/credit_service.dart';
 import 'services/customer_service.dart';
+import 'services/auth_service.dart';
+import 'services/employee_repository.dart';
+import 'services/reports_service.dart';
+import 'services/notification_receiver.dart';
 import 'services/mpesa_service.dart';
 import 'services/product_repository.dart';
 import 'services/purchase_order_service.dart';
@@ -85,8 +89,12 @@ class MobiDukaApp extends StatefulWidget {
 
 class _MobiDukaAppState extends State<MobiDukaApp> {
   final CashService _cashService = CashService();
+  final AuthService _authService = AuthService();
+  final NotificationReceiverService _notificationService = NotificationReceiverService();
   int tab = 0;
   bool loggedIn = false;
+  bool isDarkMode = false;
+  String activeRole = 'CASHIER';
   String? detail;
   String? activeSessionId;
 
@@ -94,6 +102,13 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   void initState() {
     super.initState();
     _loadCatalog();
+    _loadActiveRole();
+  }
+
+  Future<void> _loadActiveRole() async {
+    final role = await _authService.getActiveUserRole();
+    if (!mounted) return;
+    setState(() => activeRole = role);
   }
 
   Future<void> _loadCatalog() async {
@@ -112,6 +127,8 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   Future<void> _handleLoginAttempt() async {
+    final role = await _authService.getActiveUserRole();
+    if (mounted) setState(() => activeRole = role);
     final session = await _cashService.getActiveSession(
       businessId: 'demo-business',
       userId: 'demo-user',
@@ -124,12 +141,13 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
         builder: (sheetContext) => _CashShiftGateSheet(
-          onOpened: () {
+          onOpened: (sessionId) {
+            _activateNotifications();
             setState(() {
               loggedIn = true;
               tab = 0;
               detail = null;
-              activeSessionId = session?['id'] as String? ?? 'new-session';
+              activeSessionId = sessionId;
             });
           },
         ),
@@ -138,6 +156,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     }
 
     if (!mounted) return;
+    _activateNotifications();
     setState(() {
       loggedIn = true;
       tab = 0;
@@ -145,6 +164,13 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       activeSessionId = session['id'] as String?;
     });
   }
+
+  Future<void> _activateNotifications() async {
+    await _notificationService.initializeNotificationEngine(context);
+    await _notificationService.subscribeToTenantAlerts('demo-business');
+  }
+
+  Future<void> _deactivateNotifications() => _notificationService.unsubscribeFromTenantAlerts('demo-business');
 
   Future<void> _handleCloseShift() async {
     final activeSession = await _cashService.getActiveSession(
@@ -168,50 +194,74 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) => _CloseShiftSheet(
-        sessionId: activeSession['id'] as String,
-        onFinalized: () {
-          setState(() {
-            loggedIn = false;
-            detail = null;
-            tab = 0;
-            activeSessionId = null;
-          });
-          Navigator.of(context).pop();
-        },
-      ),
+        builder: (sheetContext) => SizedBox(
+          height: MediaQuery.of(context).size.height * 0.9,
+          child: _CloseShiftSheet(
+            sessionId: activeSession['id'] as String,
+            onBeforeFinalized: _deactivateNotifications,
+            onFinalized: () {
+              setState(() {
+                loggedIn = false;
+                detail = null;
+                tab = 0;
+                activeSessionId = null;
+              });
+              Navigator.of(context).pop();
+            },
+          ),
+        ),
     );
   }
 
-  void open(String value) => setState(() => detail = value);
+  bool _canOpen(String value) => activeRole != 'CASHIER' || value == 'Expense Tracking';
+
+  void open(String value) {
+    if (!_canOpen(value)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This area is restricted to store managers.')));
+      return;
+    }
+    setState(() => detail = value);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final tabs = activeRole == 'CASHIER'
+      ? <Widget>[const POSScreen(), MoreScreen(onOpen: open, role: activeRole, isDarkMode: isDarkMode, onLogout: _logout, onCloseShift: _handleCloseShift)]
+      : <Widget>[
+        const DashboardScreen(),
+        const POSScreen(),
+        const ProductScreen(title: 'Inventory & Stock'),
+        const CustomerScreen(),
+        MoreScreen(onOpen: open, role: activeRole, isDarkMode: isDarkMode, onLogout: _logout, onCloseShift: _handleCloseShift),
+        ];
     final body = !loggedIn
         ? LoginScreen(
             onLogin: _handleLoginAttempt,
           )
         : detail != null
-            ? DetailScreen(title: detail!, onBack: () => setState(() => detail = null))
-            : <Widget>[
-                const DashboardScreen(),
-                const POSScreen(),
-                const ProductScreen(title: 'Inventory & Stock'),
-                const CustomerScreen(),
-                MoreScreen(
-                  onOpen: open,
-                  onLogout: () => setState(() {
-                    loggedIn = false;
-                    detail = null;
-                    activeSessionId = null;
-                  }),
-                  onCloseShift: _handleCloseShift,
-                ),
-              ][tab];
+            ? DetailScreen(
+                title: detail!,
+                onBack: () => setState(() => detail = null),
+                isDarkMode: isDarkMode,
+                onThemeChanged: (value) => setState(() => isDarkMode = value),
+              )
+            : tabs[tab.clamp(0, tabs.length - 1).toInt()];
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: navy)),
+      themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: navy),
+        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(seedColor: navy, brightness: Brightness.dark),
+        scaffoldBackgroundColor: const Color(0xFF101522),
+        cardColor: const Color(0xFF192235),
+      ),
       home: Scaffold(
         body: DecoratedBox(
           decoration: const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
@@ -231,13 +281,18 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                       NavigationBar(
                         selectedIndex: tab,
                         onDestinationSelected: (value) => setState(() => tab = value),
-                        destinations: const [
+                        destinations: activeRole == 'CASHIER'
+                            ? const [
+                                NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), label: 'POS'),
+                                NavigationDestination(icon: Icon(Icons.menu), label: 'More'),
+                              ]
+                            : const [
                           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
                           NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), label: 'POS'),
                           NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Inventory'),
                           NavigationDestination(icon: Icon(Icons.people_outline), label: 'Customers'),
                           NavigationDestination(icon: Icon(Icons.menu), label: 'More'),
-                        ],
+                              ],
                       ),
                   ]),
                   Positioned(
@@ -263,11 +318,23 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       ),
     );
   }
+
+  void _logout() {
+    _notificationService.unsubscribeFromTenantAlerts('demo-business');
+    _authService.clearSession();
+    setState(() {
+      loggedIn = false;
+      detail = null;
+      activeSessionId = null;
+      activeRole = 'CASHIER';
+      tab = 0;
+    });
+  }
 }
 
 class _CashShiftGateSheet extends StatefulWidget {
   const _CashShiftGateSheet({required this.onOpened});
-  final VoidCallback onOpened;
+  final ValueChanged<String> onOpened;
 
   @override
   State<_CashShiftGateSheet> createState() => _CashShiftGateSheetState();
@@ -277,6 +344,28 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
   final TextEditingController _openingCashController = TextEditingController(text: '2500');
   final CashService _cashService = CashService();
   bool _submitting = false;
+
+  void _appendDigit(String digit) {
+    if (_submitting) return;
+    setState(() {
+      final value = _openingCashController.text;
+      _openingCashController.text = value == '0' ? digit : '$value$digit';
+      _openingCashController.selection = TextSelection.collapsed(offset: _openingCashController.text.length);
+    });
+  }
+
+  void _deleteDigit() {
+    if (_submitting) return;
+    setState(() {
+      final value = _openingCashController.text;
+      if (value.length <= 1) {
+        _openingCashController.text = '0';
+      } else {
+        _openingCashController.text = value.substring(0, value.length - 1);
+      }
+      _openingCashController.selection = TextSelection.collapsed(offset: _openingCashController.text.length);
+    });
+  }
 
   Future<void> _openShift() async {
     final value = double.tryParse(_openingCashController.text.trim());
@@ -300,14 +389,14 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop();
-      widget.onOpened();
+      widget.onOpened(sessionId);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Shift opened successfully. Drawer ID: $sessionId'),
           backgroundColor: const Color(0xFF2E7D32),
         ),
       );
+      Navigator.of(context).pop();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -354,6 +443,27 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
                   ),
                 ),
               ),
+              const SizedBox(height: 12),
+              GridView.count(
+                crossAxisCount: 3,
+                shrinkWrap: true,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 2.4,
+                children: [
+                  ...['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map(
+                    (digit) => OutlinedButton(
+                      onPressed: () => _appendDigit(digit),
+                      child: Text(digit, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _deleteDigit,
+                    icon: const Icon(Icons.backspace_outlined),
+                    label: const Text('Delete'),
+                  ),
+                ],
+              ),
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
@@ -377,8 +487,9 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
 }
 
 class _CloseShiftSheet extends StatefulWidget {
-  const _CloseShiftSheet({required this.sessionId, required this.onFinalized});
+  const _CloseShiftSheet({required this.sessionId, required this.onBeforeFinalized, required this.onFinalized});
   final String sessionId;
+  final Future<void> Function() onBeforeFinalized;
   final VoidCallback onFinalized;
 
   @override
@@ -414,7 +525,6 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop();
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -423,9 +533,15 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text('Opening Float: KSh ${summary['openingCash']}'),
+              const SizedBox(height: 8),
+              Text('Offline Cash Sales Completed: KSh ${summary['totalCashSales']}'),
+              const SizedBox(height: 8),
+              Text('Cash Expenses Disbursed: KSh ${summary['totalCashExpenses'] ?? 0}'),
+              const SizedBox(height: 8),
               Text('Expected Drawer Balance: KSh ${summary['expectedBalance']}'),
               const SizedBox(height: 8),
-              Text('Actual Counted Cash: KSh ${summary['actualCounted']}'),
+              Text('Physical Counted Total: KSh ${summary['actualCounted']}'),
               const SizedBox(height: 8),
               Text(
                 'Variance: KSh ${summary['variance']}',
@@ -447,10 +563,7 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
               child: const Text('Review'),
             ),
             FilledButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                widget.onFinalized();
-              },
+              onPressed: () => _finalizeCloseout(dialogContext, summary),
               child: const Text('Finalize Closeout'),
             ),
           ],
@@ -467,6 +580,44 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  Future<void> _finalizeCloseout(BuildContext dialogContext, Map<String, dynamic> summary) async {
+    try {
+      await SyncService().queueChange(
+        id: 'sync-finalize-${widget.sessionId}',
+        entityName: 'CashSession',
+        operation: 'UPDATE',
+        payload: {
+          'action': 'FINALIZE_CLOSEOUT',
+          'sessionId': widget.sessionId,
+          'businessId': 'demo-business',
+          'userId': 'demo-user',
+          'summary': summary,
+          'notes': _notesController.text.trim(),
+        },
+      );
+      await widget.onBeforeFinalized();
+      await AuthService().clearSession();
+      if (!mounted) return;
+      Navigator.of(dialogContext).pop();
+      widget.onFinalized();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to finalize closeout: $error'),
+          backgroundColor: const Color(0xFFD32F2F),
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _closingCashController.dispose();
+    _notesController.dispose();
+    super.dispose();
   }
 
   @override
@@ -547,24 +698,83 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const String _deviceToken = 'flutter-pos-hardware-token-12345';
+  final AuthService _authService = AuthService();
   String step = 'splash';
   String pin = '';
+  bool isAuthenticating = false;
   final TextEditingController emailController = TextEditingController(text: 'admin@mobiduka.co.ke');
-  final TextEditingController passwordController = TextEditingController(text: '••••••••');
+  final TextEditingController passwordController = TextEditingController();
 
   void _handlePinPress(String digit) {
-    if (pin.length >= 4) return;
+    if (isAuthenticating || pin.length >= 4) return;
     final next = pin + digit;
     setState(() => pin = next);
     if (next.length == 4) {
-      Future.delayed(const Duration(milliseconds: 400), widget.onLogin);
+      _authenticateWithPin(next);
     }
   }
 
-  void _handlePinDelete() => setState(() {
-    if (pin.isEmpty) return;
-    pin = pin.substring(0, pin.length - 1);
-  });
+  void _handlePinDelete() {
+    if (isAuthenticating) return;
+    setState(() {
+      if (pin.isEmpty) return;
+      pin = pin.substring(0, pin.length - 1);
+    });
+  }
+
+  Future<void> _authenticateWithPin(String inputCode) async {
+    await _authenticate(() => _authService.loginWithPIN(
+          pin: inputCode,
+          deviceToken: _deviceToken,
+        ));
+  }
+
+  Future<void> _authenticateWithPassword() async {
+    await _authenticate(() => _authService.loginWithPassword(
+          identifier: emailController.text.trim(),
+          password: passwordController.text,
+          deviceToken: _deviceToken,
+        ));
+  }
+
+  Future<void> _authenticate(Future<AuthSession> Function() request) async {
+    if (isAuthenticating) return;
+    setState(() => isAuthenticating = true);
+    try {
+      await request();
+      if (!mounted) return;
+      widget.onLogin();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        pin = '';
+        emailController.clear();
+        passwordController.clear();
+        isAuthenticating = false;
+      });
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Sign in failed'),
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -663,16 +873,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                 borderRadius: BorderRadius.circular(16),
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(16),
-                                  onTap: () => isDelete ? _handlePinDelete() : _handlePinPress(key),
+                                  onTap: isAuthenticating ? null : () => isDelete ? _handlePinDelete() : _handlePinPress(key),
                                   child: Center(
-                                    child: Text(
-                                      key,
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: isDelete ? 20 : 24,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
+                                    child: isAuthenticating && key == '0'
+                                        ? const SizedBox(
+                                            width: 22,
+                                            height: 22,
+                                            child: CircularProgressIndicator(strokeWidth: 2, color: gold),
+                                          )
+                                        : Text(
+                                            key,
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: isDelete ? 20 : 24,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
                                   ),
                                 ),
                               );
@@ -847,7 +1063,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: widget.onLogin,
+                        onPressed: isAuthenticating ? null : _authenticateWithPassword,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF123A8F),
                           foregroundColor: Colors.white,
@@ -858,10 +1074,16 @@ class _LoginScreenState extends State<LoginScreen> {
                           shadowColor: const Color(0x403D73C8),
                           elevation: 4,
                         ),
-                        child: const Text(
-                          'Sign In',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                        ),
+                        child: isAuthenticating
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text(
+                                'Sign In',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                              ),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -1607,10 +1829,19 @@ class _POSScreenState extends State<POSScreen> {
   final TextEditingController _mpesaPhoneController = TextEditingController(text: '254');
   List<BluetoothDevice> _pairedPrinters = const [];
   BluetoothDevice? _selectedPrinter;
+  bool _isSearchingPrinters = false;
   String search = '';
   String category = 'All';
   String paymentMethod = 'cash';
   bool _mpesaRequestPending = false;
+  String? _receiptToken;
+  String? _completedSaleId;
+  List<Map<String, dynamic>> _completedSaleItems = const [];
+  int _completedSubtotal = 0;
+  int _completedDiscountAmount = 0;
+  int _completedTotal = 0;
+  int _completedDiscount = 0;
+  String _completedPaymentMethod = 'cash';
   int discount = 0;
   String view = 'pos';
 
@@ -1636,6 +1867,7 @@ class _POSScreenState extends State<POSScreen> {
   }
 
   Future<void> _loadPairedPrinters() async {
+    if (mounted) setState(() => _isSearchingPrinters = true);
     try {
       final printers = await _printerService.getPairedDevices();
       if (!mounted) return;
@@ -1645,6 +1877,8 @@ class _POSScreenState extends State<POSScreen> {
       });
     } catch (_) {
       // Bluetooth may be unavailable on simulators or unsupported devices.
+    } finally {
+      if (mounted) setState(() => _isSearchingPrinters = false);
     }
   }
 
@@ -1668,10 +1902,10 @@ class _POSScreenState extends State<POSScreen> {
     unawaited(_printerService.printReceipt(
       device: printer,
       storeName: 'MobiDuka Store',
-      invoiceNo: 'RCPT-${DateTime.now().millisecondsSinceEpoch % 100000}',
-      totalAmount: total.toDouble(),
-      paymentMode: paymentMethod,
-      items: cartItems,
+      invoiceNo: _completedSaleId ?? 'RCPT-${DateTime.now().millisecondsSinceEpoch % 100000}',
+      totalAmount: _completedTotal.toDouble(),
+      paymentMode: _completedPaymentMethod == 'mpesa' ? 'MPESA (${_receiptToken ?? 'VERIFIED'})' : _completedPaymentMethod.toUpperCase(),
+      items: receiptItems,
     ).then((_) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Receipt sent to printer.')));
     }).catchError((_) {
@@ -1800,7 +2034,7 @@ class _POSScreenState extends State<POSScreen> {
               children: [
                 CircularProgressIndicator(color: navy),
                 SizedBox(width: 16),
-                Expanded(child: Text('Checking M-Pesa confirmation.')),
+                Expanded(child: Text('Awaiting Customer PIN Entry... (60s)')),
               ],
             ),
           ),
@@ -1817,30 +2051,50 @@ class _POSScreenState extends State<POSScreen> {
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
       setState(() => _mpesaRequestPending = false);
       if (confirmation['status'] != 'SUCCESS') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: const Color(0xFFD32F2F), content: Text(confirmation['message'] as String? ?? 'M-Pesa payment was not confirmed.')),
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Payment not confirmed', style: TextStyle(color: Color(0xFFD32F2F))),
+            content: Text(confirmation['message'] as String? ?? 'Neither M-Pesa confirmation source verified this payment.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Keep Cart'),
+              ),
+            ],
+          ),
         );
         return;
       }
+      _receiptToken = confirmation['receipt']?.toString() ?? 'MPESA_VERIFIED';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: const Color(0xFF2E7D32), content: Text(confirmation['message'] as String? ?? 'Payment verified successfully.')),
+        SnackBar(backgroundColor: const Color(0xFF2E7D32), content: Text('Payment verified · Receipt ${_receiptToken!}')),
       );
     }
 
     final saleId = 'sale-${DateTime.now().millisecondsSinceEpoch}';
+    final saleItems = cartItems;
+    final saleSubtotal = subtotal;
+    final saleDiscountAmount = discountAmount;
+    final saleTotal = total;
+    final saleDiscount = discount;
+    final salePaymentMethod = paymentMethod;
     final salePayload = {
       'id': saleId,
       'businessId': 'demo-business',
       'deviceId': 'mobile-device',
       'userId': 'demo-owner',
-      'paymentMethod': paymentMethod,
-      'discount': discountAmount,
-      'subtotal': subtotal,
-      'total': total,
-      'items': cartItems.map((item) => {
-        'name': item['name'],
-        'price': item['price'],
-        'qty': item['qty'],
+      'paymentMethod': salePaymentMethod,
+      'discount': saleDiscountAmount,
+      'subtotal': saleSubtotal,
+      'total': saleTotal,
+      'mpesaRef': _receiptToken,
+      'items': saleItems.map((item) {
+        return {
+          'name': item['name'],
+          'price': item['price'],
+          'qty': item['qty'],
+        };
       }).toList(),
       'createdAt': DateTime.now().toIso8601String(),
     };
@@ -1878,6 +2132,14 @@ class _POSScreenState extends State<POSScreen> {
 
     if (mounted) {
       setState(() {
+        _completedSaleId = saleId;
+        _completedSaleItems = saleItems;
+        _completedSubtotal = saleSubtotal;
+        _completedDiscountAmount = saleDiscountAmount;
+        _completedTotal = saleTotal;
+        _completedDiscount = saleDiscount;
+        _completedPaymentMethod = salePaymentMethod;
+        cart.clear();
         discount = 0;
         view = 'receipt';
       });
@@ -1893,6 +2155,14 @@ class _POSScreenState extends State<POSScreen> {
       'emoji': product.emoji,
     };
   }).toList();
+
+  List<Map<String, dynamic>> get receiptItems => _completedSaleItems;
+
+  int get receiptSubtotal => _completedSubtotal;
+
+  int get receiptDiscountAmount => _completedDiscountAmount;
+
+  int get receiptTotal => _completedTotal;
 
   Widget _metricTile(String value, String label, Color tint) {
     return Expanded(
@@ -2003,7 +2273,7 @@ class _POSScreenState extends State<POSScreen> {
                   const SizedBox(height: 8),
                   const Text('Sale Complete!', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 4),
-                  Text('Receipt #${(1000 + DateTime.now().millisecondsSinceEpoch % 9000)}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
+                  Text('Receipt #${_receiptToken ?? (1000 + DateTime.now().millisecondsSinceEpoch % 9000)}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
                 ],
               ),
             ),
@@ -2026,7 +2296,7 @@ class _POSScreenState extends State<POSScreen> {
                         const SizedBox(height: 18),
                         const Divider(color: Color(0xFFE8ECF4), thickness: 1),
                         const SizedBox(height: 12),
-                        ...cartItems.map((item) => Padding(
+                        ...receiptItems.map((item) => Padding(
                               padding: const EdgeInsets.only(bottom: 8),
                               child: Row(
                                 children: [
@@ -2042,16 +2312,16 @@ class _POSScreenState extends State<POSScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             const Text('Subtotal', style: TextStyle(color: muted, fontSize: 13)),
-                            Text('KSh $subtotal', style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                            Text('KSh $receiptSubtotal', style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
                           ],
                         ),
                         const SizedBox(height: 8),
-                        if (discountAmount > 0)
+                        if (receiptDiscountAmount > 0)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('Discount ($discount%)', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w700)),
-                              Text('-KSh $discountAmount', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w700)),
+                              Text('Discount ($_completedDiscount%)', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w700)),
+                              Text('-KSh $receiptDiscountAmount', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w700)),
                             ],
                           ),
                         const SizedBox(height: 10),
@@ -2059,7 +2329,7 @@ class _POSScreenState extends State<POSScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             const Text('TOTAL', style: TextStyle(color: ink, fontSize: 16, fontWeight: FontWeight.w800)),
-                            Text('KSh $total', style: const TextStyle(color: navy, fontSize: 16, fontWeight: FontWeight.w800)),
+                            Text('KSh $receiptTotal', style: const TextStyle(color: navy, fontSize: 16, fontWeight: FontWeight.w800)),
                           ],
                         ),
                         const SizedBox(height: 10),
@@ -2071,22 +2341,22 @@ class _POSScreenState extends State<POSScreen> {
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(999),
-                                color: paymentMethod == 'mpesa'
+                                color: _completedPaymentMethod == 'mpesa'
                                     ? const Color(0xFFE8F5E9)
-                                    : paymentMethod == 'credit'
+                                    : _completedPaymentMethod == 'credit'
                                         ? const Color(0xFFFFEBEE)
                                         : const Color(0xFFE3EAF8),
                               ),
                               child: Text(
-                                paymentMethod == 'mpesa'
+                                _completedPaymentMethod == 'mpesa'
                                     ? 'M-Pesa'
-                                    : paymentMethod == 'credit'
+                                    : _completedPaymentMethod == 'credit'
                                         ? 'Credit'
                                         : 'Cash',
                                 style: TextStyle(
-                                  color: paymentMethod == 'mpesa'
+                                  color: _completedPaymentMethod == 'mpesa'
                                       ? const Color(0xFF2E7D32)
-                                      : paymentMethod == 'credit'
+                                      : _completedPaymentMethod == 'credit'
                                           ? const Color(0xFFD32F2F)
                                           : navy,
                                   fontSize: 10,
@@ -2100,7 +2370,24 @@ class _POSScreenState extends State<POSScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _isSearchingPrinters
+                            ? const LinearProgressIndicator(color: navy)
+                            : _pairedPrinters.isEmpty
+                              ? const Text('No paired printers found', style: TextStyle(color: muted, fontSize: 12))
+                              : const SizedBox.shrink(),
+                        ),
+                      IconButton(
+                        tooltip: 'Refresh paired printers',
+                        onPressed: _isSearchingPrinters ? null : _loadPairedPrinters,
+                        icon: const Icon(Icons.refresh, color: Color(0xFF2E7D32)),
+                      ),
+                    ],
+                  ),
                   if (_pairedPrinters.isNotEmpty) ...[
+                    const SizedBox(height: 8),
                     DropdownButtonFormField<BluetoothDevice>(
                       value: _selectedPrinter,
                       decoration: const InputDecoration(labelText: 'Receipt printer', prefixIcon: Icon(Icons.print_outlined), border: OutlineInputBorder()),
@@ -2130,6 +2417,9 @@ class _POSScreenState extends State<POSScreen> {
                             setState(() {
                               cart.clear();
                               discount = 0;
+                              _receiptToken = null;
+                              _completedSaleId = null;
+                              _completedSaleItems = const [];
                               view = 'pos';
                               paymentMethod = 'cash';
                             });
@@ -4065,10 +4355,17 @@ class _CustomerScreenState extends State<CustomerScreen> {
 }
 
 class MoreScreen extends StatelessWidget {
-  const MoreScreen({required this.onOpen, required this.onLogout, required this.onCloseShift});
+  const MoreScreen({required this.onOpen, required this.role, required this.isDarkMode, required this.onLogout, required this.onCloseShift});
   final ValueChanged<String> onOpen;
+  final String role;
+  final bool isDarkMode;
   final VoidCallback onLogout;
   final VoidCallback onCloseShift;
+
+  Color get pageBackground => isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
+  Color get panelBackground => isDarkMode ? const Color(0xFF192235) : Colors.white;
+  Color get primaryText => isDarkMode ? Colors.white : ink;
+  Color get dividerColor => isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
 
   final List<Map<String, dynamic>> _menuSections = const [
     {
@@ -4100,9 +4397,11 @@ class MoreScreen extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        children: [
+  Widget build(BuildContext context) => Container(
+        color: pageBackground,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          children: [
           Container(
             padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
             decoration: const BoxDecoration(
@@ -4194,7 +4493,15 @@ class MoreScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          ..._menuSections.map((section) => _menuSection(section['section'] as String, section['items'] as List<Map<String, dynamic>>)),
+          ..._menuSections
+              .map((section) {
+                final items = (section['items'] as List<Map<String, dynamic>>).where((item) {
+                  if (role != 'CASHIER') return true;
+                  return item['screen'] == 'Expense Tracking';
+                }).toList();
+                return items.isEmpty ? null : _menuSection(section['section'] as String, items);
+              })
+              .whereType<Widget>(),
           const SizedBox(height: 12),
           TextButton.icon(
             onPressed: onCloseShift,
@@ -4226,14 +4533,15 @@ class MoreScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          const Center(
+          Center(
             child: Text(
               'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
               textAlign: TextAlign.center,
-              style: TextStyle(color: muted, fontSize: 11, height: 1.5),
+              style: TextStyle(color: isDarkMode ? const Color(0xFF8290AD) : muted, fontSize: 11, height: 1.5),
             ),
           ),
-        ],
+          ],
+        ),
       );
 
   Widget _menuSection(String title, List<Map<String, dynamic>> items) => Column(
@@ -4253,7 +4561,7 @@ class MoreScreen extends StatelessWidget {
           ),
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: panelBackground,
               borderRadius: BorderRadius.circular(14),
               boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
             ),
@@ -4271,7 +4579,7 @@ class MoreScreen extends StatelessWidget {
                       decoration: BoxDecoration(
                         border: Border(
                           bottom: BorderSide(
-                            color: i < items.length - 1 ? const Color(0xFFF0F3F9) : Colors.transparent,
+                            color: i < items.length - 1 ? dividerColor : Colors.transparent,
                             width: 1,
                           ),
                         ),
@@ -4293,7 +4601,7 @@ class MoreScreen extends StatelessWidget {
                           Expanded(
                             child: Text(
                               item['label'] as String,
-                              style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w600),
+                              style: TextStyle(color: primaryText, fontSize: 14, fontWeight: FontWeight.w600),
                             ),
                           ),
                           if (badge != null)
@@ -4327,8 +4635,10 @@ class MoreScreen extends StatelessWidget {
 }
 
 class SettingsDetailScreen extends StatefulWidget {
-  const SettingsDetailScreen({required this.onBack, super.key});
+  const SettingsDetailScreen({required this.onBack, required this.isDarkMode, required this.onThemeChanged, super.key});
   final VoidCallback onBack;
+  final bool isDarkMode;
+  final ValueChanged<bool> onThemeChanged;
 
   @override
   State<SettingsDetailScreen> createState() => _SettingsDetailScreenState();
@@ -4340,6 +4650,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   bool dailyReport = false;
   bool autoBackup = true;
   bool mpesaEnabled = true;
+
+  bool get isDarkMode => widget.isDarkMode;
+  Color get pageBackground => isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
+  Color get panelBackground => isDarkMode ? const Color(0xFF192235) : Colors.white;
+  Color get dividerColor => isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
 
   Widget _toggle(bool value, ValueChanged<bool> onChanged) {
     return GestureDetector(
@@ -4372,7 +4687,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFF5F7FA),
+      color: pageBackground,
       child: Column(
         children: [
           Container(
@@ -4405,7 +4720,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
                   ),
@@ -4420,11 +4735,28 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                const Text('Appearance', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: panelBackground,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: isDarkMode ? const [] : const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                  ),
+                  child: _settingsToggleRow(
+                    'Dark Mode',
+                    'Use a darker interface across the store app',
+                    isDarkMode,
+                    widget.onThemeChanged,
+                    isLast: true,
+                  ),
+                ),
+                const SizedBox(height: 16),
                 const Text('Preferences', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
                   ),
@@ -4443,7 +4775,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
                   ),
@@ -4461,7 +4793,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
                   ),
@@ -4492,7 +4824,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : const Color(0xFFF0F3F9), width: 1)),
+        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4503,7 +4835,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
             child: Text(
               value,
               textAlign: TextAlign.right,
-              style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700),
+              style: TextStyle(color: isDarkMode ? Colors.white : ink, fontSize: 13, fontWeight: FontWeight.w700),
             ),
           ),
         ],
@@ -4515,7 +4847,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : const Color(0xFFF0F3F9), width: 1)),
+        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
       ),
       child: Row(
         children: [
@@ -4523,7 +4855,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(label, style: TextStyle(color: isDarkMode ? Colors.white : ink, fontSize: 13, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 2),
                 Text(sub, style: const TextStyle(color: muted, fontSize: 11)),
               ],
@@ -4543,7 +4875,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : const Color(0xFFF0F3F9), width: 1)),
+        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
       ),
       child: Row(
         children: [
@@ -4583,7 +4915,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : const Color(0xFFF0F3F9), width: 1)),
+          border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
         ),
         child: Row(
           children: [
@@ -4616,9 +4948,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
 }
 
 class DetailScreen extends StatefulWidget {
-  const DetailScreen({required this.title, required this.onBack});
+  const DetailScreen({required this.title, required this.onBack, required this.isDarkMode, required this.onThemeChanged});
   final String title;
   final VoidCallback onBack;
+  final bool isDarkMode;
+  final ValueChanged<bool> onThemeChanged;
   @override
   State<DetailScreen> createState() => _DetailScreenState();
 }
@@ -4658,7 +4992,7 @@ class _DetailScreenState extends State<DetailScreen> {
       case 'Backup & Cloud Sync':
         return [const Card(child: ListTile(leading: Icon(Icons.cloud_done, color: Colors.green), title: Text('Cloud Backup'), subtitle: Text('Last backup: Today, 06:00 AM\nAll data synced'))), FilledButton.icon(onPressed: () {}, icon: const Icon(Icons.cloud_upload), label: const Text('Backup Now')), SwitchListTile(title: const Text('Auto Backup'), subtitle: const Text('Every day at 6:00 AM'), value: autoBackup, onChanged: (value) => setState(() => autoBackup = value)), SwitchListTile(title: const Text('Wi-Fi Only'), value: wifiOnly, onChanged: (value) => setState(() => wifiOnly = value))];
       case 'Settings':
-        return [SettingsDetailScreen(onBack: widget.onBack)];
+        return [SettingsDetailScreen(onBack: widget.onBack, isDarkMode: widget.isDarkMode, onThemeChanged: widget.onThemeChanged)];
       case 'User Profile':
         return [UserProfileDetailScreen(onBack: widget.onBack)];
       default:
@@ -5137,6 +5471,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
       supplier: row['supplierName'] as String? ?? 'Supplier',
       date: _formatDisplayDate(row['createdAt'] as String?),
       items: decodedItems.length,
+      itemLines: decodedItems.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList(),
       total: row['total'] as int? ?? 0,
       status: status,
       dueDate: _formatDisplayDate(row['expectedDeliveryDate'] as String?),
@@ -5215,12 +5550,6 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
       },
     );
 
-    await _syncService.processCloudSync(
-      businessId: 'demo-business',
-      deviceId: 'mobile-device',
-      userId: 'demo-owner',
-    );
-
     if (!mounted) return;
 
     setState(() {
@@ -5236,8 +5565,13 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     await _loadOrders();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Procurement request queued and synced.')),
+      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Procurement request saved offline.')),
     );
+    unawaited(_syncService.processCloudSync(
+      businessId: 'demo-business',
+      deviceId: 'mobile-device',
+      userId: 'demo-owner',
+    ));
   }
 
   Future<void> _markOrderReceived(_PurchaseOrderEntry order) async {
@@ -5299,12 +5633,6 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
         'receivedAt': updated['receivedAt'],
       },
     );
-    await _syncService.processCloudSync(
-      businessId: 'demo-business',
-      deviceId: 'mobile-device',
-      userId: 'demo-owner',
-    );
-
     if (!mounted) return;
 
     setState(() {
@@ -5313,8 +5641,13 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     await _loadOrders();
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Stock was refreshed and the receipt was recorded.')),
+      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Stock was refreshed and the receipt was recorded offline.')),
     );
+    unawaited(_syncService.processCloudSync(
+      businessId: 'demo-business',
+      deviceId: 'mobile-device',
+      userId: 'demo-owner',
+    ));
   }
 
   List<_PurchaseOrderEntry> get filteredOrders {
@@ -5697,7 +6030,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
               children: [
                 const Text('Order Items', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
-                ...orderItems.map((item) => Container(
+                ...order.itemLines.map((item) => Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
@@ -5851,11 +6184,11 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
               children: [
                 Row(
                   children: [
-                    _topMetric('KSh 191K', 'This Month', navy),
+                    _topMetric('KSh ${orders.fold<int>(0, (sum, order) => sum + order.total).toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}', 'Total Orders', navy),
                     const SizedBox(width: 8),
-                    _topMetric('3', 'Pending', const Color(0xFFF9A825)),
+                    _topMetric('${orders.where((order) => order.status == 'pending').length}', 'Pending', const Color(0xFFF9A825)),
                     const SizedBox(width: 8),
-                    _topMetric('2', 'Delivered', const Color(0xFF2E7D32)),
+                    _topMetric('${orders.where((order) => order.status == 'delivered').length}', 'Delivered', const Color(0xFF2E7D32)),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -5875,6 +6208,7 @@ class _PurchaseOrderEntry {
     required this.supplier,
     required this.date,
     required this.items,
+    required this.itemLines,
     required this.total,
     required this.status,
     required this.dueDate,
@@ -5884,6 +6218,7 @@ class _PurchaseOrderEntry {
   final String supplier;
   final String date;
   final int items;
+  final List<Map<String, dynamic>> itemLines;
   final int total;
   final String status;
   final String dueDate;
@@ -6479,7 +6814,7 @@ class EmployeeEntry {
     required this.color,
   });
 
-  final int id;
+  final String id;
   final String name;
   final String role;
   final String phone;
@@ -6502,13 +6837,8 @@ class EmployeeScreen extends StatefulWidget {
 }
 
 class _EmployeeScreenState extends State<EmployeeScreen> {
-  final List<EmployeeEntry> _employees = const [
-    EmployeeEntry(id: 1, name: 'Admin User', role: 'Store Manager', phone: '0712 345 678', email: 'admin@mobiduka.co.ke', pin: '1234', shift: 'Morning', salary: 55000, startDate: '1 Jan 2024', active: true, initials: 'AU', color: Color(0xFF123A8F)),
-    EmployeeEntry(id: 2, name: 'Kevin Ochieng', role: 'Cashier', phone: '0723 456 789', email: 'kevin@mobiduka.co.ke', pin: '2345', shift: 'Morning', salary: 28000, startDate: '15 Mar 2024', active: true, initials: 'KO', color: Color(0xFF2E7D32)),
-    EmployeeEntry(id: 3, name: 'Fatuma Hassan', role: 'Stock Keeper', phone: '0734 567 890', email: 'fatuma@mobiduka.co.ke', pin: '3456', shift: 'Afternoon', salary: 30000, startDate: '1 Jun 2024', active: true, initials: 'FH', color: Color(0xFF00796B)),
-    EmployeeEntry(id: 4, name: 'Brian Mutua', role: 'Cashier', phone: '0745 678 901', email: 'brian@mobiduka.co.ke', pin: '4567', shift: 'Evening', salary: 26000, startDate: '20 Aug 2024', active: false, initials: 'BM', color: Color(0xFFF57C00)),
-    EmployeeEntry(id: 5, name: 'Linda Auma', role: 'Supervisor', phone: '0756 789 012', email: 'linda@mobiduka.co.ke', pin: '5678', shift: 'Morning', salary: 38000, startDate: '10 Feb 2025', active: true, initials: 'LA', color: Color(0xFF7B1FA2)),
-  ];
+  final EmployeeRepository _employeeRepository = EmployeeRepository();
+  List<EmployeeEntry> _employees = [];
 
   final Map<String, Color> _roleColors = const {
     'Store Manager': Color(0xFF123A8F),
@@ -6538,6 +6868,39 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     'shift': 'Morning',
     'salary': '',
   };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEmployees();
+  }
+
+  Future<void> _loadEmployees() async {
+    final rows = await _employeeRepository.loadEmployees();
+    if (!mounted) return;
+    setState(() => _employees = rows.map(_mapEmployee).toList());
+  }
+
+  EmployeeEntry _mapEmployee(Map<String, dynamic> row) {
+    final role = (row['role'] as String? ?? 'CASHIER').toUpperCase();
+    final displayRole = role == 'OWNER' || role == 'MANAGER' ? 'Store Manager' : '${role[0]}${role.substring(1).toLowerCase()}';
+    final name = row['fullName'] as String? ?? 'Employee';
+    final initials = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).map((part) => part[0]).take(2).join().toUpperCase();
+    return EmployeeEntry(
+      id: row['id'] as String? ?? '',
+      name: name,
+      role: displayRole,
+      phone: row['phone'] as String? ?? '',
+      email: row['email'] as String? ?? '',
+      pin: '',
+      shift: 'Unassigned',
+      salary: 0,
+      startDate: row['createdAt'] as String? ?? 'TBD',
+      active: row['status'] == 'ACTIVE',
+      initials: initials.isEmpty ? 'EM' : initials,
+      color: _roleColors[displayRole] ?? const Color(0xFF123A8F),
+    );
+  }
 
   void _openAdd() {
     setState(() {
@@ -6569,14 +6932,29 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     });
   }
 
-  void _saveForm() {
+  Future<void> _saveForm() async {
     final name = (_form['name'] as String).trim();
     if (name.isEmpty) return;
+
+    final selectedRole = (_form['role'] as String).toUpperCase();
+    await _employeeRepository.saveEmployee(
+      businessId: 'demo-business',
+      id: _editing?.id,
+      fullName: name,
+      email: _form['email'] as String,
+      phone: _form['phone'] as String,
+      role: selectedRole == 'STORE MANAGER' ? 'OWNER' : selectedRole == 'MANAGER' ? 'MANAGER' : 'CASHIER',
+      pin: (_form['pin'] as String).trim().isEmpty ? null : (_form['pin'] as String).trim(),
+    );
 
     setState(() {
       _showForm = false;
       _selected = null;
     });
+    await _loadEmployees();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Employee saved offline.')));
+    unawaited(_employeeRepository.syncPending(userId: 'demo-owner'));
   }
 
   @override
@@ -6655,7 +7033,7 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: ['Store Manager', 'Supervisor', 'Cashier', 'Stock Keeper', 'Accountant'].map((option) {
+                          children: ['Store Manager', 'Manager', 'Cashier'].map((option) {
                             final selected = role == option;
                             return ChoiceChip(
                               label: Text(option),
@@ -7545,6 +7923,7 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
   final CreditService _creditService = CreditService.instance;
   final SyncService _syncService = SyncService();
   List<CreditAccount> _accounts = const [];
+  List<Map<String, dynamic>> _ledger = const [];
   bool _loading = true;
 
   @override
@@ -7554,10 +7933,14 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
   }
 
   Future<void> _loadAccounts() async {
-    final accounts = await _creditService.loadCreditAccounts();
+    final results = await Future.wait<dynamic>([
+      _creditService.loadCreditAccounts(),
+      _creditService.loadCreditLedger(),
+    ]);
     if (!mounted) return;
     setState(() {
-      _accounts = accounts;
+      _accounts = results[0] as List<CreditAccount>;
+      _ledger = results[1] as List<Map<String, dynamic>>;
       _loading = false;
     });
   }
@@ -7568,12 +7951,14 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.of(sheetContext).size.height,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             const Text('Receive Debt Repayment', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
             Text('${account.customer} · Outstanding KSh ${account.balance.toStringAsFixed(0)}', style: const TextStyle(color: muted, fontSize: 12)),
@@ -7582,7 +7967,7 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
               controller: amountController,
               autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Collected Cash/M-Pesa Amount', prefixText: 'KSh ', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'Collected Repayment Amount', prefixText: 'KSh ', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 16),
             SizedBox(
@@ -7596,7 +7981,8 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                 child: const Text('Record Repayment'),
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -7623,12 +8009,12 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
         'amount': amount,
       },
     );
-    await _syncService.processCloudSync(businessId: 'demo-business', deviceId: 'mobile-device', userId: 'demo-owner');
     await _loadAccounts();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Debt repayment recorded successfully.')),
     );
+    unawaited(_syncService.processCloudSync(businessId: 'demo-business', deviceId: 'mobile-device', userId: 'demo-owner'));
   }
 
   int _daysOutstanding(CreditAccount account) {
@@ -7640,11 +8026,21 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
   }
 
   String _lastTransactionLabel(CreditAccount account) {
-    final value = account.lastTransactionAt;
+    final ledgerEntry = _ledger.cast<Map<String, dynamic>?>().firstWhere(
+      (entry) => entry?['customerId'] == account.customerId,
+      orElse: () => null,
+    );
+    final value = ledgerEntry?['createdAt'] as String? ?? account.lastTransactionAt;
     if (value == null) return 'No payments recorded';
     final date = DateTime.tryParse(value);
     if (date == null) return 'Recent transaction';
     return 'Last: ${date.day}/${date.month}/${date.year}';
+  }
+
+  Color _balanceColor(double balance) {
+    if (balance >= 10000) return const Color(0xFFD32F2F);
+    if (balance > 0) return const Color(0xFFF9A825);
+    return const Color(0xFF2E7D32);
   }
 
   @override
@@ -7707,8 +8103,8 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                     const SizedBox(height: 4),
                     Text(
                       'KSh ${total.toStringAsFixed(0)}',
-                      style: const TextStyle(
-                        color: Color(0xFFFF6B6B),
+                      style: TextStyle(
+                        color: _balanceColor(total),
                         fontSize: 30,
                         fontWeight: FontWeight.w900,
                       ),
@@ -7737,6 +8133,7 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                     : _accounts.map((account) {
               final daysOld = _daysOutstanding(account);
               final hasOutstanding = account.balance > 0;
+                      final balanceColor = _balanceColor(account.balance);
               return Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 10),
@@ -7800,7 +8197,7 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                                 ? 'Added today'
                                 : '${daysOld}d outstanding',
                             style: TextStyle(
-                              color: daysOld > 3 ? const Color(0xFFD32F2F) : const Color(0xFFF9A825),
+                              color: hasOutstanding ? balanceColor : const Color(0xFF2E7D32),
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -7814,13 +8211,13 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                           decoration: BoxDecoration(
-                            color: hasOutstanding ? const Color(0xFFFFEBEE) : const Color(0xFFE8F5E9),
+                            color: hasOutstanding ? balanceColor.withValues(alpha: 0.12) : const Color(0xFFE8F5E9),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
                             'KSh ${account.balance.toStringAsFixed(0)}',
                             style: TextStyle(
-                              color: hasOutstanding ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+                              color: balanceColor,
                               fontSize: 16,
                               fontWeight: FontWeight.w800,
                             ),
@@ -7871,10 +8268,12 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> {
   int tab = 0;
-  final List<double> week = const [62000.0, 84250.0, 71000.0, 95000.0, 110000.0, 130000.0, 78000.0];
-  final List<double> profit = const [15500.0, 22100.0, 18200.0, 25400.0, 30800.0, 38000.0, 20200.0];
+  final ReportsService _reportsService = ReportsService();
+  List<ReportTrend> _trends = const [];
+  ReportsData? _reportData;
+  bool _loading = true;
+  String? _error;
   final List<double> months = const [1.8, 2.1, 2.4, 2.0, 2.7, 3.1, 2.9, 3.4, 3.0, 3.6, 3.2, 4.1];
-  final List<String> days = const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   final List<String> monthLabels = const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   final List<Map<String, dynamic>> categoryData = const [
     {'name': 'Flour & Grains', 'value': 28, 'color': Color(0xFF123A8F)},
@@ -7885,10 +8284,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _loadReports();
+  }
+
+  Future<void> _loadReports() async {
+    try {
+      final data = await _reportsService.load(businessId: 'demo-business');
+      if (!mounted) return;
+      setState(() {
+        _reportData = data;
+        _trends = data.trends;
+        _loading = false;
+        _error = data.isOffline ? 'Live reports unavailable. Showing offline queue data.' : null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Unable to load reports: $error';
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final weekSales = week.reduce((a, b) => a + b);
-    final weekProfit = profit.reduce((a, b) => a + b);
-    final avgMargin = weekSales > 0 ? (weekProfit / weekSales) * 100 : 0.0;
+    final report = _reportData;
+    final weekSales = report?.totalRevenue ?? 0;
+    final avgMargin = report?.profitMarginPercentage ?? 0;
 
     return Column(
       children: [
@@ -7933,19 +8357,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                 ],
               ),
-              const Align(
+              Align(
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: EdgeInsets.only(top: 12),
-                  child: Text('Week of Sep 2026 · Up to Thu', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  child: Text('Live reporting window · Last 7 days', style: TextStyle(color: Colors.white60, fontSize: 12)),
                 ),
               ),
               const SizedBox(height: 14),
               Row(
                 children: [
-                  _metricCard("Today's Sales", 'KSh ${(week[3] / 1000).round()}K', 'Thu'),
-                  _metricCard('Week Sales', 'KSh ${(weekSales / 1000).round()}K', 'Mon – Thu'),
-                  _metricCard('Avg Margin', '${avgMargin.toStringAsFixed(1)}%', 'This week'),
+                  _metricCard("Today's Sales", 'KSh ${_trends.isEmpty ? 0 : (_trends.last.revenue / 1000).round()}K', _trends.isEmpty ? '—' : _formatDate(_trends.last.date)),
+                  _metricCard('Week Sales', 'KSh ${(weekSales / 1000).round()}K', 'COGS ${(report?.totalCostOfGoods ?? 0).round()} · Exp ${(report?.totalExpenses ?? 0).round()}'),
+                  _metricCard('Net Profit', 'KSh ${((report?.netProfit ?? 0) / 1000).round()}K', '${avgMargin.toStringAsFixed(1)}% margin'),
                 ],
               ),
             ],
@@ -7969,6 +8393,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (_loading) const LinearProgressIndicator(color: gold),
+              if (_error != null) Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(_error!, style: const TextStyle(color: muted, fontSize: 11))),
               if (tab == 0) _daily(),
               if (tab == 1) _monthly(),
               if (tab == 2) _profit(),
@@ -8024,6 +8450,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ),
       );
 
+  String _formatDate(DateTime date) => '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
+
+  double get _chartMaxY {
+    final maximum = _trends.fold<double>(0, (value, item) => item.revenue > value ? item.revenue : value);
+    return maximum <= 0 ? 1 : maximum * 1.2;
+  }
+
+  double get _profitMaxY {
+    final maximum = _trends.fold<double>(0, (value, item) => item.profit > value ? item.profit : value);
+    return maximum <= 0 ? 1 : maximum * 1.2;
+  }
+
   Widget _daily() => Column(
         children: [
           Section(
@@ -8032,10 +8470,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
               children: [
                 SizedBox(
                   height: 170,
-                  child: LineChart(
-                    LineChartData(
+                  child: Stack(
+                    children: [
+                      LineChart(
+                        LineChartData(
                       minY: 0,
-                      maxY: 140000,
+                      maxY: _chartMaxY,
                       gridData: const FlGridData(show: true, drawVerticalLine: false),
                       titlesData: FlTitlesData(
                         leftTitles: AxisTitles(
@@ -8044,8 +8484,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         bottomTitles: AxisTitles(
                           sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
                             final index = value.toInt();
-                            if (index < 0 || index >= days.length) return const Text('');
-                            final label = days[index];
+                            if (index < 0 || index >= _trends.length) return const Text('');
+                            final label = _formatDate(_trends[index].date);
                             return Text(label, style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10));
                           }),
                         ),
@@ -8053,11 +8493,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                       ),
                       borderData: FlBorderData(show: false),
-                      lineBarsData: [
-                        _line(week, navy),
-                        _line(profit, gold),
-                      ],
-                    ),
+                          lineBarsData: [
+                            _line(_trends.map((item) => item.revenue).toList(), navy),
+                            _line(_trends.map((item) => item.profit).toList(), gold),
+                          ],
+                        ),
+                      ),
+                      if (_loading)
+                        const Positioned.fill(
+                          child: ColoredBox(
+                            color: Color(0xB3FFFFFF),
+                            child: Center(child: CircularProgressIndicator(color: navy)),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -8099,15 +8548,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget _dailyBreakdown() => Section(
         title: 'Daily Breakdown',
         child: Column(
-          children: List.generate(week.length, (index) {
-            final value = week[index];
-            final label = days[index];
-            final width = (value / 130000).clamp(0.0, 1.0);
+          children: List.generate(_trends.length, (index) {
+            final value = _trends[index].revenue;
+            final label = _formatDate(_trends[index].date);
+            final width = (value / _chartMaxY).clamp(0.0, 1.0);
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 children: [
-                  SizedBox(width: 34, child: Text(label, style: TextStyle(color: index == 3 ? navy : const Color(0xFF6B7A99), fontSize: 11, fontWeight: index == 3 ? FontWeight.w800 : FontWeight.w600))),
+                  SizedBox(width: 44, child: Text(label, style: TextStyle(color: index == _trends.length - 1 ? navy : const Color(0xFF6B7A99), fontSize: 11, fontWeight: index == _trends.length - 1 ? FontWeight.w800 : FontWeight.w600))),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Stack(
@@ -8125,7 +8574,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           child: Container(
                             height: 7,
                             decoration: BoxDecoration(
-                              color: index == 3 ? gold : navy,
+                              color: index == _trends.length - 1 ? gold : navy,
                               borderRadius: BorderRadius.circular(4),
                             ),
                           ),
@@ -8137,10 +8586,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   SizedBox(
                     width: 58,
                     child: Text(
-                      index <= 3 ? 'KSh ${(value / 1000).round()}K' : '—',
+                      'KSh ${(value / 1000).round()}K',
                       textAlign: TextAlign.right,
                       style: TextStyle(
-                        color: index <= 3 ? const Color(0xFF0D1B3D) : const Color(0xFFC8D0E0),
+                        color: const Color(0xFF0D1B3D),
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                       ),
@@ -8279,7 +8728,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               height: 190,
               child: BarChart(
                 BarChartData(
-                  maxY: 45000,
+                  maxY: _profitMaxY,
                   borderData: FlBorderData(show: false),
                   gridData: const FlGridData(show: true, drawVerticalLine: false),
                   titlesData: FlTitlesData(
@@ -8289,19 +8738,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
                         final index = value.toInt();
-                        if (index < 0 || index >= days.length) return const Text('');
-                        return Text(days[index], style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10));
+                        if (index < 0 || index >= _trends.length) return const Text('');
+                        return Text(_formatDate(_trends[index].date), style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10));
                       }),
                     ),
                     rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                     topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                   ),
-                  barGroups: profit.asMap().entries.map((entry) {
+                  barGroups: _trends.asMap().entries.map((entry) {
                     return BarChartGroupData(
                       x: entry.key,
                       barRods: [
                         BarChartRodData(
-                          toY: entry.value,
+                          toY: entry.value.profit,
                           color: entry.key == 3 ? gold : Colors.green,
                           width: 20,
                           borderRadius: const BorderRadius.vertical(top: Radius.circular(5)),
