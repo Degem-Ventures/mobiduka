@@ -286,24 +286,34 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       MaterialPageRoute(
         builder: (_) => BarcodeScannerView(
           onProductScanned: (product) {
-            final pos = _posScreenKey.currentState;
-            if (pos == null) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Open POS before scanning products.')));
-              return;
-            }
-            pos.addToCart(product);
+            _addScannedProductToPos(product);
           },
           onCustomerQrScanned: (account) {
-            final pos = _posScreenKey.currentState;
-            if (pos == null) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Open POS before attaching a customer.')));
-              return;
-            }
-            pos.attachCreditAccount(account);
+            _attachScannedCustomerToPos(account);
           },
         ),
       ),
     );
+  }
+
+  void _addScannedProductToPos(Product product) {
+    const posTab = 1;
+    if (tab != posTab) {
+      setState(() => tab = posTab);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _posScreenKey.currentState?.addToCart(product));
+      return;
+    }
+    _posScreenKey.currentState?.addToCart(product);
+  }
+
+  void _attachScannedCustomerToPos(CreditAccount account) {
+    const posTab = 1;
+    if (tab != posTab) {
+      setState(() => tab = posTab);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _posScreenKey.currentState?.attachCreditAccount(account));
+      return;
+    }
+    _posScreenKey.currentState?.attachCreditAccount(account);
   }
 
   Widget _navButton(int index, IconData icon, String label) {
@@ -336,26 +346,14 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
         isDarkMode: isDarkMode,
         onThemeChanged: (value) => setState(() => isDarkMode = value),
       );
-    } else if (activeRole == 'CASHIER') {
-      body = tab == 0
-          ? POSScreen(key: _posScreenKey)
-          : MoreScreen(
-              onOpen: open,
-              role: activeRole,
-              isDarkMode: isDarkMode,
-              onLogout: _logout,
-              onCloseShift: _handleCloseShift,
-            );
     } else {
-      switch (tab.clamp(0, 4).toInt()) {
+      switch (tab.clamp(0, 3).toInt()) {
         case 0:
           body = const DashboardScreen();
         case 1:
           body = POSScreen(key: _posScreenKey);
         case 2:
           body = const ProductScreen(title: 'Inventory & Stock');
-        case 3:
-          body = const CustomerScreen();
         default:
           body = MoreScreen(
             onOpen: open,
@@ -396,49 +394,57 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(44),
                 child: Stack(children: [
-                  Column(children: [
-                    Expanded(child: body),
-                    if (loggedIn && detail == null)
-                      SizedBox(
-                        height: 64,
-                        child: BottomAppBar(
+                  Scaffold(
+                  backgroundColor: Colors.transparent,
+                  body: body,
+                  bottomNavigationBar: loggedIn && detail == null
+                      ? BottomAppBar(
                           shape: const CircularNotchedRectangle(),
                           notchMargin: 7,
                           color: const Color(0xFF0A0A0A),
-                          child: Row(
-                            children: activeRole == 'CASHIER'
-                                ? [
-                                    Expanded(child: _navButton(0, Icons.point_of_sale_outlined, 'POS')),
-                                    const SizedBox(width: 72),
-                                    Expanded(child: _navButton(1, Icons.menu, 'More')),
-                                  ]
-                                : [
-                                    Expanded(child: _navButton(0, Icons.dashboard_outlined, 'Dashboard')),
-                                    Expanded(child: _navButton(1, Icons.point_of_sale_outlined, 'POS')),
-                                    const SizedBox(width: 72),
-                                    Expanded(child: _navButton(2, Icons.inventory_2_outlined, 'Inventory')),
-                                    Expanded(child: _navButton(3, Icons.people_outline, 'Customers')),
-                                    Expanded(child: _navButton(4, Icons.menu, 'More')),
-                                  ],
+                          child: SizedBox(
+                            height: 64,
+                            child: Row(
+                              children: [
+                                Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
+                                Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+                                const SizedBox(width: 72),
+                                Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
+                                Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
+                              ],
+                            ),
                           ),
-                        ),
-                      ),
-                  ]),
-                  if (loggedIn && detail == null)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 28,
-                      child: Center(
-                        child: FloatingActionButton(
-                          onPressed: _openUniversalScanner,
-                          backgroundColor: gold,
-                          foregroundColor: ink,
-                          tooltip: 'Scan barcode or QR code',
-                          child: const Icon(Icons.qr_code_scanner),
-                        ),
-                      ),
-                    ),
+                        )
+                      : null,
+                  floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+                  floatingActionButton: loggedIn && detail == null
+                      ? Container(
+                          width: 68,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: gold, width: 2.5),
+                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
+                          ),
+                          child: FloatingActionButton(
+                            onPressed: _openUniversalScanner,
+                            backgroundColor: navy,
+                            foregroundColor: Colors.white,
+                            tooltip: 'Scan barcode or QR code',
+                            shape: const CircleBorder(),
+                            child: const Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.qr_code_scanner, size: 24),
+                                SizedBox(height: 2),
+                                Text('SCAN', style: TextStyle(color: gold, fontSize: 9, fontWeight: FontWeight.w900)),
+                              ],
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+                // Keep the device-style top speaker detail above the app shell.
                   Positioned(
                     top: 0,
                     left: 0,
