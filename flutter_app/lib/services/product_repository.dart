@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -106,6 +107,15 @@ class ProductRepository {
   }
 
   Future<void> upsertProduct(Product product) async {
+    if (kIsWeb) {
+      final index = products.indexWhere((item) => item.name == product.name);
+      if (index >= 0) {
+        products[index] = product;
+      } else {
+        products.insert(0, product);
+      }
+      return;
+    }
     final db = await database;
     await db.insert(
       'products',
@@ -149,6 +159,12 @@ class ProductRepository {
   }
 
   Future<Product?> findByBarcode(String barcode) async {
+    if (kIsWeb) {
+      for (final product in products) {
+        if (product.barcode == barcode) return product;
+      }
+      return null;
+    }
     final db = await database;
     final rows = await db.query('products', where: 'barcode = ?', whereArgs: [barcode], limit: 1);
     if (rows.isEmpty) return null;

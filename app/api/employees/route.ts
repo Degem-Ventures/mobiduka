@@ -71,6 +71,21 @@ export async function POST(request: Request) {
         update: {},
         create: { name: role },
       });
+      if (pin) {
+        const candidates = await tx.user.findMany({
+          where: {
+            businessId,
+            pinHash: { not: null },
+            ...(id ? { id: { not: id } } : {}),
+          },
+          select: { pinHash: true },
+        });
+        for (const candidate of candidates) {
+          if (candidate.pinHash && await bcrypt.compare(pin, candidate.pinHash)) {
+            throw new Error("That PIN is already assigned to another employee in this business.");
+          }
+        }
+      }
       const pinHash = pin ? await bcrypt.hash(pin, 10) : undefined;
       const data = {
         businessId,
