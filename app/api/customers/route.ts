@@ -15,7 +15,12 @@ export async function GET(request: Request) {
       where: {
         businessId,
         ...(query
-          ? { OR: [{ name: { contains: query } }, { phone: { contains: query } }] }
+          ? {
+              OR: [
+                { name: { contains: query, mode: "insensitive" } },
+                { phone: { contains: query, mode: "insensitive" } },
+              ],
+            }
           : {}),
       },
       include: {
