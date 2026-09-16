@@ -12,3 +12,24 @@ vite.config.*.timestamp-*
 .tmp-*
 .next
 .vercel
+
+# Dart and Flutter tooling
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/pubspec.lock
+*.iml
+/.metadata
+
+# IDE and local platform state
+.idea/
+android/.gradle/
+android/local.properties
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# Do not version a locally unpacked Flutter SDK
+flutter_app/flutter/

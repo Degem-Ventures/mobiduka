@@ -2031,6 +2031,15 @@ class _POSScreenState extends State<POSScreen> {
       MaterialPageRoute(
         builder: (_) => BarcodeScannerView(
           onProductScanned: (product) => addToCart(product),
+          onCustomerQrScanned: (account) {
+            setState(() {
+              _selectedCreditAccount = account;
+              paymentMethod = 'credit';
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Customer attached: ${account.customer}'), backgroundColor: const Color(0xFF2E7D32)),
+            );
+          },
         ),
       ),
     );
@@ -5533,6 +5542,7 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   Widget build(BuildContext context) {
     if (widget.title == 'Reports & Analytics') return ReportsScreen(onBack: widget.onBack);
+    if (widget.title == 'Credit Book') return CreditBookScreen(onBack: widget.onBack);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 28, 16, 20),
       children: [
@@ -8718,214 +8728,216 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
       if (account != null) return _focusedAccountView(account);
     }
 
-    return ListView(
-      padding: EdgeInsets.zero,
-      children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(16, 28, 16, 20),
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [ink, navy],
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
+    return SizedBox.expand(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 28, 16, 20),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [ink, navy],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
             ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  IconButton(
-                    onPressed: widget.onBack,
-                    icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: Colors.white70),
-                    splashRadius: 20,
-                    padding: EdgeInsets.zero,
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Credit Book',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.08),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
+                    IconButton(
+                      onPressed: widget.onBack,
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: Colors.white70),
+                      splashRadius: 20,
+                      padding: EdgeInsets.zero,
+                    ),
+                    const SizedBox(width: 8),
                     const Text(
-                      'Total Outstanding Credit',
+                      'Credit Book',
                       style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'KSh ${total.toStringAsFixed(0)}',
-                      style: TextStyle(
-                        color: _balanceColor(total),
-                        fontSize: 30,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${_accounts.length} active credit accounts',
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
-          child: Column(
-            children: _loading
-                ? [const Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: navy))]
-                : _accounts.isEmpty
-                    ? [const Padding(padding: EdgeInsets.all(32), child: Text('No local credit accounts found.', style: TextStyle(color: muted, fontSize: 14)))]
-                    : _accounts.map((account) {
-              final daysOld = _daysOutstanding(account);
-              final hasOutstanding = account.balance > 0;
-                      final balanceColor = _balanceColor(account.balance);
-              return Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x0F000000),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 46,
-                      height: 46,
-                      decoration: BoxDecoration(
-                        color: Color(account.colorValue),
-                        borderRadius: BorderRadius.circular(23),
-                      ),
-                      child: Center(
-                        child: Text(
-                          account.initials,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                          ),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Total Outstanding Credit',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            account.customer,
-                            style: const TextStyle(
-                              color: ink,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${account.phone} · ${account.transactionCount} transactions',
-                            style: const TextStyle(
-                              color: muted,
-                              fontSize: 11,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            daysOld == 0
-                                ? 'Added today'
-                                : '${daysOld}d outstanding',
-                            style: TextStyle(
-                              color: hasOutstanding ? balanceColor : const Color(0xFF2E7D32),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
+                      const SizedBox(height: 4),
+                      Text(
+                        'KSh ${total.toStringAsFixed(0)}',
+                        style: TextStyle(
+                          color: _balanceColor(total),
+                          fontSize: 30,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: hasOutstanding ? balanceColor.withValues(alpha: 0.12) : const Color(0xFFE8F5E9),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_accounts.length} active credit accounts',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+            child: Column(
+              children: _loading
+                  ? [const Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: navy))]
+                  : _accounts.isEmpty
+                      ? [const Padding(padding: EdgeInsets.all(32), child: Text('No local credit accounts found.', style: TextStyle(color: muted, fontSize: 14)))]
+                      : _accounts.map((account) {
+                final daysOld = _daysOutstanding(account);
+                final hasOutstanding = account.balance > 0;
+                        final balanceColor = _balanceColor(account.balance);
+                return Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x0F000000),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: Color(account.colorValue),
+                          borderRadius: BorderRadius.circular(23),
+                        ),
+                        child: Center(
                           child: Text(
-                            'KSh ${account.balance.toStringAsFixed(0)}',
-                            style: TextStyle(
-                              color: balanceColor,
+                            account.initials,
+                            style: const TextStyle(
+                              color: Colors.white,
                               fontSize: 16,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _lastTransactionLabel(account),
-                          style: const TextStyle(
-                            color: muted,
-                            fontSize: 11,
-                          ),
-                        ),
-                        if (hasOutstanding) ...[
-                          const SizedBox(height: 8),
-                          TextButton(
-                            onPressed: () => _showRepaymentSheet(account),
-                            style: TextButton.styleFrom(
-                              backgroundColor: navy,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              account.customer,
+                              style: const TextStyle(
+                                color: ink,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                            child: const Text('Receive Repayment', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${account.phone} · ${account.transactionCount} transactions',
+                              style: const TextStyle(
+                                color: muted,
+                                fontSize: 11,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              daysOld == 0
+                                  ? 'Added today'
+                                  : '${daysOld}d outstanding',
+                              style: TextStyle(
+                                color: hasOutstanding ? balanceColor : const Color(0xFF2E7D32),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: hasOutstanding ? balanceColor.withValues(alpha: 0.12) : const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'KSh ${account.balance.toStringAsFixed(0)}',
+                              style: TextStyle(
+                                color: balanceColor,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
                           ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _lastTransactionLabel(account),
+                            style: const TextStyle(
+                              color: muted,
+                              fontSize: 11,
+                            ),
+                          ),
+                          if (hasOutstanding) ...[
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: () => _showRepaymentSheet(account),
+                              style: TextButton.styleFrom(
+                                backgroundColor: navy,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              child: const Text('Receive Repayment', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
