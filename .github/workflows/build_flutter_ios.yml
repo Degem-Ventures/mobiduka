@@ -18,6 +18,9 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: Disable Swift Package Manager
+        run: flutter config --no-enable-swift-package-manager
+
       - name: Ensure iOS project exists
         run: |
           cd flutter_app
