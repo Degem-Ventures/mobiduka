@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -44,6 +45,47 @@ class CreditService {
 
   static final CreditService instance = CreditService._();
   static Database? _database;
+
+  final List<CreditAccount> _webAccounts = <CreditAccount>[
+    const CreditAccount(
+      customerId: 'web-credit-jane',
+      customer: 'Jane Wanjiku',
+      phone: '0712 345 678',
+      balance: 15600,
+      lastTransactionAt: '2026-09-15T09:30:00.000',
+      transactionCount: 4,
+      initials: 'JW',
+      colorValue: 0xFF123A8F,
+    ),
+    const CreditAccount(
+      customerId: 'web-credit-kevin',
+      customer: 'Kevin Otieno',
+      phone: '0722 909 120',
+      balance: 8400,
+      lastTransactionAt: '2026-09-14T16:42:00.000',
+      transactionCount: 3,
+      initials: 'KO',
+      colorValue: 0xFFD4AF37,
+    ),
+    const CreditAccount(
+      customerId: 'web-credit-mary',
+      customer: 'Mary Njeri',
+      phone: '0733 112 890',
+      balance: 0,
+      lastTransactionAt: '2026-09-12T08:20:00.000',
+      transactionCount: 2,
+      initials: 'MN',
+      colorValue: 0xFF2E7D32,
+    ),
+  ];
+
+  final List<Map<String, dynamic>> _webLedger = <Map<String, dynamic>>[
+    {'id': 'web-ledger-1', 'customerId': 'web-credit-jane', 'type': 'SALE', 'amount': 8500, 'createdAt': '2026-09-15T09:30:00.000'},
+    {'id': 'web-ledger-2', 'customerId': 'web-credit-jane', 'type': 'PAYMENT', 'amount': 2500, 'createdAt': '2026-09-13T12:00:00.000'},
+    {'id': 'web-ledger-3', 'customerId': 'web-credit-kevin', 'type': 'SALE', 'amount': 6200, 'createdAt': '2026-09-14T16:42:00.000'},
+    {'id': 'web-ledger-4', 'customerId': 'web-credit-kevin', 'type': 'PAYMENT', 'amount': 1100, 'createdAt': '2026-09-12T11:50:00.000'},
+    {'id': 'web-ledger-5', 'customerId': 'web-credit-mary', 'type': 'SALE', 'amount': 4300, 'createdAt': '2026-09-12T08:20:00.000'},
+  ];
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -90,6 +132,8 @@ class CreditService {
   }
 
   Future<List<CreditAccount>> loadCreditAccounts() async {
+    if (kIsWeb) return List<CreditAccount>.unmodifiable(_webAccounts);
+
     final db = await database;
     final rows = await db.query('local_credit_accounts', orderBy: 'balance DESC');
     return rows.map((row) => CreditAccount(
@@ -105,6 +149,13 @@ class CreditService {
   }
 
   Future<List<Map<String, dynamic>>> loadCreditLedger({String? customerId}) async {
+    if (kIsWeb) {
+      if (customerId == null) {
+        return List<Map<String, dynamic>>.from(_webLedger);
+      }
+      return List<Map<String, dynamic>>.from(_webLedger.where((entry) => entry['customerId'] == customerId));
+    }
+
     final db = await database;
     return db.query(
       'local_credit_ledger',
@@ -112,6 +163,24 @@ class CreditService {
       whereArgs: customerId == null ? null : [customerId],
       orderBy: 'createdAt DESC',
     );
+  }
+
+  Future<CreditAccount?> findByCustomerId(String customerId) async {
+    if (kIsWeb) {
+      for (final account in _webAccounts) {
+        if (account.customerId == customerId) return account;
+      }
+      return null;
+    }
+
+    final db = await database;
+    final rows = await db.query(
+      'local_credit_accounts',
+      where: 'customerId = ?',
+      whereArgs: [customerId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : _accountFromRow(rows.first);
   }
 
   Future<void> saveCreditAccount(CreditAccount account) async {
@@ -137,6 +206,29 @@ class CreditService {
     required double amount,
   }) async {
     if (amount <= 0) return null;
+
+    if (kIsWeb) {
+      final index = _webAccounts.indexWhere((account) => account.customerId == customerId);
+      if (index == -1) return null;
+      final account = _webAccounts[index];
+      if (amount > account.balance) return null;
+
+      final now = DateTime.now().toIso8601String();
+      final updated = account.copyWith(
+        balance: account.balance - amount,
+        lastTransactionAt: now,
+        transactionCount: account.transactionCount + 1,
+      );
+      _webAccounts[index] = updated;
+      _webLedger.insert(0, {
+        'id': 'credit-payment-${DateTime.now().microsecondsSinceEpoch}',
+        'customerId': customerId,
+        'type': 'PAYMENT',
+        'amount': amount,
+        'createdAt': now,
+      });
+      return updated;
+    }
 
     final db = await database;
     final rows = await db.query(
@@ -186,6 +278,27 @@ class CreditService {
     required String invoiceNo,
   }) async {
     if (amount <= 0) return null;
+
+    if (kIsWeb) {
+      final index = _webAccounts.indexWhere((account) => account.customerId == customerId);
+      if (index == -1) return null;
+      final account = _webAccounts[index];
+      final now = DateTime.now().toIso8601String();
+      final updated = account.copyWith(
+        balance: account.balance + amount,
+        lastTransactionAt: now,
+        transactionCount: account.transactionCount + 1,
+      );
+      _webAccounts[index] = updated;
+      _webLedger.insert(0, {
+        'id': 'credit-sale-$invoiceNo',
+        'customerId': customerId,
+        'type': 'SALE',
+        'amount': amount,
+        'createdAt': now,
+      });
+      return updated;
+    }
 
     final db = await database;
     final rows = await db.query(
