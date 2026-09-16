@@ -57,6 +57,7 @@ jobs:
           flutter_ios_podfile_setup
 
           platform :ios, '15.0'
+          use_modular_headers!
 
           target 'Runner' do
             flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
@@ -81,6 +82,7 @@ jobs:
         run: |
           cd flutter_app
           flutter pub get
+          grep -A6 '^  mobile_scanner:' pubspec.lock
 
       - name: Build Flutter iOS app without signing
         run: |
