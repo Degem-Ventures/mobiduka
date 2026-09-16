@@ -7,10 +7,11 @@ import '../services/credit_service.dart';
 import '../services/product_repository.dart';
 
 class BarcodeScannerView extends StatefulWidget {
-  const BarcodeScannerView({required this.onProductScanned, this.onCustomerQrScanned, super.key});
+  const BarcodeScannerView({required this.onProductScanned, this.onCustomerQrScanned, this.onCodeScanned, super.key});
 
   final ValueChanged<Product> onProductScanned;
   final ValueChanged<CreditAccount>? onCustomerQrScanned;
+  final ValueChanged<String>? onCodeScanned;
 
   @override
   State<BarcodeScannerView> createState() => _BarcodeScannerViewState();
@@ -48,6 +49,12 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
           setState(() => _isProcessing = true);
           if (await Vibration.hasVibrator()) {
             await Vibration.vibrate(duration: 100);
+          }
+
+          if (widget.onCodeScanned != null) {
+            widget.onCodeScanned!(scannedCode);
+            if (context.mounted) Navigator.of(context).pop();
+            return;
           }
 
           final customerId = _customerIdFromQr(scannedCode);

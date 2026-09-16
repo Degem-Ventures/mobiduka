@@ -114,6 +114,7 @@ class MobiDukaApp extends StatefulWidget {
 class _MobiDukaAppState extends State<MobiDukaApp> {
   final CashService _cashService = CashService();
   final AuthService _authService = AuthService();
+  final GlobalKey<_POSScreenState> _posScreenKey = GlobalKey<_POSScreenState>();
   NotificationReceiverService? _notificationService;
   int tab = 0;
   bool loggedIn = false;
@@ -279,6 +280,50 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     setState(() => detail = value);
   }
 
+  Future<void> _openUniversalScanner() async {
+    if (!loggedIn || detail != null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BarcodeScannerView(
+          onProductScanned: (product) {
+            final pos = _posScreenKey.currentState;
+            if (pos == null) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Open POS before scanning products.')));
+              return;
+            }
+            pos.addToCart(product);
+          },
+          onCustomerQrScanned: (account) {
+            final pos = _posScreenKey.currentState;
+            if (pos == null) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Open POS before attaching a customer.')));
+              return;
+            }
+            pos.attachCreditAccount(account);
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _navButton(int index, IconData icon, String label) {
+    final selected = tab == index;
+    return InkWell(
+      onTap: () => setState(() => tab = index),
+      child: SizedBox(
+        height: 64,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: selected ? gold : Colors.white70, size: 22),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(color: selected ? gold : Colors.white70, fontSize: 10, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final Widget body;
@@ -293,7 +338,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       );
     } else if (activeRole == 'CASHIER') {
       body = tab == 0
-          ? const POSScreen()
+          ? POSScreen(key: _posScreenKey)
           : MoreScreen(
               onOpen: open,
               role: activeRole,
@@ -306,7 +351,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
         case 0:
           body = const DashboardScreen();
         case 1:
-          body = const POSScreen();
+          body = POSScreen(key: _posScreenKey);
         case 2:
           body = const ProductScreen(title: 'Inventory & Stock');
         case 3:
@@ -354,23 +399,46 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                   Column(children: [
                     Expanded(child: body),
                     if (loggedIn && detail == null)
-                      NavigationBar(
-                        selectedIndex: tab,
-                        onDestinationSelected: (value) => setState(() => tab = value),
-                        destinations: activeRole == 'CASHIER'
-                            ? const [
-                                NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), label: 'POS'),
-                                NavigationDestination(icon: Icon(Icons.menu), label: 'More'),
-                              ]
-                            : const [
-                          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
-                          NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), label: 'POS'),
-                          NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Inventory'),
-                          NavigationDestination(icon: Icon(Icons.people_outline), label: 'Customers'),
-                          NavigationDestination(icon: Icon(Icons.menu), label: 'More'),
-                              ],
+                      SizedBox(
+                        height: 64,
+                        child: BottomAppBar(
+                          shape: const CircularNotchedRectangle(),
+                          notchMargin: 7,
+                          color: const Color(0xFF0A0A0A),
+                          child: Row(
+                            children: activeRole == 'CASHIER'
+                                ? [
+                                    Expanded(child: _navButton(0, Icons.point_of_sale_outlined, 'POS')),
+                                    const SizedBox(width: 72),
+                                    Expanded(child: _navButton(1, Icons.menu, 'More')),
+                                  ]
+                                : [
+                                    Expanded(child: _navButton(0, Icons.dashboard_outlined, 'Dashboard')),
+                                    Expanded(child: _navButton(1, Icons.point_of_sale_outlined, 'POS')),
+                                    const SizedBox(width: 72),
+                                    Expanded(child: _navButton(2, Icons.inventory_2_outlined, 'Inventory')),
+                                    Expanded(child: _navButton(3, Icons.people_outline, 'Customers')),
+                                    Expanded(child: _navButton(4, Icons.menu, 'More')),
+                                  ],
+                          ),
+                        ),
                       ),
                   ]),
+                  if (loggedIn && detail == null)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 28,
+                      child: Center(
+                        child: FloatingActionButton(
+                          onPressed: _openUniversalScanner,
+                          backgroundColor: gold,
+                          foregroundColor: ink,
+                          tooltip: 'Scan barcode or QR code',
+                          child: const Icon(Icons.qr_code_scanner),
+                        ),
+                      ),
+                    ),
                   Positioned(
                     top: 0,
                     left: 0,
@@ -2270,6 +2338,16 @@ class _POSScreenState extends State<POSScreen> {
     });
   }
 
+  void attachCreditAccount(CreditAccount account) {
+    setState(() {
+      _selectedCreditAccount = account;
+      paymentMethod = 'credit';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Customer attached: ${account.customer}'), backgroundColor: const Color(0xFF2E7D32)),
+    );
+  }
+
   void updateQty(String name, int delta) {
     setState(() {
       final next = (cart[name] ?? 0) + delta;
@@ -3518,6 +3596,7 @@ class _ProductScreenState extends State<ProductScreen> {
   final Map<String, String> productForm = {
     'name': '',
     'category': 'Flour',
+    'barcode': '',
     'cost': '',
     'price': '',
     'stock': '',
@@ -3564,6 +3643,7 @@ class _ProductScreenState extends State<ProductScreen> {
     productForm
       ..update('name', (_) => '')
       ..update('category', (_) => 'Flour')
+      ..update('barcode', (_) => '')
       ..update('cost', (_) => '')
       ..update('price', (_) => '')
       ..update('stock', (_) => '')
@@ -3574,6 +3654,7 @@ class _ProductScreenState extends State<ProductScreen> {
   void _saveProduct() {
     final name = productForm['name']?.trim() ?? '';
     final categoryValue = productForm['category'] ?? 'Flour';
+    final barcode = productForm['barcode']?.trim();
     final cost = int.tryParse(productForm['cost'] ?? '') ?? 0;
     final price = int.tryParse(productForm['price'] ?? '') ?? 0;
     final stock = int.tryParse(productForm['stock'] ?? '') ?? 0;
@@ -3589,7 +3670,7 @@ class _ProductScreenState extends State<ProductScreen> {
                 ? 'low'
                 : 'good';
 
-    final nextProduct = Product(name, categoryValue, cost, price, stock, reorder, emoji, status: status);
+    final nextProduct = Product(name, categoryValue, cost, price, stock, reorder, emoji, status: status, barcode: barcode == null || barcode.isEmpty ? null : barcode);
     setState(() {
       if (editProduct != null) {
         final index = products.indexWhere((item) => item.name == editProduct!.name && item.category == editProduct!.category);
@@ -3603,6 +3684,18 @@ class _ProductScreenState extends State<ProductScreen> {
       editProduct = null;
       _resetProductForm();
     });
+    unawaited(ProductRepository.instance.upsertProduct(nextProduct).catchError((_) {}));
+  }
+
+  Future<void> _scanProductCode() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BarcodeScannerView(
+          onProductScanned: (_) {},
+          onCodeScanned: (code) => setState(() => productForm['barcode'] = code),
+        ),
+      ),
+    );
   }
 
   @override
@@ -4271,6 +4364,28 @@ class _ProductScreenState extends State<ProductScreen> {
                           items: inventoryCategories.map((categoryName) => DropdownMenuItem(value: categoryName, child: Text(categoryName))).toList(),
                           onChanged: (value) => setState(() => productForm['category'] = value ?? inventoryCategories.first),
                           decoration: const InputDecoration(border: OutlineInputBorder()),
+                        ),
+                        const SizedBox(height: 14),
+                        const Text('Barcode / QR code', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: TextEditingController(text: productForm['barcode'] ?? '')..selection = TextSelection.collapsed(offset: (productForm['barcode'] ?? '').length),
+                                keyboardType: TextInputType.text,
+                                onChanged: (value) => setState(() => productForm['barcode'] = value.trim()),
+                                decoration: const InputDecoration(hintText: 'Scan or enter code', border: OutlineInputBorder()),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton.filled(
+                              onPressed: _scanProductCode,
+                              tooltip: 'Scan product code',
+                              icon: const Icon(Icons.qr_code_scanner),
+                              style: IconButton.styleFrom(backgroundColor: navy, foregroundColor: Colors.white),
+                            ),
+                          ],
                         ),
                       ],
                     ),
