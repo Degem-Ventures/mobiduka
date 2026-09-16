@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/foundation.dart';
@@ -25,7 +26,19 @@ import 'services/sms_watcher_service.dart';
 import 'services/sync_service.dart';
 import 'widgets/barcode_scanner_view.dart';
 
-void main() => runApp(const MobiDukaApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+  };
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    FlutterError.reportError(
+      FlutterErrorDetails(exception: error, stack: stack, library: 'MobiDuka startup'),
+    );
+    return true;
+  };
+  runApp(const MobiDukaApp());
+}
 
 const navy = Color(0xFF123A8F);
 const ink = Color(0xFF0D1B3D);
@@ -299,6 +312,9 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      builder: (context, child) => ErrorWidget.builder == null
+          ? child ?? const SizedBox.shrink()
+          : child ?? const SizedBox.shrink(),
       themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
       theme: ThemeData(
         useMaterial3: true,
