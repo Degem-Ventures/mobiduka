@@ -111,7 +111,12 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   Future<void> _loadActiveRole() async {
-    final role = await _authService.getActiveUserRole();
+    String role = 'CASHIER';
+    try {
+      role = await _authService.getActiveUserRole();
+    } on Object {
+      role = 'CASHIER';
+    }
     if (!mounted) return;
     setState(() => activeRole = role);
   }
@@ -125,15 +130,21 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       return;
     }
 
-    final cachedProducts = await ProductRepository.instance.loadProducts();
-    if (cachedProducts.isNotEmpty) {
-      setState(() {
-        products = List<Product>.from(cachedProducts);
-      });
-      return;
-    }
+    try {
+      final cachedProducts = await ProductRepository.instance.loadProducts();
+      if (cachedProducts.isNotEmpty) {
+        if (!mounted) return;
+        setState(() {
+          products = List<Product>.from(cachedProducts);
+        });
+        return;
+      }
 
-    await ProductRepository.instance.saveProducts(defaultProducts);
+      await ProductRepository.instance.saveProducts(defaultProducts);
+    } on Object {
+      // Keep the bundled catalog available if local storage is unavailable.
+    }
+    if (!mounted) return;
     setState(() {
       products = List<Product>.from(defaultProducts);
     });
