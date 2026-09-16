@@ -21,6 +21,8 @@ import UserProfileScreen from "./components/UserProfileScreen";
 import SmartScanScreen from "./components/SmartScanScreen";
 import ActiveSessionsScreen from "./components/ActiveSessionsScreen";
 import TwoFactorScreen from "./components/TwoFactorScreen";
+import AdminRegisterScreen from "./components/AdminRegisterScreen";
+import ShiftsScreen from "./components/ShiftsScreen";
 
 type Screen =
   | "login"
@@ -41,14 +43,14 @@ type Screen =
   | "profile"
   | "scan"
   | "sessions"
-  | "twofa";
+  | "twofa"
+  | "register"
+  | "shifts";
 
 type SideNavItem = {
   key: Screen;
   label: string;
-  // icon: (active: boolean) => React.ReactElement;
   icon: (active: boolean) => JSX.Element;
-
 };
 
 const leftNavItems: SideNavItem[] = [
@@ -206,6 +208,10 @@ function AppInner() {
         return <ActiveSessionsScreen onNavigate={handleNavigate} />;
       case "twofa":
         return <TwoFactorScreen onNavigate={handleNavigate} />;
+      case "register":
+        return <AdminRegisterScreen onNavigate={handleNavigate} />;
+      case "shifts":
+        return <ShiftsScreen onNavigate={handleNavigate} />;
       default:
         return null;
     }

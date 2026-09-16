@@ -51,11 +51,12 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   const [editing, setEditing] = useState<Employee | null>(null)
   const [form, setForm] = useState({ name: '', role: 'Cashier' as Role, phone: '', email: '', pin: '', shift: 'Morning', salary: '' })
 
-  const openAdd = () => {
+  const _openAdd = () => {
     setEditing(null)
     setForm({ name: '', role: 'Cashier', phone: '', email: '', pin: '', shift: 'Morning', salary: '' })
     setShowForm(true)
   }
+  void _openAdd
 
   const openEdit = (emp: Employee) => {
     setEditing(emp)
@@ -210,10 +211,16 @@ export default function EmployeesScreen({ onNavigate }: Props) {
             </button>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Employees</div>
           </div>
-          <button className="btn" onClick={openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
-            <span style={{ fontSize: 18, color: '#0D1B3D', lineHeight: 1 }}>+</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Add</span>
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn" onClick={() => onNavigate('shifts')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 12, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <span style={{ fontSize: 15 }}>🕐</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'white' }}>Shifts</span>
+            </button>
+            <button className="btn" onClick={() => onNavigate('register')} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <span style={{ fontSize: 15, color: '#0D1B3D', lineHeight: 1 }}>+</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#0D1B3D' }}>Register</span>
+            </button>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {[['Total', list.length, 'white'], ['Active', list.filter(e => e.active).length, '#4CAF50'], ['Inactive', list.filter(e => !e.active).length, '#FF6B6B']].map(([l, v, col], i) => (

@@ -1,6 +1,17 @@
 import { useState } from 'react'
 import { useColors } from '../utils/theme'
 
+const creditCustomers = [
+  { id: 1, name: 'James Kariuki',   phone: '0712 345 678', balance: 4200 },
+  { id: 2, name: 'Mary Achieng',    phone: '0723 456 789', balance: 1800 },
+  { id: 3, name: 'David Mutua',     phone: '0734 567 890', balance: 0    },
+  { id: 4, name: 'Wanjiku Njoroge', phone: '0745 678 901', balance: 9500 },
+  { id: 5, name: 'Hassan Juma',     phone: '0756 789 012', balance: 3300 },
+  { id: 6, name: 'Grace Otieno',    phone: '0767 890 123', balance: 600  },
+  { id: 7, name: 'Peter Ndirangu',  phone: '0778 901 234', balance: 0    },
+  { id: 8, name: 'Faith Wambua',    phone: '0789 012 345', balance: 2150 },
+]
+
 const products = [
   { id: 1, name: 'Unga Jogoo 2kg', price: 200, category: 'Flour', stock: 45, emoji: '🌾' },
   { id: 2, name: 'Cooking Oil 1L', price: 190, category: 'Oils', stock: 32, emoji: '🫙' },
@@ -31,6 +42,12 @@ export default function POSScreen({ onNavigate }: Props) {
   const [view, setView] = useState<'pos' | 'cart' | 'payment' | 'receipt'>('pos')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'credit'>('cash')
   const [discount, setDiscount] = useState(0)
+  // Credit customer picker state
+  const [selectedCreditor, setSelectedCreditor] = useState<{ id: number; name: string; phone: string } | null>(null)
+  const [creditSearch, setCreditSearch] = useState('')
+  const [showQuickAdd, setShowQuickAdd] = useState(false)
+  const [quickName, setQuickName] = useState('')
+  const [quickPhone, setQuickPhone] = useState('')
   const c = useColors()
 
   const filtered = products.filter(p =>
@@ -94,12 +111,20 @@ export default function POSScreen({ onNavigate }: Props) {
                 <div style={{ fontSize: 16, fontWeight: 800, color: c.text }}>TOTAL</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: '#123A8F' }}>KSh {total.toLocaleString()}</div>
               </div>
-              <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontSize: 12, color: c.muted }}>Payment</div>
-                <span className={`badge ${paymentMethod === 'mpesa' ? 'badge-success' : paymentMethod === 'credit' ? 'badge-error' : 'badge-blue'}`}>
-                  {paymentMethod === 'mpesa' ? 'M-Pesa' : paymentMethod === 'credit' ? 'Credit' : 'Cash'}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className={`badge ${paymentMethod === 'mpesa' ? 'badge-success' : paymentMethod === 'credit' ? 'badge-error' : 'badge-blue'}`}>
+                    {paymentMethod === 'mpesa' ? 'M-Pesa' : paymentMethod === 'credit' ? 'Credit / Tab' : 'Cash'}
+                  </span>
+                </div>
               </div>
+              {paymentMethod === 'credit' && selectedCreditor && (
+                <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: 12, color: c.muted }}>Charged to</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#D32F2F' }}>{selectedCreditor.name}</div>
+                </div>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
@@ -117,7 +142,7 @@ export default function POSScreen({ onNavigate }: Props) {
               borderRadius: 14, fontSize: 14, fontWeight: 600, color: '#123A8F',
               cursor: 'pointer', fontFamily: 'inherit'
             }}>Print Receipt</button>
-            <button className="btn" onClick={() => { setCart([]); setView('pos'); setDiscount(0) }} style={{
+            <button className="btn" onClick={() => { setCart([]); setView('pos'); setDiscount(0); setSelectedCreditor(null); setCreditSearch('') }} style={{
               flex: 1, padding: '14px',
               background: 'linear-gradient(135deg, #123A8F, #1A4FBF)',
               border: 'none', borderRadius: 14, fontSize: 14, fontWeight: 700, color: 'white',
@@ -171,6 +196,79 @@ export default function POSScreen({ onNavigate }: Props) {
             </button>
           ))}
 
+          {/* Credit customer picker */}
+          {paymentMethod === 'credit' && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Customer Account</div>
+
+              {selectedCreditor ? (
+                <div style={{ background: c.isDark ? 'rgba(18,58,143,0.25)' : 'rgba(18,58,143,0.08)', border: '2px solid #123A8F', borderRadius: 14, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 800, color: 'white', flexShrink: 0 }}>
+                    {selectedCreditor.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2)}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{selectedCreditor.name}</div>
+                    <div style={{ fontSize: 12, color: c.muted }}>{selectedCreditor.phone}</div>
+                  </div>
+                  <button className="btn" onClick={() => setSelectedCreditor(null)} style={{ background: 'none', border: 'none', color: c.muted, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 4 }}>×</button>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    className="input" placeholder="🔍 Search customer by name or phone…"
+                    value={creditSearch}
+                    onChange={e => { setCreditSearch(e.target.value); setShowQuickAdd(false) }}
+                    style={{ marginBottom: 8 }}
+                  />
+                  <div style={{ maxHeight: 180, overflowY: 'auto', borderRadius: 12, border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}` }}>
+                    {creditCustomers
+                      .filter(cu => cu.name.toLowerCase().includes(creditSearch.toLowerCase()) || cu.phone.includes(creditSearch))
+                      .map((cu, i, arr) => (
+                        <button key={cu.id} className="btn" onClick={() => { setSelectedCreditor({ id: cu.id, name: cu.name, phone: cu.phone }); setCreditSearch('') }} style={{
+                          width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                          padding: '11px 14px', border: 'none',
+                          borderBottom: i < arr.length - 1 ? c.divider : 'none',
+                          background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                        }}>
+                          <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'white', flexShrink: 0 }}>
+                            {cu.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{cu.name}</div>
+                            <div style={{ fontSize: 11, color: c.muted }}>{cu.phone}</div>
+                          </div>
+                          {cu.balance > 0 && (
+                            <span style={{ fontSize: 10, fontWeight: 700, color: '#D32F2F', background: c.errorBg, padding: '2px 8px', borderRadius: 100 }}>
+                              Owes KSh {cu.balance.toLocaleString()}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    {creditCustomers.filter(cu => cu.name.toLowerCase().includes(creditSearch.toLowerCase()) || cu.phone.includes(creditSearch)).length === 0 && (
+                      <div style={{ padding: '14px 16px', fontSize: 13, color: c.muted, textAlign: 'center' }}>No customers found</div>
+                    )}
+                  </div>
+                  {/* Quick Add */}
+                  {!showQuickAdd ? (
+                    <button className="btn" onClick={() => setShowQuickAdd(true)} style={{ width: '100%', marginTop: 8, padding: '10px', background: 'none', border: `1.5px dashed ${c.isDark ? '#1A3366' : '#D0D7E8'}`, borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit' }}>
+                      + Quick-add new customer
+                    </button>
+                  ) : (
+                    <div style={{ marginTop: 10, background: c.cardAlt, borderRadius: 12, padding: '14px' }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>QUICK ADD</div>
+                      <input className="input" placeholder="Full Name *" value={quickName} onChange={e => setQuickName(e.target.value)} style={{ marginBottom: 8 }} />
+                      <input className="input" placeholder="Phone Number *" value={quickPhone} onChange={e => setQuickPhone(e.target.value)} type="tel" style={{ marginBottom: 10 }} />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn" onClick={() => { setShowQuickAdd(false); setQuickName(''); setQuickPhone('') }} style={{ flex: 1, padding: '10px', background: 'none', border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                        <button className="btn" onClick={() => { if (quickName && quickPhone) { setSelectedCreditor({ id: Date.now(), name: quickName, phone: quickPhone }); setShowQuickAdd(false); setQuickName(''); setQuickPhone('') } }} style={{ flex: 2, padding: '10px', background: quickName && quickPhone ? '#123A8F' : c.cardAlt, border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, color: quickName && quickPhone ? 'white' : c.faint, cursor: quickName && quickPhone ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>Add &amp; Select</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Discount</div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -186,15 +284,23 @@ export default function POSScreen({ onNavigate }: Props) {
             </div>
           </div>
 
-          <button className="btn" onClick={() => setView('receipt')} style={{
-            width: '100%', marginTop: 28, padding: '18px',
-            background: 'linear-gradient(135deg, #123A8F, #1A4FBF)',
-            border: 'none', borderRadius: 16, fontSize: 17, fontWeight: 800,
-            color: 'white', cursor: 'pointer', fontFamily: 'inherit',
-            boxShadow: '0 6px 24px rgba(18,58,143,0.4)'
-          }}>
-            Complete Sale · KSh {total.toLocaleString()}
-          </button>
+          {(() => {
+            const canComplete = paymentMethod !== 'credit' || !!selectedCreditor
+            return (
+              <button className="btn" onClick={() => { if (canComplete) setView('receipt') }} style={{
+                width: '100%', marginTop: 28, padding: '18px',
+                background: canComplete ? 'linear-gradient(135deg, #123A8F, #1A4FBF)' : (c.isDark ? '#162B5A' : '#E3EAF8'),
+                border: 'none', borderRadius: 16, fontSize: 17, fontWeight: 800,
+                color: canComplete ? 'white' : c.muted,
+                cursor: canComplete ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
+                boxShadow: canComplete ? '0 6px 24px rgba(18,58,143,0.4)' : 'none',
+              }}>
+                {paymentMethod === 'credit' && !selectedCreditor
+                  ? 'Select a customer to proceed'
+                  : `Complete Sale · KSh ${total.toLocaleString()}`}
+              </button>
+            )
+          })()}
         </div>
       </div>
     )
