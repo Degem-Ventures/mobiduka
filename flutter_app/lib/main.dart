@@ -245,27 +245,46 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
 
   @override
   Widget build(BuildContext context) {
-    final tabs = activeRole == 'CASHIER'
-      ? <Widget>[const POSScreen(), MoreScreen(onOpen: open, role: activeRole, isDarkMode: isDarkMode, onLogout: _logout, onCloseShift: _handleCloseShift)]
-      : <Widget>[
-        const DashboardScreen(),
-        const POSScreen(),
-        const ProductScreen(title: 'Inventory & Stock'),
-        const CustomerScreen(),
-        MoreScreen(onOpen: open, role: activeRole, isDarkMode: isDarkMode, onLogout: _logout, onCloseShift: _handleCloseShift),
-        ];
-    final body = !loggedIn
-        ? LoginScreen(
-            onLogin: _handleLoginAttempt,
-          )
-        : detail != null
-            ? DetailScreen(
-                title: detail!,
-                onBack: () => setState(() => detail = null),
-                isDarkMode: isDarkMode,
-                onThemeChanged: (value) => setState(() => isDarkMode = value),
-              )
-            : tabs[tab.clamp(0, tabs.length - 1).toInt()];
+    final Widget body;
+    if (!loggedIn) {
+      body = LoginScreen(onLogin: _handleLoginAttempt);
+    } else if (detail != null) {
+      body = DetailScreen(
+        title: detail!,
+        onBack: () => setState(() => detail = null),
+        isDarkMode: isDarkMode,
+        onThemeChanged: (value) => setState(() => isDarkMode = value),
+      );
+    } else if (activeRole == 'CASHIER') {
+      body = tab == 0
+          ? const POSScreen()
+          : MoreScreen(
+              onOpen: open,
+              role: activeRole,
+              isDarkMode: isDarkMode,
+              onLogout: _logout,
+              onCloseShift: _handleCloseShift,
+            );
+    } else {
+      switch (tab.clamp(0, 4).toInt()) {
+        case 0:
+          body = const DashboardScreen();
+        case 1:
+          body = const POSScreen();
+        case 2:
+          body = const ProductScreen(title: 'Inventory & Stock');
+        case 3:
+          body = const CustomerScreen();
+        default:
+          body = MoreScreen(
+            onOpen: open,
+            role: activeRole,
+            isDarkMode: isDarkMode,
+            onLogout: _logout,
+            onCloseShift: _handleCloseShift,
+          );
+      }
+    }
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
