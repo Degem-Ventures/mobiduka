@@ -29,6 +29,7 @@ import 'widgets/barcode_scanner_view.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   FlutterError.onError = (details) {
+    _lastFlutterError = details.exception.toString();
     FlutterError.presentError(details);
   };
   ui.PlatformDispatcher.instance.onError = (error, stack) {
@@ -37,8 +38,13 @@ void main() {
     );
     return true;
   };
+  ErrorWidget.builder = (details) => StartupErrorScreen(
+        message: details.exception.toString(),
+      );
   runApp(const MobiDukaApp());
 }
+
+String? _lastFlutterError;
 
 const navy = Color(0xFF123A8F);
 const ink = Color(0xFF0D1B3D);
@@ -108,7 +114,7 @@ class MobiDukaApp extends StatefulWidget {
 class _MobiDukaAppState extends State<MobiDukaApp> {
   final CashService _cashService = CashService();
   final AuthService _authService = AuthService();
-  final NotificationReceiverService _notificationService = NotificationReceiverService();
+  NotificationReceiverService? _notificationService;
   int tab = 0;
   bool loggedIn = false;
   bool isDarkMode = false;
@@ -119,8 +125,11 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   @override
   void initState() {
     super.initState();
-    _loadCatalog();
-    _loadActiveRole();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_loadCatalog());
+      unawaited(_loadActiveRole());
+    });
   }
 
   Future<void> _loadActiveRole() async {
@@ -210,11 +219,14 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   Future<void> _activateNotifications() async {
-    await _notificationService.initializeNotificationEngine(context);
-    await _notificationService.subscribeToTenantAlerts('demo-business');
+    final service = _notificationService ??= NotificationReceiverService();
+    await service.initializeNotificationEngine(context);
+    await service.subscribeToTenantAlerts('demo-business');
   }
 
-  Future<void> _deactivateNotifications() => _notificationService.unsubscribeFromTenantAlerts('demo-business');
+  Future<void> _deactivateNotifications() async {
+    await _notificationService?.unsubscribeFromTenantAlerts('demo-business');
+  }
 
   Future<void> _handleCloseShift() async {
     final activeSession = await _cashService.getActiveSession(
@@ -312,9 +324,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      builder: (context, child) => ErrorWidget.builder == null
-          ? child ?? const SizedBox.shrink()
-          : child ?? const SizedBox.shrink(),
+      builder: (context, child) => child ?? const StartupErrorScreen(),
       themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
       theme: ThemeData(
         useMaterial3: true,
@@ -386,7 +396,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   void _logout() {
-    _notificationService.unsubscribeFromTenantAlerts('demo-business');
+    _deactivateNotifications();
     _authService.clearSession();
     setState(() {
       loggedIn = false;
@@ -761,6 +771,45 @@ class LoginScreen extends StatefulWidget {
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class StartupErrorScreen extends StatelessWidget {
+  const StartupErrorScreen({super.key, this.message});
+
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    final error = message ?? _lastFlutterError ?? 'The app failed while rendering its first screen.';
+    return Material(
+      color: ink,
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.warning_amber_rounded, color: gold, size: 48),
+                const SizedBox(height: 16),
+                const Text(
+                  'MobiDuka could not start',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  error,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _LoginScreenState extends State<LoginScreen> {
