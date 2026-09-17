@@ -37,7 +37,11 @@ export async function GET(request: Request) {
       }),
       prisma.product.findMany({
         where: { businessId, status: "ACTIVE", deletedAt: null },
-        select: { minimumStock: true, inventory: { select: { quantity: true } } },
+        select: {
+          costPrice: true,
+          minimumStock: true,
+          inventory: { select: { quantity: true } },
+        },
       }),
     ]);
 

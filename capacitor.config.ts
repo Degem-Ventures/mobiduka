@@ -4,7 +4,6 @@ const config: CapacitorConfig = {
   appId: 'com.mobiduka.pos',
   appName: 'MobiDuka POS',
   webDir: 'dist',
-  bundledWebRuntime: false,
   android: {
     allowMixedContent: false,
   },
