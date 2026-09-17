@@ -239,7 +239,7 @@ export async function POST(request: Request) {
           case "Employee": {
             if (operation !== "CREATE" && operation !== "UPDATE") break;
             const employeeRole = String(dataPayload.role ?? "CASHIER").toUpperCase();
-            if (!["OWNER", "MANAGER", "CASHIER"].includes(employeeRole)) {
+            if (!["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"].includes(employeeRole)) {
               throw new Error("Invalid employee role.");
             }
             const role = await tx.role.upsert({

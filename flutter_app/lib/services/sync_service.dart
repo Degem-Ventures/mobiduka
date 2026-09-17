@@ -30,7 +30,7 @@ class SyncService {
 
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE sync_queue (
@@ -41,6 +41,32 @@ class SyncService {
             createdAt TEXT
           )
         ''');
+        await db.execute('''
+          CREATE TABLE local_auth_roster (
+            id TEXT PRIMARY KEY,
+            businessId TEXT NOT NULL,
+            fullName TEXT NOT NULL,
+            role TEXT NOT NULL,
+            pinHash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            updatedAt TEXT NOT NULL
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS local_auth_roster (
+              id TEXT PRIMARY KEY,
+              businessId TEXT NOT NULL,
+              fullName TEXT NOT NULL,
+              role TEXT NOT NULL,
+              pinHash TEXT NOT NULL,
+              status TEXT NOT NULL,
+              updatedAt TEXT NOT NULL
+            )
+          ''');
+        }
       },
     );
   }

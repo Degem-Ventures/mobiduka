@@ -1,20 +1,47 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 
-const ALLOWED_ROLES = ["OWNER", "MANAGER", "CASHIER"] as const;
+const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"] as const;
+const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
 
 type AllowedRole = (typeof ALLOWED_ROLES)[number];
 
 function normalizeRole(value: unknown): AllowedRole | null {
-  const role = String(value ?? "").trim().toUpperCase();
+  const rawRole = String(value ?? "").trim().toUpperCase();
+  const role = rawRole === "MANAGER" ? "SUPERVISOR" : rawRole;
   return (ALLOWED_ROLES as readonly string[]).includes(role) ? (role as AllowedRole) : null;
+}
+
+function authenticatedBusinessId(request: Request): string | null {
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token) return null;
+  const [encodedHeader, encodedPayload, encodedSignature] = token.split(".");
+  if (!encodedHeader || !encodedPayload || !encodedSignature) return null;
+  const expectedSignature = crypto.createHmac("sha256", JWT_SECRET)
+    .update(`${encodedHeader}.${encodedPayload}`)
+    .digest("base64url");
+  const actual = Buffer.from(encodedSignature);
+  const expected = Buffer.from(expectedSignature);
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as { businessId?: unknown; exp?: unknown };
+    if (typeof payload.businessId !== "string" || (typeof payload.exp === "number" && payload.exp < Date.now() / 1000)) return null;
+    return payload.businessId;
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(request: Request) {
   try {
     const businessId = new URL(request.url).searchParams.get("businessId");
     if (!businessId) return NextResponse.json({ error: "businessId is required." }, { status: 400 });
+    const includePinHashes = new URL(request.url).searchParams.get("includePinHashes") === "true";
+    if (includePinHashes && authenticatedBusinessId(request) !== businessId) {
+      return NextResponse.json({ error: "Authenticated business context is required for roster credential sync." }, { status: 403 });
+    }
 
     const employees = await prisma.user.findMany({
       where: { businessId },
@@ -24,6 +51,7 @@ export async function GET(request: Request) {
         email: true,
         phone: true,
         status: true,
+        ...(includePinHashes ? { pinHash: true } : {}),
         createdAt: true,
         role: { select: { name: true } },
       },
@@ -60,6 +88,9 @@ export async function POST(request: Request) {
 
     if (!businessId || !fullName || !role) {
       return NextResponse.json({ error: "businessId, name, and a valid role are required." }, { status: 400 });
+    }
+    if (pin !== undefined && !/^\d{4}$/.test(pin)) {
+      return NextResponse.json({ error: "PIN must contain exactly 4 digits." }, { status: 400 });
     }
 
     const employee = await prisma.$transaction(async (tx) => {
