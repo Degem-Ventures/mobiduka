@@ -12,15 +12,15 @@ jobs:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
 
+      # Upgraded runtime framework safely to eliminate security runner deprecation alerts
       - name: Set up Node.js runtime environment
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
+      # Removed explicit version tags to let the runner pull pnpm configuration straight from package.json
       - name: Install pnpm Package Manager
         uses: pnpm/action-setup@v4
-        with:
-          version: 10.28.0
 
       - name: Install Runtime Workspace Dependencies
         run: pnpm install --frozen-lockfile
