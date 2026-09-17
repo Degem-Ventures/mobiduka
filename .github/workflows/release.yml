@@ -12,13 +12,11 @@ jobs:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
 
-      # Upgraded runtime framework safely to eliminate security runner deprecation alerts
       - name: Set up Node.js runtime environment
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      # Removed explicit version tags to let the runner pull pnpm configuration straight from package.json and added secrets
       - name: Install pnpm Package Manager
         uses: pnpm/action-setup@v4
 
@@ -33,12 +31,8 @@ jobs:
       - name: Install Vercel CLI Toolchain
         run: pnpm add --global vercel
 
-      - name: Pull Vercel Project Environment Configuration
-        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
-        env:
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-
+      # Direct Atomic Compilation and Cloud Release Dispatch
+      # This completely bypasses 'vercel pull' and handles project parameters natively
       - name: Compile and Deploy Production Application
         run: vercel deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}"
         env:
