@@ -31,9 +31,6 @@ jobs:
       - name: Install Latest Vercel CLI Toolchain
         run: pnpm add --global vercel@latest
 
-      # Direct compilation and cloud release dispatch with global flag parameters
+      # 🌟 REPAIRED: Inline Parameter Flag Injection Bypasses Environment Parsing
       - name: Compile and Deploy Production Application
-        run: vercel deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}"
-        env:
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+        run: vercel deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_ORG_ID }}" --with-project="${{ secrets.VERCEL_PROJECT_ID }}"
