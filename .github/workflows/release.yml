@@ -20,7 +20,7 @@ jobs:
       - name: Install pnpm Package Manager
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.28.0
 
       - name: Install Runtime Workspace Dependencies
         run: pnpm install --frozen-lockfile
