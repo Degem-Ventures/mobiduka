@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const requestedForceSeed = process.argv.includes("--force-seed-demo");
@@ -291,7 +291,7 @@ async function main() {
     const openedAt = dateAt(day, 7, 30);
     const closedAt = dateAt(day, 20, 15);
 
-    const dailyOps = [
+    const dailyOps: Prisma.PrismaPromise<unknown>[] = [
       prisma.cashSession.create({
         data: {
           businessId: business.id,
