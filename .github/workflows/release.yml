@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: "24"
 
-      # Removed explicit version tags to let the runner pull pnpm configuration straight from package.json
+      # Removed explicit version tags to let the runner pull pnpm configuration straight from package.json and added secrets
       - name: Install pnpm Package Manager
         uses: pnpm/action-setup@v4
 
