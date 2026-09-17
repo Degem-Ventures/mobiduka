@@ -9,6 +9,8 @@ export default function UserProfileScreen({ onNavigate }: Props) {
   const [changingPin, setChangingPin] = useState(false)
   const [form, setForm] = useState({ name: 'Admin User', phone: '0712 345 678', email: 'admin@mobiduka.co.ke', store: 'MobiDuka Store', branch: 'Nairobi CBD' })
   const [pinForm, setPinForm] = useState({ current: '', newPin: '', confirm: '' })
+  const [pinError, setPinError] = useState('')
+  const [pinDone, setPinDone] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const handleSave = () => {
@@ -30,23 +32,45 @@ export default function UserProfileScreen({ onNavigate }: Props) {
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           <div className="card" style={{ padding: '24px' }}>
-            {[
-              { label: 'Current PIN', key: 'current', placeholder: '••••' },
-              { label: 'New PIN', key: 'newPin', placeholder: '••••' },
-              { label: 'Confirm New PIN', key: 'confirm', placeholder: '••••' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom: 20 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>{f.label}</label>
-                <input type="password" maxLength={4} placeholder={f.placeholder}
-                  value={pinForm[f.key as keyof typeof pinForm]}
-                  onChange={e => setPinForm(p => ({ ...p, [f.key]: e.target.value }))}
-                  className="input"
-                  style={{ textAlign: 'center', fontSize: 28, letterSpacing: 12, fontWeight: 800 }} />
+            {pinDone ? (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ fontSize: 52, marginBottom: 16 }}>🔐</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: c.text, marginBottom: 8 }}>PIN Updated!</div>
+                <div style={{ fontSize: 13, color: c.muted, marginBottom: 24, lineHeight: 1.6 }}>Your new PIN is active.<br />Use it on your next login.</div>
+                <button className="btn" onClick={() => { setChangingPin(false); setPinDone(false); setPinForm({ current: '', newPin: '', confirm: '' }) }} style={{ width: '100%', padding: '14px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  Done
+                </button>
               </div>
-            ))}
-            <button className="btn" onClick={() => setChangingPin(false)} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
-              Update PIN
-            </button>
+            ) : (
+              <>
+                {[
+                  { label: 'Current PIN', key: 'current', placeholder: '••••' },
+                  { label: 'New PIN', key: 'newPin', placeholder: '••••' },
+                  { label: 'Confirm New PIN', key: 'confirm', placeholder: '••••' },
+                ].map(f => (
+                  <div key={f.key} style={{ marginBottom: 20 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>{f.label}</label>
+                    <input type="password" inputMode="numeric" maxLength={4} placeholder={f.placeholder}
+                      value={pinForm[f.key as keyof typeof pinForm]}
+                      onChange={e => { setPinForm(p => ({ ...p, [f.key]: e.target.value.replace(/\D/g, '') })); setPinError('') }}
+                      className="input"
+                      style={{ textAlign: 'center', fontSize: 28, letterSpacing: 12, fontWeight: 800 }} />
+                  </div>
+                ))}
+                {pinError && (
+                  <div style={{ background: c.errorBg, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>⚠️ {pinError}</div>
+                )}
+                <button className="btn" onClick={() => {
+                  if (!pinForm.current) { setPinError('Enter your current PIN'); return }
+                  if (pinForm.newPin.length < 4) { setPinError('New PIN must be 4 digits'); return }
+                  if (pinForm.newPin !== pinForm.confirm) { setPinError('New PINs do not match'); return }
+                  setPinError('')
+                  setPinDone(true)
+                }} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+                  Update PIN
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

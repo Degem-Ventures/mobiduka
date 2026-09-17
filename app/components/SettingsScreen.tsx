@@ -191,19 +191,21 @@ export default function SettingsScreen({ onNavigate }: Props) {
         </div>
 
         {/* ── Payment Methods ── */}
-        <SectionLabel>Payment Methods</SectionLabel>
-        <div className="card" style={{ marginBottom: 16, overflow: 'hidden', background: card }}>
-          {[
-            { label: 'Cash', icon: '💵', color: '#2E7D32', enabled: true },
-            { label: 'M-Pesa', icon: '📱', color: '#2E7D32', enabled: mpesaEnabled },
-            { label: 'Credit / Tab', icon: '📋', color: '#D32F2F', enabled: true },
-            { label: 'Bank Transfer', icon: '🏦', color: '#123A8F', enabled: false },
-          ].map((method, i, arr) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '13px 16px', borderBottom: i < arr.length - 1 ? border : 'none', gap: 12 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 10, background: `${method.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{method.icon}</div>
-              <div style={{ flex: 1, fontSize: 13, fontWeight: 600, color: text }}>{method.label}</div>
-              <span className={`badge ${method.enabled ? 'badge-success' : 'badge-error'}`}>{method.enabled ? 'Active' : 'Inactive'}</span>
-            </div>
+        <SectionLabel>Admin Area</SectionLabel>
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 16, background: card }}>
+          {([
+            { icon: '💳', label: 'Payment Methods', sub: 'Cash · M-Pesa · Bank · Credit', nav: 'payments', color: '#0288D1' },
+            { icon: '🧾', label: 'Receipt Settings', sub: 'Logo, footer text, print format', nav: '', color: '#5E35B1' },
+            { icon: '📊', label: 'Tax & Compliance', sub: `PIN: ${taxPin}`, nav: '', color: '#2E7D32' },
+          ] as { icon: string; label: string; sub: string; nav: string; color: string }[]).map((item, i, arr) => (
+            <button key={i} className="btn" onClick={() => item.nav ? onNavigate(item.nav) : undefined} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? border : 'none', background: 'none', cursor: item.nav ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 11, background: `${item.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{item.icon}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: text }}>{item.label}</div>
+                <div style={{ fontSize: 11, color: muted, marginTop: 2 }}>{item.sub}</div>
+              </div>
+              {item.nav && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={muted} strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>}
+            </button>
           ))}
         </div>
 

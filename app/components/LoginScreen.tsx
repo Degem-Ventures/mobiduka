@@ -316,12 +316,18 @@ export default function LoginScreen({ onLogin }: Props) {
             ))}
           </div>
         </div>
-        <div style={{ padding: '0 32px 40px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ padding: '0 32px 40px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
           <button className="btn" onClick={() => setStep('login')} style={{
             background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',
             fontSize: 14, cursor: 'pointer', fontFamily: 'inherit'
           }}>
             Use email & password instead
+          </button>
+          <button className="btn" onClick={() => { setFpEmail(''); setStep('fp-email') }} style={{
+            background: 'none', border: 'none', color: 'rgba(212,175,55,0.85)',
+            fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600
+          }}>
+            Forgot PIN?
           </button>
         </div>
       </div>
