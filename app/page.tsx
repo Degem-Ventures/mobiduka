@@ -23,6 +23,7 @@ import ActiveSessionsScreen from "./components/ActiveSessionsScreen";
 import TwoFactorScreen from "./components/TwoFactorScreen";
 import AdminRegisterScreen from "./components/AdminRegisterScreen";
 import ShiftsScreen from "./components/ShiftsScreen";
+import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
 
 type Screen =
   | "login"
@@ -45,7 +46,8 @@ type Screen =
   | "sessions"
   | "twofa"
   | "register"
-  | "shifts";
+  | "shifts"
+  | "payments";
 
 type SideNavItem = {
   key: Screen;
@@ -212,6 +214,8 @@ function AppInner() {
         return <AdminRegisterScreen onNavigate={handleNavigate} />;
       case "shifts":
         return <ShiftsScreen onNavigate={handleNavigate} />;
+      case "payments":
+        return <PaymentMethodsScreen onNavigate={handleNavigate} />;
       default:
         return null;
     }
@@ -295,63 +299,75 @@ function AppInner() {
                   );
                 })}
 
-                {/* Centre SCAN FAB */}
+                {/* Centre SCAN FAB — absolute so it doesn't shrink adjacent slots */}
                 <div
                   style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
                     position: "relative",
-                    marginTop: -22,
+                    width: 64,
+                    flexShrink: 0,
+                    alignSelf: "stretch",
                   }}
                 >
-                  <button
-                    className="btn"
-                    onClick={() => setScreen("scan")}
+                  <div
                     style={{
-                      width: 58,
-                      height: 58,
-                      borderRadius: "50%",
-                      background:
-                        screen === "scan"
-                          ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
-                          : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
-                      border: "3px solid white",
+                      position: "absolute",
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                      bottom: 4,
                       display: "flex",
+                      flexDirection: "column",
                       alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
-                      transition: "all 0.2s",
+                      zIndex: 10,
                     }}
                   >
-                    <svg
-                      width="24"
-                      height="24"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="white"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                    <button
+                      className="btn"
+                      onClick={() => setScreen("scan")}
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: "50%",
+                        background:
+                          screen === "scan"
+                            ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
+                            : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
+                        border: "3px solid white",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
+                        transition: "all 0.2s",
+                      }}
                     >
-                      <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-                      <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-                      <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-                      <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-                      <line x1="7" y1="12" x2="17" y2="12" />
-                    </svg>
-                  </button>
-                  <span
-                    style={{
-                      fontSize: 10,
-                      fontWeight: screen === "scan" ? 700 : 600,
-                      color: screen === "scan" ? "#D4AF37" : "#123A8F",
-                      marginTop: 3,
-                    }}
-                  >
-                    SCAN
-                  </span>
+                      <svg
+                        width="22"
+                        height="22"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="white"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+                        <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                        <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+                        <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                        <line x1="7" y1="12" x2="17" y2="12" />
+                      </svg>
+                    </button>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: screen === "scan" ? 700 : 600,
+                        color: screen === "scan" ? "#D4AF37" : "#123A8F",
+                        marginTop: 2,
+                      }}
+                    >
+                      SCAN
+                    </span>
+                  </div>
                 </div>
 
                 {rightNavItems.map((item) => {

@@ -78,7 +78,7 @@ body {
 /* Bottom nav */
 .bottom-nav {
   height: 68px;
-  background: white;
+  background: var(--brand-card);
   border-top: 1px solid var(--brand-border);
   display: flex;
   align-items: center;
@@ -88,6 +88,11 @@ body {
 }
 
 .bottom-nav-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--brand-muted);
+  font: inherit;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -145,6 +150,10 @@ body {
 
 /* Ripple effect simulation */
 .btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   transition: all 0.15s ease;
   -webkit-tap-highlight-color: transparent;
@@ -202,6 +211,7 @@ body {
 [data-theme="dark"] .card              { background: var(--brand-card) !important; box-shadow: 0 1px 4px rgba(0,0,0,0.3) !important; }
 [data-theme="dark"] .bottom-nav        { background: var(--brand-card) !important; border-top-color: var(--brand-border) !important; }
 [data-theme="dark"] .bottom-nav-item.active { background: rgba(18,58,143,0.25) !important; }
+[data-theme="dark"] .bottom-nav-item:hover { background: rgba(143,179,255,0.12); }
 [data-theme="dark"] .input             { background: #0D1B3D !important; color: var(--brand-text) !important; border-color: var(--brand-border) !important; }
 [data-theme="dark"] .input::placeholder { color: var(--brand-muted) !important; }
 
