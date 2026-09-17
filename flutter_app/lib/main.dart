@@ -17,6 +17,8 @@ import 'services/auth_service.dart';
 import 'services/employee_repository.dart';
 import 'services/reports_service.dart';
 import 'services/notification_receiver.dart';
+import 'services/roster_sync_worker.dart';
+import 'services/cache_optimizer_service.dart';
 import 'services/mpesa_service.dart';
 import 'services/product_repository.dart';
 import 'services/purchase_order_service.dart';
@@ -141,7 +143,10 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       role = 'CASHIER';
     }
     if (!mounted) return;
-    setState(() => activeRole = role);
+    setState(() {
+      activeRole = role;
+      if (role == 'CASHIER') tab = 1;
+    });
   }
 
   Future<void> _loadCatalog() async {
@@ -185,6 +190,15 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     final role = await _authService.getActiveUserRole();
     if (!mounted) return;
     setState(() => activeRole = role);
+
+    final businessId = await _authService.getActiveBusinessId();
+    final token = await _authService.readToken();
+    if (businessId != null && token != null) {
+      unawaited(RosterSyncWorker().synchronizeStoreRoster(
+        businessId: businessId,
+        jwtToken: token,
+      ));
+    }
 
     if (kIsWeb) return;
 
@@ -270,7 +284,17 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     );
   }
 
-  bool _canOpen(String value) => activeRole != 'CASHIER' || value == 'Expense Tracking' || value == 'Credit Book';
+  bool _canOpen(String value) {
+    if (activeRole == 'OWNER' || activeRole == 'ADMIN') return true;
+    if (activeRole == 'CASHIER') return value == 'Expense Tracking' || value == 'Credit Book';
+    if (activeRole == 'SUPERVISOR') {
+      return value != 'Reports & Analytics' && value != 'Settings' && value != 'Backup & Cloud Sync';
+    }
+    if (activeRole == 'ACCOUNTANT') {
+      return value == 'Reports & Analytics' || value == 'Credit Book' || value == 'Expense Tracking' || value == 'User Profile';
+    }
+    return false;
+  }
 
   void open(String value) {
     if (!_canOpen(value)) {
@@ -334,6 +358,40 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     );
   }
 
+  List<Widget> _navigationButtons() {
+    switch (activeRole) {
+      case 'CASHIER':
+        return [
+          Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+          const SizedBox(width: 72),
+          Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
+        ];
+      case 'SUPERVISOR':
+        return [
+          Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
+          Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+          const SizedBox(width: 72),
+          Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
+          Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
+        ];
+      case 'ACCOUNTANT':
+      case 'ADMIN':
+        return [
+          Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
+          const SizedBox(width: 72),
+          Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
+        ];
+      default:
+        return [
+          Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
+          Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+          const SizedBox(width: 72),
+          Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
+          Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
+        ];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final Widget body;
@@ -346,6 +404,16 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
         isDarkMode: isDarkMode,
         onThemeChanged: (value) => setState(() => isDarkMode = value),
       );
+    } else if (activeRole == 'CASHIER') {
+      body = tab == 3
+          ? MoreScreen(
+              onOpen: open,
+              role: activeRole,
+              isDarkMode: isDarkMode,
+              onLogout: _logout,
+              onCloseShift: _handleCloseShift,
+            )
+          : POSScreen(key: _posScreenKey);
     } else {
       switch (tab.clamp(0, 3).toInt()) {
         case 0:
@@ -404,15 +472,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                           color: const Color(0xFF0A0A0A),
                           child: SizedBox(
                             height: 64,
-                            child: Row(
-                              children: [
-                                Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
-                                Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
-                                const SizedBox(width: 72),
-                                Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
-                                Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
-                              ],
-                            ),
+                            child: Row(children: _navigationButtons()),
                           ),
                         )
                       : null,
@@ -748,6 +808,7 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
         },
       );
       await widget.onBeforeFinalized();
+      unawaited(CacheOptimizerService().optimizeLocalDatabaseCache());
       await AuthService().clearSession();
       if (!mounted) return;
       Navigator.of(dialogContext).pop();
@@ -934,11 +995,53 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _authenticateWithPin(String inputCode) async {
-    await _authenticate(() => _authService.loginWithPIN(
-          pin: inputCode,
-          deviceToken: _deviceToken,
-          identifier: 'cashier1',
+    if (isAuthenticating) return;
+    setState(() {
+      isAuthenticating = true;
+      loginError = null;
+      loginSucceeded = false;
+    });
+    try {
+      final result = await _authService.loginWithPIN(
+        pin: inputCode,
+        activeBusinessId: 'demo-business',
+        deviceToken: _deviceToken,
+        identifier: 'cashier1',
+      );
+      final session = result['session'];
+      if (result['offline'] != true && session is! AuthSession) {
+        throw Exception('Authentication returned an incomplete session.');
+      }
+      if (!mounted) return;
+      setState(() {
+        loginSucceeded = true;
+        loginError = null;
+        isAuthenticating = false;
+      });
+      if (result['offline'] == true) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Logged in securely via local offline cache'),
+          ));
+      }
+      await widget.onLogin();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        loginSucceeded = false;
+        loginError = null;
+        pin = '';
+        isAuthenticating = false;
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          backgroundColor: const Color(0xFFD32F2F),
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
         ));
+    }
   }
 
   Future<void> _authenticateWithPassword() async {
@@ -5289,8 +5392,12 @@ class MoreScreen extends StatelessWidget {
           ..._menuSections
               .map((section) {
                 final items = (section['items'] as List<Map<String, dynamic>>).where((item) {
-                  if (role != 'CASHIER') return true;
-                  return item['screen'] == 'Expense Tracking' || item['screen'] == 'Credit Book';
+                  final screen = item['screen'];
+                  if (role == 'OWNER' || role == 'ADMIN') return true;
+                  if (role == 'CASHIER') return screen == 'Expense Tracking' || screen == 'Credit Book';
+                  if (role == 'SUPERVISOR') return screen != 'Reports & Analytics' && screen != 'Settings' && screen != 'Backup & Cloud Sync';
+                  if (role == 'ACCOUNTANT') return screen == 'Reports & Analytics' || screen == 'Credit Book' || screen == 'Expense Tracking' || screen == 'User Profile';
+                  return false;
                 }).toList();
                 return items.isEmpty ? null : _menuSection(section['section'] as String, items);
               })
@@ -7635,7 +7742,8 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
   List<EmployeeEntry> _employees = [];
 
   final Map<String, Color> _roleColors = const {
-    'Store Manager': Color(0xFF123A8F),
+    'Admin': Color(0xFF455A64),
+    'Store Owner': Color(0xFF123A8F),
     'Cashier': Color(0xFF2E7D32),
     'Stock Keeper': Color(0xFF00796B),
     'Supervisor': Color(0xFF7B1FA2),
@@ -7643,7 +7751,8 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
   };
 
   final Map<String, List<String>> _rolePermissions = const {
-    'Store Manager': ['Full Access', 'Edit Settings', 'Manage Staff', 'View Reports', 'Process Sales', 'Manage Inventory', 'Add Expenses'],
+    'Admin': ['View Platform Health', 'Manage Tenants', 'Manage Licenses'],
+    'Store Owner': ['Full Access', 'Edit Settings', 'Manage Staff', 'View Reports', 'Process Sales', 'Manage Inventory', 'Add Expenses'],
     'Supervisor': ['View Reports', 'Process Sales', 'Manage Inventory', 'Override Discount', 'View Expenses'],
     'Cashier': ['Process Sales', 'View Products', 'View Customers'],
     'Stock Keeper': ['Manage Inventory', 'View Products', 'Create Purchase Orders'],
@@ -7677,7 +7786,8 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
 
   EmployeeEntry _mapEmployee(Map<String, dynamic> row) {
     final role = (row['role'] as String? ?? 'CASHIER').toUpperCase();
-    final displayRole = role == 'OWNER' || role == 'MANAGER' ? 'Store Manager' : '${role[0]}${role.substring(1).toLowerCase()}';
+    final normalizedRole = role == 'MANAGER' ? 'SUPERVISOR' : role;
+    final displayRole = normalizedRole == 'OWNER' ? 'Store Owner' : normalizedRole[0] + normalizedRole.substring(1).toLowerCase();
     final name = row['fullName'] as String? ?? 'Employee';
     final initials = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).map((part) => part[0]).take(2).join().toUpperCase();
     return EmployeeEntry(
@@ -7731,13 +7841,13 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     if (name.isEmpty) return;
 
     final selectedRole = (_form['role'] as String).toUpperCase();
-    await _employeeRepository.saveEmployee(
+    final saved = await _employeeRepository.saveEmployee(
       businessId: 'demo-business',
       id: _editing?.id,
       fullName: name,
       email: _form['email'] as String,
       phone: _form['phone'] as String,
-      role: selectedRole == 'STORE MANAGER' ? 'OWNER' : selectedRole == 'MANAGER' ? 'MANAGER' : 'CASHIER',
+      role: selectedRole == 'ADMIN' ? 'ADMIN' : selectedRole == 'STORE OWNER' ? 'OWNER' : selectedRole == 'STORE MANAGER' ? 'OWNER' : selectedRole == 'SUPERVISOR' ? 'SUPERVISOR' : selectedRole == 'ACCOUNTANT' ? 'ACCOUNTANT' : 'CASHIER',
       pin: (_form['pin'] as String).trim().isEmpty ? null : (_form['pin'] as String).trim(),
     );
 
@@ -7747,7 +7857,11 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     });
     await _loadEmployees();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Employee saved offline.')));
+    final synced = saved['synced'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      backgroundColor: synced ? const Color(0xFF2E7D32) : const Color(0xFFF57C00),
+      content: Text(synced ? 'Employee saved to the business database.' : 'Employee saved locally; will sync when online.'),
+    ));
     unawaited(_employeeRepository.syncPending(userId: 'demo-owner'));
   }
 
@@ -7827,7 +7941,7 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: ['Store Manager', 'Manager', 'Cashier'].map((option) {
+                          children: ['Admin', 'Store Owner', 'Supervisor', 'Cashier', 'Accountant'].map((option) {
                             final selected = role == option;
                             return ChoiceChip(
                               label: Text(option),

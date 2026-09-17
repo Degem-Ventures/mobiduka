@@ -375,7 +375,7 @@
       "get": {
         "tags": ["Business"],
         "summary": "Tenant Analytical Sales and Profit Summary",
-        "description": "Returns tenant-scoped revenue, cost, expense, profit, low-stock, open-shift, and daily trend metrics.",
+        "description": "Returns tenant-scoped revenue, cost, expense, profit, inventory valuation, low-stock, open-shift, and daily trend metrics.",
         "parameters": [
           { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Seeded deployed business ID." },
           { "name": "days", "in": "query", "required": false, "schema": { "type": "integer", "enum": [7, 30, 90], "default": 7 }, "description": "Trend window in days." }
@@ -389,7 +389,21 @@
                   "type": "object",
                   "properties": {
                     "success": { "type": "boolean" },
-                    "summary": { "type": "object" },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "totalRevenue": { "type": "number" },
+                        "totalCostOfGoods": { "type": "number" },
+                        "totalExpenses": { "type": "number" },
+                        "netProfit": { "type": "number" },
+                        "profitMarginPercentage": { "type": "string" },
+                        "lowStockAlertsCount": { "type": "integer" },
+                        "inventoryValuation": { "type": "number" },
+                        "inventoryUnits": { "type": "integer" },
+                        "activeOpenShiftsCount": { "type": "integer" },
+                        "openingCashTotal": { "type": "number" }
+                      }
+                    },
                     "trends": { "type": "array", "items": { "type": "object" } }
                   }
                 }

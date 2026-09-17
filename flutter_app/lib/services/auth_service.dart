@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:bcrypt/bcrypt.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
+import 'sync_service.dart';
 
 class AuthSession {
   const AuthSession({required this.token, required this.user});
@@ -23,17 +25,49 @@ class AuthService {
 
   final http.Client _client;
   final String baseUrl;
+  final SyncService _syncService = SyncService();
 
-  Future<AuthSession> loginWithPIN({
+  Future<Map<String, dynamic>> loginWithPIN({
     required String pin,
+    required String activeBusinessId,
     required String deviceToken,
     String identifier = 'cashier1',
   }) async {
-    return _authenticate(
+    try {
+      final db = await _syncService.database;
+      final roster = await db.query(
+        'local_auth_roster',
+        where: 'businessId = ? AND status = ?',
+        whereArgs: [activeBusinessId, 'ACTIVE'],
+      );
+      for (final employee in roster) {
+        final cachedHash = employee['pinHash'];
+        if (cachedHash is String && cachedHash.isNotEmpty && BCrypt.checkpw(pin, cachedHash)) {
+          final user = <String, dynamic>{
+            'id': employee['id'],
+            'name': employee['fullName'],
+            'role': employee['role'] ?? 'CASHIER',
+            'businessId': activeBusinessId,
+          };
+          await _storage.write(key: _userKey, value: jsonEncode(user));
+          return <String, dynamic>{
+            'success': true,
+            'offline': true,
+            'user': user,
+          };
+        }
+      }
+    } on Object {
+      // Cache failures fall through to authoritative online authentication.
+    }
+
+    final session = await _authenticate(
       identifier: identifier,
       pin: pin,
+      activeBusinessId: activeBusinessId,
       deviceToken: deviceToken,
     );
+    return <String, dynamic>{'offline': false, 'session': session};
   }
 
   Future<AuthSession> loginWithPassword({
@@ -51,6 +85,7 @@ class AuthService {
   Future<AuthSession> _authenticate({
     required String identifier,
     required String deviceToken,
+    String? activeBusinessId,
     String? password,
     String? pin,
   }) async {
@@ -59,11 +94,13 @@ class AuthService {
       headers: {
         'Content-Type': 'application/json',
         'X-Device-Token': deviceToken,
+        if (activeBusinessId != null) 'X-Business-Id': activeBusinessId,
       },
       body: jsonEncode({
         'identifier': identifier,
         if (password != null) 'password': password,
         if (pin != null) 'pin': pin,
+        if (activeBusinessId != null) 'businessId': activeBusinessId,
       }),
     );
 
@@ -99,7 +136,10 @@ class AuthService {
     try {
       final user = jsonDecode(encodedUser) as Map<String, dynamic>;
       final role = user['role']?.toString().trim().toUpperCase();
-      return role == 'OWNER' || role == 'MANAGER' ? role! : 'CASHIER';
+        final normalizedRole = role == 'MANAGER' ? 'SUPERVISOR' : role;
+        return normalizedRole == 'ADMIN' || normalizedRole == 'OWNER' || normalizedRole == 'SUPERVISOR' || normalizedRole == 'ACCOUNTANT'
+          ? normalizedRole!
+          : 'CASHIER';
     } on Object {
       return 'CASHIER';
     }

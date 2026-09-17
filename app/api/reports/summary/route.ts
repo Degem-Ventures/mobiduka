@@ -72,6 +72,14 @@ export async function GET(request: Request) {
     const lowStockAlertsCount = products.filter(
       (product) => product.minimumStock !== null && (product.inventory?.quantity ?? 0) <= product.minimumStock,
     ).length;
+    const inventoryValuation = products.reduce(
+      (total, product) => total + (product.inventory?.quantity ?? 0) * (product.costPrice ?? 0),
+      0,
+    );
+    const inventoryUnits = products.reduce(
+      (total, product) => total + (product.inventory?.quantity ?? 0),
+      0,
+    );
 
     return NextResponse.json({
       success: true,
@@ -82,6 +90,8 @@ export async function GET(request: Request) {
         netProfit,
         profitMarginPercentage: totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : "0.0",
         lowStockAlertsCount,
+        inventoryValuation,
+        inventoryUnits,
         activeOpenShiftsCount: cashSessions.filter((session) => session.closedAt === null).length,
         openingCashTotal: cashSessions.reduce((sum, session) => sum + session.openingBalance, 0),
       },

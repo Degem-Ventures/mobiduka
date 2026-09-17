@@ -26,16 +26,18 @@ export async function POST(request: Request) {
     const identifier = String(body.identifier ?? "");
     const password = String(body.password ?? "");
     const pin = String(body.pin ?? "");
+    const businessId = String(body.businessId ?? request.headers.get("x-business-id") ?? "").trim();
 
-    if (!identifier || (!password && !pin)) {
+    if (!identifier || (!password && !pin) || (pin && !businessId)) {
       return NextResponse.json(
-        { error: "Email, username, or PIN is required." },
+        { error: "Email, username, or PIN with business context is required." },
         { status: 400 },
       );
     }
 
     const user = await prisma.user.findFirst({
       where: {
+        ...(businessId ? { businessId } : {}),
         OR: [
           { email: normalizeUserLookup(identifier) },
           { username: normalizeUserLookup(identifier) },
