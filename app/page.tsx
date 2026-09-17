@@ -59,13 +59,13 @@ const leftNavItems: SideNavItem[] = [
   {
     key: "dashboard",
     label: "Home",
-    icon: (active) => (
+    icon: () => (
       <svg
         width="22"
         height="22"
         viewBox="0 0 24 24"
         fill="none"
-        stroke={active ? "#123A8F" : "#9AA3B8"}
+        stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -80,13 +80,13 @@ const leftNavItems: SideNavItem[] = [
   {
     key: "pos",
     label: "POS",
-    icon: (active) => (
+    icon: () => (
       <svg
         width="22"
         height="22"
         viewBox="0 0 24 24"
         fill="none"
-        stroke={active ? "#123A8F" : "#9AA3B8"}
+        stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -103,13 +103,13 @@ const rightNavItems: SideNavItem[] = [
   {
     key: "inventory",
     label: "Stock",
-    icon: (active) => (
+    icon: () => (
       <svg
         width="22"
         height="22"
         viewBox="0 0 24 24"
         fill="none"
-        stroke={active ? "#123A8F" : "#9AA3B8"}
+        stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -123,13 +123,13 @@ const rightNavItems: SideNavItem[] = [
   {
     key: "more",
     label: "More",
-    icon: (active) => (
+    icon: () => (
       <svg
         width="22"
         height="22"
         viewBox="0 0 24 24"
         fill="none"
-        stroke={active ? "#123A8F" : "#9AA3B8"}
+        stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -169,6 +169,8 @@ function AppInner() {
   const handleNavigate = (s: string) => setScreen(s as Screen);
 
   const showNav = showNavFor.includes(screen);
+  const navActiveColor = isDark ? "#8FB3FF" : "#123A8F";
+  const navInactiveColor = isDark ? "#A8B8D8" : "#6B7A99";
 
   const renderScreen = () => {
     switch (screen) {
@@ -271,14 +273,17 @@ function AppInner() {
                       key={item.key}
                       className={`bottom-nav-item btn ${isActive ? "active" : ""}`}
                       onClick={() => setScreen(item.key)}
-                      style={{ position: "relative" }}
+                      style={{
+                        position: "relative",
+                        color: isActive ? navActiveColor : navInactiveColor,
+                      }}
                     >
                       {item.icon(isActive)}
                       <span
                         style={{
                           fontSize: 10,
                           fontWeight: isActive ? 700 : 500,
-                          color: isActive ? "#123A8F" : "#9AA3B8",
+                          color: "inherit",
                         }}
                       >
                         {item.label}
@@ -291,7 +296,7 @@ function AppInner() {
                             width: 20,
                             height: 3,
                             borderRadius: "2px 2px 0 0",
-                            background: "#123A8F",
+                            background: navActiveColor,
                           }}
                         />
                       )}
@@ -300,7 +305,16 @@ function AppInner() {
                 })}
 
                 {/* Centre SCAN FAB — absolute so it doesn't shrink adjacent slots */}
-                <div
+                {/* <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    position: "relative",
+                    marginTop: -22,
+                  }}
+                > */}
+                  <div
                   style={{
                     position: "relative",
                     width: 64,
@@ -320,54 +334,54 @@ function AppInner() {
                       zIndex: 10,
                     }}
                   >
-                    <button
-                      className="btn"
-                      onClick={() => setScreen("scan")}
-                      style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: "50%",
-                        background:
-                          screen === "scan"
-                            ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
-                            : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
-                        border: "3px solid white",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: "pointer",
-                        boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
-                        transition: "all 0.2s",
-                      }}
+                  <button
+                    className="btn"
+                    onClick={() => setScreen("scan")}
+                    style={{
+                      width: 58,
+                      height: 58,
+                      borderRadius: "50%",
+                      background:
+                        screen === "scan"
+                          ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
+                          : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
+                      border: `3px solid ${isDark ? "#0F2040" : "white"}`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    <svg
+                      width="22"
+                      height="22"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="white"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                     >
-                      <svg
-                        width="22"
-                        height="22"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="white"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-                        <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-                        <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-                        <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-                        <line x1="7" y1="12" x2="17" y2="12" />
-                      </svg>
-                    </button>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: screen === "scan" ? 700 : 600,
-                        color: screen === "scan" ? "#D4AF37" : "#123A8F",
-                        marginTop: 2,
-                      }}
-                    >
-                      SCAN
-                    </span>
-                  </div>
+                      <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+                      <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                      <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+                      <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                      <line x1="7" y1="12" x2="17" y2="12" />
+                    </svg>
+                  </button>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: screen === "scan" ? 700 : 600,
+                      color: screen === "scan" ? "#F0D060" : navActiveColor,
+                      marginTop: 3,
+                    }}
+                  >
+                    SCAN
+                  </span>
+                </div>
                 </div>
 
                 {rightNavItems.map((item) => {
@@ -377,14 +391,17 @@ function AppInner() {
                       key={item.key}
                       className={`bottom-nav-item btn ${isActive ? "active" : ""}`}
                       onClick={() => setScreen(item.key)}
-                      style={{ position: "relative" }}
+                      style={{
+                        position: "relative",
+                        color: isActive ? navActiveColor : navInactiveColor,
+                      }}
                     >
                       {item.icon(isActive)}
                       <span
                         style={{
                           fontSize: 10,
                           fontWeight: isActive ? 700 : 500,
-                          color: isActive ? "#123A8F" : "#9AA3B8",
+                          color: "inherit",
                         }}
                       >
                         {item.label}
@@ -397,7 +414,7 @@ function AppInner() {
                             width: 20,
                             height: 3,
                             borderRadius: "2px 2px 0 0",
-                            background: "#123A8F",
+                            background: navActiveColor,
                           }}
                         />
                       )}
