@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { getPinLoginContext, saveClientSession, savePinLoginContext } from '../../lib/client-api'
 
 interface Props {
   onLogin: () => void
@@ -7,8 +8,12 @@ interface Props {
 export default function LoginScreen({ onLogin }: Props) {
   const [step, setStep] = useState<'splash' | 'login' | 'pin' | 'fp-email' | 'fp-otp' | 'fp-reset' | 'fp-done'>('splash')
   const [pin, setPin] = useState('')
-  const [email, setEmail] = useState('admin@mobiduka.co.ke')
-  const [password, setPassword] = useState('••••••••')
+  const [email, setEmail] = useState('owner@mobiduka.com')
+  const [password, setPassword] = useState('OwnerPass123')
+  const [pinIdentifier, setPinIdentifier] = useState(() => getPinLoginContext()?.identifier ?? 'cashier1')
+  const [showPassword, setShowPassword] = useState(false)
+  const [loginError, setLoginError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Forgot-password flow state
   const [fpEmail, setFpEmail] = useState('')
@@ -23,12 +28,48 @@ export default function LoginScreen({ onLogin }: Props) {
       const next = pin + digit
       setPin(next)
       if (next.length === 4) {
-        setTimeout(() => onLogin(), 400)
+        setTimeout(() => submitLogin(next), 400)
       }
     }
   }
 
   const handlePinDelete = () => setPin(p => p.slice(0, -1))
+
+  const submitLogin = async (loginPin?: string) => {
+    setIsSubmitting(true)
+    setLoginError('')
+    try {
+      const pinContext = getPinLoginContext()
+      const normalizedPinIdentifier = pinIdentifier.trim()
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(loginPin ? {} : { identifier: email }),
+          ...(loginPin ? {
+            pin: loginPin,
+            ...(pinContext?.identifier === normalizedPinIdentifier ? { businessId: pinContext.businessId } : {}),
+          } : { password }),
+        }),
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error ?? 'Unable to sign in.')
+      saveClientSession(payload)
+      if (payload.user?.businessId) {
+        savePinLoginContext({
+          identifier: payload.user.username || payload.user.email || email,
+          businessId: payload.user.businessId,
+          displayName: payload.user.name || email,
+        })
+      }
+      onLogin()
+    } catch (error) {
+      setPin('')
+      setLoginError(error instanceof Error ? error.message : 'Unable to sign in.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   // ── Forgot Password: Done ─────────────────────────────────────────────
   if (step === 'fp-done') {
@@ -274,6 +315,7 @@ export default function LoginScreen({ onLogin }: Props) {
   }
 
   if (step === 'pin') {
+    const pinContext = getPinLoginContext()
     return (
       <div className="screen" style={{ background: 'linear-gradient(160deg, #0D1B3D 0%, #123A8F 100%)' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 32px' }}>
@@ -284,8 +326,22 @@ export default function LoginScreen({ onLogin }: Props) {
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             marginBottom: 16, fontSize: 28, fontWeight: 700, color: '#0D1B3D'
           }}>A</div>
-          <div style={{ color: 'white', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Admin User</div>
-          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 48 }}>MobiDuka Store</div>
+          <div style={{ color: 'white', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{pinContext?.displayName ?? 'Quick PIN Login'}</div>
+          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 48 }}>{pinContext ? 'Enter your 4-digit PIN' : 'Sign in with email first to enable PIN login'}</div>
+
+          {!pinContext && (
+            <input
+              className="input"
+              value={pinIdentifier}
+              onChange={event => { setPinIdentifier(event.target.value); setPin(''); setLoginError('') }}
+              placeholder="Username or email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              style={{ width: '100%', maxWidth: 280, marginBottom: 24, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: 'white' }}
+            />
+          )}
+
+          {loginError && <div style={{ width: '100%', maxWidth: 280, color: '#FFCDD2', fontSize: 12, textAlign: 'center', marginBottom: 16 }}>{loginError}</div>}
 
           {/* PIN dots */}
           <div style={{ display: 'flex', gap: 20, marginBottom: 48 }}>
@@ -301,7 +357,7 @@ export default function LoginScreen({ onLogin }: Props) {
           </div>
 
           {/* Numpad */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, width: '100%', maxWidth: 280 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, width: '100%', maxWidth: 280, opacity: pinContext ? 1 : 0.5, pointerEvents: pinContext ? 'auto' : 'none' }}>
             {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((key, i) => (
               <button key={i} className="btn" onClick={() => key === '⌫' ? handlePinDelete() : key && handlePinPress(key)}
                 style={{
@@ -317,12 +373,18 @@ export default function LoginScreen({ onLogin }: Props) {
           </div>
         </div>
         <div style={{ padding: '0 32px 40px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-          <button className="btn" onClick={() => setStep('login')} style={{
+          {!pinContext && <button className="btn" onClick={() => setStep('login')} style={{
+            background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',
+            fontSize: 14, cursor: 'pointer', fontFamily: 'inherit'
+          }}>
+            Sign in with email to set up PIN login
+          </button>}
+          {pinContext && <button className="btn" onClick={() => setStep('login')} style={{
             background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',
             fontSize: 14, cursor: 'pointer', fontFamily: 'inherit'
           }}>
             Use email & password instead
-          </button>
+          </button>}
           <button className="btn" onClick={() => { setFpEmail(''); setStep('fp-email') }} style={{
             background: 'none', border: 'none', color: 'rgba(212,175,55,0.85)',
             fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600
@@ -368,11 +430,56 @@ export default function LoginScreen({ onLogin }: Props) {
       <div style={{ padding: '32px 24px', flex: 1 }}>
         <div style={{ marginBottom: 16 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Email Address</label>
-          <input className="input" value={email} onChange={e => setEmail(e.target.value)} type="email" />
+            <input className="input" value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="owner@mobiduka.com" />
         </div>
         <div style={{ marginBottom: 24 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Password</label>
-          <input className="input" value={password} onChange={e => setPassword(e.target.value)} type="password" />
+          <div style={{ position: 'relative' }}>
+            <input
+              className="input"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              type={showPassword ? 'text' : 'password'}
+              placeholder="OwnerPass123"
+              style={{ paddingRight: 48 }}
+            />
+            <button
+              className="btn"
+              type="button"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              title={showPassword ? 'Hide password' : 'Show password'}
+              onClick={() => setShowPassword(previous => !previous)}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                right: 8,
+                transform: 'translateY(-50%)',
+                width: 36,
+                height: 36,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: 'none',
+                color: '#6B7A99',
+                cursor: 'pointer',
+              }}
+            >
+              {showPassword ? (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 3l18 18" />
+                  <path d="M10.58 10.58a2 2 0 0 0 2.83 2.83" />
+                  <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 8.5 4 9.5 8a11.67 11.67 0 0 1-2.05 3.83" />
+                  <path d="M6.61 6.61C4.62 7.86 3.29 9.82 2.5 12c1 4 4.5 8 9.5 8a10.9 10.9 0 0 0 3.36-.53" />
+                </svg>
+              ) : (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z" />
+                  <circle cx="12" cy="12" r="2.5" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
 
         <div style={{ textAlign: 'right', marginBottom: 28 }}>
@@ -381,14 +488,20 @@ export default function LoginScreen({ onLogin }: Props) {
           </button>
         </div>
 
-        <button className="btn" onClick={onLogin} style={{
+        {loginError && (
+          <div style={{ background: '#FFEBEE', border: '1px solid #FFCDD2', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>
+            {loginError}
+          </div>
+        )}
+
+        <button className="btn" onClick={() => submitLogin()} disabled={isSubmitting} style={{
           width: '100%', padding: '16px',
           background: 'linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)',
           border: 'none', borderRadius: 16,
           fontSize: 16, fontWeight: 700, color: 'white', fontFamily: 'inherit',
-          boxShadow: '0 4px 20px rgba(18,58,143,0.35)'
+          boxShadow: '0 4px 20px rgba(18,58,143,0.35)', opacity: isSubmitting ? 0.7 : 1,
         }}>
-          Sign In
+          {isSubmitting ? 'Signing In…' : 'Sign In'}
         </button>
 
         <div style={{ textAlign: 'center', marginTop: 20 }}>

@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const businessId = searchParams.get("businessId");
+    const businessId = requireBusinessAccess(request, searchParams.get("businessId"));
 
     if (!businessId) {
       return NextResponse.json(
-        { error: "Tenant context filter key missing from parameter list." },
-        { status: 400 },
+        { error: "Authenticated business context is required." },
+        { status: 401 },
       );
     }
 

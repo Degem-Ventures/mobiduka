@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const businessId = searchParams.get("businessId");
+    const businessId = requireBusinessAccess(request, searchParams.get("businessId"));
     const query = searchParams.get("query")?.trim();
 
     if (!businessId) {
-      return NextResponse.json({ error: "businessId is required." }, { status: 400 });
+      return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     }
 
     const customers = await prisma.customer.findMany({
@@ -42,12 +43,13 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { id, businessId, name, phone, initialCreditLimit } = body;
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
     const normalizedName = typeof name === "string" ? name.trim() : "";
     const normalizedPhone = typeof phone === "string" ? phone.trim() : null;
     const creditLimit = initialCreditLimit === undefined ? 0 : Number(initialCreditLimit);
 
-    if (!businessId || !normalizedName) {
-      return NextResponse.json({ error: "businessId and name are required." }, { status: 400 });
+    if (!resolvedBusinessId || !normalizedName) {
+      return NextResponse.json({ error: "Authenticated business context and name are required." }, { status: 401 });
     }
     if (!Number.isFinite(creditLimit) || creditLimit < 0) {
       return NextResponse.json({ error: "initialCreditLimit must be a non-negative number." }, { status: 400 });
@@ -56,13 +58,13 @@ export async function POST(request: Request) {
     const result = await prisma.$transaction(async (tx) => {
       if (id) {
         const existingById = await tx.customer.findUnique({ where: { id }, select: { businessId: true } });
-        if (existingById && existingById.businessId !== businessId) {
+        if (existingById && existingById.businessId !== resolvedBusinessId) {
           throw new Error("Customer does not belong to this business.");
         }
       }
 
       if (normalizedPhone) {
-        const existing = await tx.customer.findFirst({ where: { businessId, phone: normalizedPhone }, select: { id: true } });
+        const existing = await tx.customer.findFirst({ where: { businessId: resolvedBusinessId, phone: normalizedPhone }, select: { id: true } });
         if (existing && existing.id !== id) throw new Error("A customer with this phone number already exists.");
       }
 
@@ -70,10 +72,10 @@ export async function POST(request: Request) {
         ? await tx.customer.upsert({
             where: { id },
             update: { name: normalizedName, phone: normalizedPhone, creditLimit, updatedAt: new Date() },
-            create: { id, businessId, name: normalizedName, phone: normalizedPhone, creditLimit },
+            create: { id, businessId: resolvedBusinessId, name: normalizedName, phone: normalizedPhone, creditLimit },
           })
         : await tx.customer.create({
-            data: { businessId, name: normalizedName, phone: normalizedPhone, creditLimit },
+            data: { businessId: resolvedBusinessId, name: normalizedName, phone: normalizedPhone, creditLimit },
           });
 
       const creditAccount = await tx.creditAccount.upsert({

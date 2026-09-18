@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 const tokenUrl = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
 const stkPushUrl = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { phoneNumber, amount, accountReference, businessId } = body;
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
     const shortcode = process.env.MPESA_SHORTCODE || "174379";
     const transactionType = "CustomerPayBillOnline";
     const partyB = shortcode;
@@ -54,17 +56,17 @@ export async function POST(request: Request) {
     const parsedAmount = Number(amount);
     const phone = normalizePhone(phoneNumber);
 
-    if (!businessId || !phone || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    if (!resolvedBusinessId || !phone || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       return NextResponse.json(
-        { error: "Business ID, a valid Kenyan phone number, and a positive amount are required." },
-        { status: 400 },
+        { error: "Authenticated business context, a valid Kenyan phone number, and a positive amount are required." },
+        { status: 401 },
       );
     }
     if (!passkey || !callbackUrl) {
       return NextResponse.json({ error: "M-Pesa configuration is incomplete." }, { status: 500 });
     }
 
-    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { id: true } });
+    const business = await prisma.business.findUnique({ where: { id: resolvedBusinessId }, select: { id: true } });
     if (!business) return NextResponse.json({ error: "Business was not found." }, { status: 404 });
 
     const token = await getMpesaToken();
@@ -103,7 +105,7 @@ export async function POST(request: Request) {
 
     const transaction = await prisma.mpesaTransaction.create({
       data: {
-        businessId,
+        businessId: resolvedBusinessId,
         phoneNumber: phone,
         amount: Math.round(parsedAmount),
         accountReference: reference,

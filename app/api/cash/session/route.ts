@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendPushNotification } from "@/lib/firebase-admin";
+import { requireBusinessAccess } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
@@ -23,10 +24,12 @@ export async function POST(request: Request) {
       id?: string;
     };
 
-    if (!businessId || !userId || !action) {
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
+
+    if (!resolvedBusinessId || !userId || !action) {
       return NextResponse.json(
-        { error: "Missing required multi-tenant parameters." },
-        { status: 400 },
+        { error: "Authenticated business context is required." },
+        { status: 401 },
       );
     }
 
@@ -40,7 +43,7 @@ export async function POST(request: Request) {
 
       const existingSession = await prisma.cashSession.findFirst({
         where: {
-          businessId,
+          businessId: resolvedBusinessId,
           cashierId: userId,
           closedAt: null,
         },
@@ -59,7 +62,7 @@ export async function POST(request: Request) {
       const newSession = await prisma.cashSession.create({
         data: {
           id: id || undefined,
-          businessId,
+          businessId: resolvedBusinessId,
           cashierId: userId,
           openingBalance: Number(openingCash),
           openedAt: new Date(),
@@ -68,7 +71,7 @@ export async function POST(request: Request) {
 
       await prisma.auditLog.create({
         data: {
-          businessId,
+          businessId: resolvedBusinessId,
           userId,
           action: "CASH_SESSION_OPEN",
           tableName: "CashSession",
@@ -104,7 +107,7 @@ export async function POST(request: Request) {
 
       const sales = await prisma.sale.findMany({
         where: {
-          businessId,
+          businessId: resolvedBusinessId,
           cashierId: userId,
           createdAt: { gte: activeSession.openedAt },
           payments: {
@@ -121,7 +124,7 @@ export async function POST(request: Request) {
       const totalCashSales = sales.reduce((sum, sale) => sum + Number(sale.total ?? 0), 0);
       const cashExpenses = await prisma.expense.findMany({
         where: {
-          businessId,
+          businessId: resolvedBusinessId,
           recordedBy: userId,
           createdAt: { gte: activeSession.openedAt },
         },
@@ -144,7 +147,7 @@ export async function POST(request: Request) {
 
       await prisma.auditLog.create({
         data: {
-          businessId,
+          businessId: resolvedBusinessId,
           userId,
           action: "CASH_SESSION_CLOSE",
           tableName: "CashSession",
@@ -154,11 +157,11 @@ export async function POST(request: Request) {
       });
 
       await sendPushNotification(
-        `business_shifts_${businessId}`,
+        `business_shifts_${resolvedBusinessId}`,
         "🏧 Shift Account Closure Summary",
         `Opening: KSh ${Number(activeSession.openingBalance).toFixed(2)}. Cash sales: KSh ${totalCashSales.toFixed(2)}. Cash expenses: KSh ${totalCashExpenses.toFixed(2)}. Expected: KSh ${expectedCashBalance.toFixed(2)}. Counted: KSh ${actualCashCount.toFixed(2)}. Variance: KSh ${variance.toFixed(2)}.`,
         {
-          businessId,
+          businessId: resolvedBusinessId,
           sessionId: closedSession.id,
           openingBalance: Number(activeSession.openingBalance).toFixed(2),
           totalCashSales: totalCashSales.toFixed(2),

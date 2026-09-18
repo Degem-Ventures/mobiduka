@@ -1,50 +1,40 @@
 import { useState, useRef, useEffect } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 interface Props {
   onNavigate: (screen: string) => void
 }
 
-const recentScans = [
-  { barcode: '6001234500012', name: 'Unga Jogoo 2kg', time: '14:28', status: 'found', emoji: '🌾' },
-  { barcode: '6001234500034', name: 'Cooking Oil 1L', time: '14:15', status: 'found', emoji: '🫙' },
-  { barcode: '9876543210123', name: 'Unknown Product', time: '13:52', status: 'unknown', emoji: '❓' },
-  { barcode: '6001234500056', name: 'Blue Band 500g', time: '13:40', status: 'found', emoji: '🧈' },
-]
+type DashboardData = {
+  metadata: { name: string; country: string; currency: string; timezone: string; date: string }
+  summary: Record<string, number>
+  paymentBreakdown: Record<string, { amount: number; transactions: number }>
+  topProducts: Array<{ name: string; units: number; revenue: number }>
+  recentTransactions: Array<{ id: string; time: string; customer: string; amount: number; items: number; method: string }>
+  lowStockItems: Array<{ id: string; name: string; quantity: number; minimumStock: number | null }>
+  scanActivity: { counts: Record<string, number>; recent: Array<{ id: string; barcode: string; name: string; status: string; emoji: string | null; createdAt: string }> }
+}
 
-const stats = [
-  { label: "Today's Sales", value: "KSh 84,250", sub: "+12% vs yesterday", color: '#123A8F', icon: '📈', bg: 'linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)' },
-  { label: "Today's Profit", value: "KSh 22,100", sub: "26.2% margin", color: '#2E7D32', icon: '💰', bg: 'linear-gradient(135deg, #2E7D32 0%, #388E3C 100%)' },
-  { label: "Cash in Till", value: "KSh 45,800", sub: "Last count: 2h ago", color: '#D4AF37', icon: '💵', bg: 'linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)' },
-  { label: "M-Pesa Sales", value: "KSh 38,450", sub: "47 transactions", color: '#00A651', icon: '📱', bg: 'linear-gradient(135deg, #005F2E 0%, #00A651 100%)' },
-]
-
-const quickStats = [
-  { label: 'Credit Out', value: 'KSh 12,300', sub: '8 customers', icon: '🔴' },
-  { label: 'Stock Value', value: 'KSh 312,000', sub: '486 SKUs', icon: '📦' },
-  { label: 'Low Stock', value: '12 items', sub: 'Need reorder', icon: '⚠️' },
-  { label: 'Transactions', value: '156', sub: 'Today', icon: '🧾' },
-]
-
-const topProducts = [
-  { name: 'Unga Jogoo 2kg', sold: 42, revenue: 'KSh 8,400', change: '+8%' },
-  { name: 'Cooking Oil 1L', sold: 38, revenue: 'KSh 7,220', change: '+15%' },
-  { name: 'Sugar 1kg', sold: 35, revenue: 'KSh 4,900', change: '-3%' },
-  { name: 'Blue Band 500g', sold: 29, revenue: 'KSh 4,350', change: '+5%' },
-  { name: 'Milk 500ml', sold: 27, revenue: 'KSh 2,700', change: '+22%' },
-]
-
-const recentTx = [
-  { time: '14:32', customer: 'Walk-in', amount: 'KSh 1,250', method: 'Cash', items: 5 },
-  { time: '14:18', customer: 'Jane Mwangi', amount: 'KSh 3,400', method: 'M-Pesa', items: 8 },
-  { time: '13:55', customer: 'Walk-in', amount: 'KSh 650', method: 'Cash', items: 2 },
-  { time: '13:41', customer: 'Peter Otieno', amount: 'KSh 5,200', method: 'Credit', items: 14 },
-]
+const money = (value: number) => `KSh ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 
 export default function Dashboard({ onNavigate }: Props) {
   const c = useColors()
   const [scanPulse, setScanPulse] = useState(false)
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [error, setError] = useState('')
   const statsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) {
+      setError('Please sign in to load your dashboard.')
+      return
+    }
+    apiFetch<DashboardData>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(setData)
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load dashboard data.'))
+  }, [])
 
   useEffect(() => {
     const el = statsRef.current
@@ -79,6 +69,23 @@ export default function Dashboard({ onNavigate }: Props) {
     setTimeout(() => { setScanPulse(false); onNavigate('scan') }, 180)
   }
 
+  const summary = data?.summary ?? {}
+  const quickStats = [
+    { label: 'Credit Out', value: money(summary.creditOut ?? 0), sub: `${summary.creditCustomerCount ?? 0} customers`, icon: '🔴' },
+    { label: 'Stock Value', value: money(summary.inventoryValue ?? 0), sub: `${summary.activeSkuCount ?? 0} SKUs`, icon: '📦' },
+    { label: 'Low Stock', value: `${summary.lowStockCount ?? 0} items`, sub: 'Need reorder', icon: '⚠️' },
+    { label: 'Transactions', value: String(summary.todayTransactionCount ?? 0), sub: 'Today', icon: '🧾' },
+  ]
+  const stats = [
+    { label: "Today's Sales", value: money(summary.todayRevenue ?? 0), sub: `${summary.todayTransactionCount ?? 0} transactions`, icon: '📈', bg: 'linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)' },
+    { label: "Today's Net Profit", value: money(summary.todayProfit ?? 0), sub: `${summary.profitMarginPercentage ?? 0}% margin · ${money(summary.todayExpenseTotal ?? 0)} expenses`, icon: '💰', bg: 'linear-gradient(135deg, #2E7D32 0%, #388E3C 100%)' },
+    { label: 'Cash in Till', value: money(summary.cashInTill ?? 0), sub: 'Open sessions', icon: '💵', bg: 'linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)' },
+    { label: 'M-Pesa Sales', value: money(data?.paymentBreakdown?.MPESA?.amount ?? 0), sub: `${data?.paymentBreakdown?.MPESA?.transactions ?? 0} transactions`, icon: '📱', bg: 'linear-gradient(135deg, #005F2E 0%, #00A651 100%)' },
+  ]
+  const topProducts = (data?.topProducts ?? []).map(product => ({ ...product, sold: product.units, revenueLabel: money(product.revenue), change: 'Today' }))
+  const recentTransactions = (data?.recentTransactions ?? []).map(transaction => ({ ...transaction, amountLabel: money(transaction.amount), timeLabel: new Date(transaction.time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }))
+  const recentScans = data?.scanActivity.recent ?? []
+
   return (
     <div className="screen">
       {/* Header */}
@@ -86,10 +93,10 @@ export default function Dashboard({ onNavigate }: Props) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: 500, marginBottom: 2 }}>
-              Tue, 8 July 2026 · 14:45
+              {data?.metadata.date ?? 'Loading dashboard…'}
             </div>
-            <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>MobiDuka Store</div>
-            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>Nairobi CBD · Shift: Morning</div>
+            <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>{data?.metadata.name ?? 'MobiDuka Store'}</div>
+            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{data?.metadata.country ?? 'Kenya'} · Live data</div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" style={{
@@ -130,6 +137,7 @@ export default function Dashboard({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px 16px 80px' }}>
+        {error && <div style={{ background: '#FFEBEE', color: '#C62828', border: '1px solid #FFCDD2', borderRadius: 12, padding: '12px 14px', marginBottom: 16, fontSize: 13 }}>{error}</div>}
         {/* Main stat cards */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
           {stats.map((s, i) => (
@@ -175,24 +183,28 @@ export default function Dashboard({ onNavigate }: Props) {
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>Top Selling Today</div>
             <button className="btn" onClick={() => onNavigate('reports')} style={{ background: 'none', border: 'none', color: '#123A8F', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>See all</button>
           </div>
-          {topProducts.map((p, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < topProducts.length - 1 ? c.divider : 'none' }}>
-              <div style={{
-                width: 32, height: 32, borderRadius: 10,
-                background: 'linear-gradient(135deg, #123A8F, #1A4FBF)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'white', fontWeight: 700, fontSize: 13, flexShrink: 0
-              }}>{i + 1}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{p.sold} units sold</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: c.text }}>{p.revenue}</div>
-                <div style={{ fontSize: 11, color: p.change.startsWith('+') ? '#2E7D32' : '#D32F2F', fontWeight: 600 }}>{p.change}</div>
-              </div>
+          {topProducts.length === 0 ? (
+            <div style={{ padding: '16px 4px 4px', color: c.muted, fontSize: 12, textAlign: 'center' }}>
+              No completed sales recorded today.
             </div>
-          ))}
+          ) : topProducts.map((p, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < topProducts.length - 1 ? c.divider : 'none' }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: 10,
+                  background: 'linear-gradient(135deg, #123A8F, #1A4FBF)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'white', fontWeight: 700, fontSize: 13, flexShrink: 0
+                }}>{i + 1}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{p.sold} units sold</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: c.text }}>{p.revenueLabel}</div>
+                  <div style={{ fontSize: 11, color: c.muted, fontWeight: 600 }}>{p.change}</div>
+                </div>
+              </div>
+            ))}
         </div>
 
         {/* Recent Transactions */}
@@ -201,8 +213,8 @@ export default function Dashboard({ onNavigate }: Props) {
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>Recent Transactions</div>
             <button className="btn" onClick={() => onNavigate('reports')} style={{ background: 'none', border: 'none', color: '#123A8F', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>View all</button>
           </div>
-          {recentTx.map((t, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < recentTx.length - 1 ? c.divider : 'none' }}>
+          {recentTransactions.map((t, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < recentTransactions.length - 1 ? c.divider : 'none' }}>
               <div style={{
                 width: 38, height: 38, borderRadius: 12, flexShrink: 0,
                 background: t.method === 'M-Pesa' ? c.successBg : t.method === 'Credit' ? c.errorBg : c.iconBg,
@@ -212,10 +224,10 @@ export default function Dashboard({ onNavigate }: Props) {
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{t.customer}</div>
-                <div style={{ fontSize: 11, color: c.muted }}>{t.items} items · {t.time}</div>
+                <div style={{ fontSize: 11, color: c.muted }}>{t.items} items · {t.timeLabel}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{t.amount}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{t.amountLabel}</div>
                 <span className={`badge ${t.method === 'M-Pesa' ? 'badge-success' : t.method === 'Credit' ? 'badge-error' : 'badge-blue'}`} style={{ marginTop: 3 }}>{t.method}</span>
               </div>
             </div>
@@ -251,10 +263,10 @@ export default function Dashboard({ onNavigate }: Props) {
 
           {/* Today's Activity */}
           <div style={{ padding: '12px 16px', display: 'flex', gap: 0, borderBottom: c.divider }}>
-            {[
-              { val: '47', label: 'Barcodes', color: '#123A8F' },
-              { val: '3', label: 'Unknown', color: '#D32F2F' },
-              { val: '12', label: 'Manual', color: c.muted },
+              {[
+              { val: String(data?.scanActivity.counts.FOUND ?? 0), label: 'Barcodes', color: '#123A8F' },
+              { val: String(data?.scanActivity.counts.UNKNOWN ?? 0), label: 'Unknown', color: '#D32F2F' },
+              { val: String(data?.scanActivity.counts.MANUAL ?? 0), label: 'Manual', color: c.muted },
             ].map((s, i, arr) => (
               <div key={i} style={{ flex: 1, textAlign: 'center', borderRight: i < arr.length - 1 ? c.divider : 'none', padding: '2px 0' }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.val}</div>
@@ -268,12 +280,12 @@ export default function Dashboard({ onNavigate }: Props) {
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>Recent Scans</div>
             {recentScans.map((s, i) => (
               <button key={i} className="btn" onClick={() => onNavigate('scan')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: i < recentScans.length - 1 ? c.divider : 'none', background: 'none', border: 'none', borderBottomWidth: i < recentScans.length - 1 ? 1 : 0, borderBottomColor: c.border, borderBottomStyle: 'solid', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-                <div style={{ width: 32, height: 32, borderRadius: 9, background: s.status === 'unknown' ? c.errorBg : c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>{s.emoji}</div>
+                <div style={{ width: 32, height: 32, borderRadius: 9, background: s.status === 'UNKNOWN' ? c.errorBg : c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>{s.emoji ?? '📦'}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: s.status === 'unknown' ? '#C62828' : c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: s.status === 'UNKNOWN' ? '#C62828' : c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
                   <div style={{ fontSize: 10, color: c.muted, fontFamily: 'monospace' }}>{s.barcode}</div>
                 </div>
-                <div style={{ fontSize: 10, color: c.faint, flexShrink: 0 }}>{s.time}</div>
+                <div style={{ fontSize: 10, color: c.faint, flexShrink: 0 }}>{new Date(s.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</div>
               </button>
             ))}
           </div>
@@ -284,8 +296,10 @@ export default function Dashboard({ onNavigate }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
             <div style={{ fontSize: 20 }}>⚠️</div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: c.isDark ? '#FFD54F' : '#5D4037' }}>12 Items Low on Stock</div>
-              <div style={{ fontSize: 11, color: c.isDark ? '#F9A825' : '#8D6E63' }}>Action needed before end of day</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.isDark ? '#FFD54F' : '#5D4037' }}>{summary.lowStockCount ?? 0} Items Low on Stock</div>
+              <div style={{ fontSize: 11, color: c.isDark ? '#F9A825' : '#8D6E63' }}>
+                {(summary.lowStockCount ?? 0) > 0 ? 'Action needed before end of day' : 'All monitored stock levels are healthy'}
+              </div>
             </div>
             <button className="btn" onClick={() => onNavigate('inventory')} style={{
               marginLeft: 'auto', background: '#F9A825', border: 'none',
@@ -293,11 +307,11 @@ export default function Dashboard({ onNavigate }: Props) {
               color: 'white', cursor: 'pointer', fontFamily: 'inherit'
             }}>View</button>
           </div>
-          {['Panadol 500mg', 'Royco 75g', 'Omo 400g'].map((item, i) => (
+          {(data?.lowStockItems ?? []).slice(0, 3).map((item, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i > 0 ? `1px solid ${c.isDark ? 'rgba(249,168,37,0.15)' : 'rgba(0,0,0,0.06)'}` : 'none' }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#F9A825', flexShrink: 0 }} />
-              <div style={{ fontSize: 12, color: c.isDark ? '#FFD54F' : '#5D4037', flex: 1 }}>{item}</div>
-              <span className="badge badge-warning">{[3, 5, 8][i]} left</span>
+              <div style={{ fontSize: 12, color: c.isDark ? '#FFD54F' : '#5D4037', flex: 1 }}>{item.name}</div>
+              <span className="badge badge-warning">{item.quantity} left</span>
             </div>
           ))}
         </div>

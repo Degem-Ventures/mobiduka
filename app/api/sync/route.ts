@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 interface SyncRecord {
   id: string;
@@ -19,15 +20,17 @@ export async function POST(request: Request) {
       records: SyncRecord[];
     };
 
-    if (!businessId || !records || !Array.isArray(records)) {
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
+
+    if (!resolvedBusinessId || !records || !Array.isArray(records)) {
       return NextResponse.json(
-        { error: "Bad Request. Missing multi-tenant parameters or record entries." },
-        { status: 400 },
+        { error: "Authenticated business context is required." },
+        { status: 401 },
       );
     }
 
     const business = await prisma.business.findUnique({
-      where: { id: businessId },
+      where: { id: resolvedBusinessId },
       select: { status: true },
     });
 
@@ -48,7 +51,7 @@ export async function POST(request: Request) {
     const resolvedDeviceId = await prisma.device.findFirst({
       where: {
         OR: [{ id: deviceId }, { deviceUuid: deviceId }],
-        businessId,
+        businessId: resolvedBusinessId,
       },
       select: { id: true },
     });
@@ -63,7 +66,7 @@ export async function POST(request: Request) {
 
       for (const record of sortedRecords) {
         const { entityName, operation, payload, id: clientRecordId } = record;
-        const dataPayload = { ...payload, businessId };
+        const dataPayload = { ...payload, businessId: resolvedBusinessId };
 
         switch (entityName) {
           case "Product": {
@@ -91,7 +94,7 @@ export async function POST(request: Request) {
                 const createdSale = await tx.sale.create({
                   data: {
                     ...saleData,
-                    businessId,
+                    businessId: resolvedBusinessId,
                     saleStatus: saleData.saleStatus ?? "OPEN",
                     paymentStatus: saleData.paymentStatus ?? "PENDING",
                   },
@@ -114,7 +117,7 @@ export async function POST(request: Request) {
                     await tx.inventory.upsert({
                       where: { productId: item.productId },
                       create: {
-                        businessId,
+                        businessId: resolvedBusinessId,
                         productId: item.productId,
                         quantity: 0,
                         reservedQuantity: 0,
@@ -172,7 +175,7 @@ export async function POST(request: Request) {
 
           case "Credit": {
             const creditCustomer = await tx.customer.findFirst({
-              where: { id: dataPayload.customerId, businessId },
+              where: { id: dataPayload.customerId, businessId: resolvedBusinessId },
               select: { id: true },
             });
 
@@ -200,7 +203,7 @@ export async function POST(request: Request) {
               await tx.creditLedgerEntry.create({
                 data: {
                   id: dataPayload.id,
-                  businessId,
+                  businessId: resolvedBusinessId,
                   customerId: dataPayload.customerId,
                   type: "SALE",
                   amount: paymentAmount,

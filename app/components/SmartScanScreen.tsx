@@ -1,24 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const productDB: Record<string, { name: string; barcode: string; category: string; price: number; stock: number; supplier: string; emoji: string; status: string }> = {
-  '6001068023227': { name: 'Unga Jogoo 2kg',   barcode: '6001068023227', category: 'Flour',    price: 200, stock: 45, supplier: 'Unga Limited',   emoji: '🌾', status: 'good'     },
-  '6009876541230': { name: 'Milk 500ml',        barcode: '6009876541230', category: 'Dairy',    price: 100, stock: 60, supplier: 'Brookside Dairy', emoji: '🥛', status: 'good'     },
-  '6001253001021': { name: 'Cooking Oil 1L',    barcode: '6001253001021', category: 'Oils',     price: 190, stock: 32, supplier: 'Bidco Africa',    emoji: '🫙', status: 'good'     },
-  '6002200022220': { name: 'Panadol 500mg',     barcode: '6002200022220', category: 'Pharma',   price: 30,  stock: 3,  supplier: 'Dawa Limited',    emoji: '💊', status: 'critical' },
-  '6005001234567': { name: 'Sugar 1kg',         barcode: '6005001234567', category: 'Sugar',    price: 140, stock: 28, supplier: 'Mumias Sugar',    emoji: '🍬', status: 'low'      },
-  '6006543219876': { name: 'Royco 75g',         barcode: '6006543219876', category: 'Spices',   price: 45,  stock: 5,  supplier: 'Unilever Kenya',  emoji: '🌶️', status: 'critical' },
-  '6007112233445': { name: 'Blue Band 500g',    barcode: '6007112233445', category: 'Spreads',  price: 150, stock: 18, supplier: 'Bidco Africa',    emoji: '🧈', status: 'low'      },
-  '6008998877661': { name: 'Omo 400g',          barcode: '6008998877661', category: 'Detergent',price: 180, stock: 8,  supplier: 'P&G Kenya',       emoji: '🧺', status: 'low'      },
-}
-
-const recentScans = [
-  { name: 'Unga Jogoo 2kg',  barcode: '6001068023227', action: 'Added to cart',   time: '14:32', emoji: '🌾' },
-  { name: 'Milk 500ml',      barcode: '6009876541230', action: 'Stock adjusted',  time: '14:18', emoji: '🥛' },
-  { name: 'Cooking Oil 1L',  barcode: '6001253001021', action: 'Price checked',   time: '13:55', emoji: '🫙' },
-]
-
-const demoSequence = Object.keys(productDB)
+type ScannedProduct = { name: string; barcode: string; category: string | null; price: number; stock: number; supplier: { name: string } | null; emoji: string; status: string; id: string }
+type ScanLog = { name: string; barcode: string; action: string; time: string; emoji: string }
+type ScanResponse = { found: boolean; product: ScannedProduct | null; status: string }
 
 interface Props { onNavigate: (s: string) => void }
 
@@ -27,18 +13,53 @@ type Mode = 'idle' | 'scanning' | 'result' | 'unknown' | 'manual'
 export default function SmartScanScreen({ onNavigate }: Props) {
   const [mode, setMode]       = useState<Mode>('idle')
   const [scanned, setScanned] = useState<string>('')
-  const [product, setProduct] = useState<typeof productDB[string] | null>(null)
+  const [product, setProduct] = useState<ScannedProduct | null>(null)
   const [scanProgress, setScanProgress] = useState(0)
   const [manualInput, setManualInput]   = useState('')
   const [flash, setFlash]               = useState(false)
   const [addedToCart, setAddedToCart]   = useState(false)
-  const [demoIdx, setDemoIdx]           = useState(0)
-  const [scanLog, setScanLog]           = useState(recentScans)
+  const [scanLog, setScanLog]           = useState<ScanLog[]>([])
+  const [error, setError]               = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const c = useColors()
 
-  // Animate scanning progress
-  const startScan = (barcode?: string) => {
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) {
+      setError('Please sign in to use SmartScan.')
+      return
+    }
+    apiFetch<{ scanActivity: { recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => setScanLog(response.scanActivity.recent.map(scan => ({
+        name: scan.name,
+        barcode: scan.barcode,
+        action: scan.status === 'UNKNOWN' ? 'Not found' : scan.status === 'MANUAL' ? 'Manual lookup' : 'Price checked',
+        time: new Date(scan.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        emoji: scan.emoji ?? '📦',
+      }))))
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load scan activity.'))
+  }, [])
+
+  const lookup = async (code: string, statusOverride = 'AUTO') => {
+    const session = getClientSession()
+    if (!session) throw new Error('Please sign in to use SmartScan.')
+    const response = await apiFetch<ScanResponse>('/api/scans', {
+      method: 'POST',
+      body: JSON.stringify({ businessId: session.user.businessId, barcode: code, statusOverride, action: 'LOOKUP' }),
+    })
+    setScanned(code)
+    setProduct(response.product)
+    setMode(response.found ? 'result' : 'unknown')
+    setScanLog(previous => [{
+      name: response.product?.name ?? 'Unknown Product', barcode: code,
+      action: response.found ? (statusOverride === 'MANUAL' ? 'Manual lookup' : 'Price checked') : 'Not found',
+      time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      emoji: response.product ? '📦' : '❓',
+    }, ...previous.filter(item => item.barcode !== code).slice(0, 9)])
+  }
+
+  // Animate scanning progress, then resolve the barcode against the database.
+  const startScan = (barcode?: string, statusOverride = 'AUTO') => {
     setMode('scanning')
     setScanProgress(0)
     setAddedToCart(false)
@@ -48,24 +69,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       setScanProgress(Math.min(p, 100))
       if (p >= 100) {
         clearInterval(intervalRef.current!)
-        const code = barcode ?? demoSequence[demoIdx % demoSequence.length]
-        setDemoIdx(i => i + 1)
-        setScanned(code)
-        const found = productDB[code]
+        const code = barcode ?? window.prompt('Enter barcode to scan')?.trim() ?? ''
+        if (!code) { setMode('idle'); return }
         setFlash(true)
         setTimeout(() => setFlash(false), 200)
-        if (found) {
-          setProduct(found)
-          setMode('result')
-          setScanLog(prev => [{
-            name: found.name, barcode: code,
-            action: 'Price checked', time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-            emoji: found.emoji,
-          }, ...prev.slice(0, 4)])
-        } else {
-          setProduct(null)
-          setMode('unknown')
-        }
+        lookup(code, statusOverride).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Scan lookup failed.'))
       }
     }, 80)
   }
@@ -74,8 +82,32 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     const code = manualInput.trim()
     if (!code) return
     setManualInput('')
-    setMode('manual')
-    startScan(code)
+    startScan(code, 'MANUAL')
+  }
+
+  const addToCart = async () => {
+    if (!product) return
+    const session = getClientSession()
+    if (!session) return setError('Please sign in to add items to cart.')
+    try {
+      await apiFetch('/api/scans', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, barcode: product.barcode, action: 'ADD_TO_CART' }) })
+      setAddedToCart(true)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to add item to cart.')
+    }
+  }
+
+  const restock = async () => {
+    if (!product) return
+    const quantity = Number(window.prompt('Quantity to restock', '1'))
+    const session = getClientSession()
+    if (!session || !Number.isInteger(quantity) || quantity <= 0) return
+    try {
+      const response = await apiFetch<ScanResponse & { product: ScannedProduct }>('/api/scans', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, userId: session.user.id, barcode: product.barcode, action: 'RESTOCK', quantity }) })
+      setProduct(response.product)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to restock item.')
+    }
   }
 
   const reset = () => { setMode('idle'); setScanned(''); setProduct(null); setAddedToCart(false) }
@@ -111,6 +143,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ flex: 1, padding: '0 0 80px' }}>
+        {error && <div style={{ margin: '12px 16px 0', background: '#FFEBEE', color: '#C62828', border: '1px solid #FFCDD2', borderRadius: 10, padding: '10px 12px', fontSize: 12 }}>{error}</div>}
 
         {/* ── Viewfinder ── */}
         <div style={{ position: 'relative', height: 240, background: '#060E1F', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -222,7 +255,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                 {[
                   { label: 'Price', value: `KSh ${product.price}`, color: '#123A8F' },
                   { label: 'Stock', value: `${product.stock} units`, color: product.status === 'critical' ? '#D32F2F' : product.status === 'low' ? '#F9A825' : '#2E7D32' },
-                  { label: 'Supplier', value: product.supplier.split(' ')[0], color: c.muted },
+                  { label: 'Supplier', value: product.supplier?.name?.split(' ')[0] ?? 'N/A', color: c.muted },
                 ].map((s, i) => (
                   <div key={i} style={{ background: c.cardAlt, borderRadius: 10, padding: '10px', textAlign: 'center' }}>
                     <div style={{ fontSize: 10, color: c.muted, marginBottom: 3 }}>{s.label}</div>
@@ -233,11 +266,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
 
               {/* Primary actions */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
-                <button className="btn" onClick={() => { setAddedToCart(true) }} style={{ padding: '11px 6px', background: addedToCart ? c.successBg : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <button className="btn" onClick={addToCart} style={{ padding: '11px 6px', background: addedToCart ? c.successBg : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                   <span style={{ fontSize: 18 }}>{addedToCart ? '✅' : '🛒'}</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: addedToCart ? '#2E7D32' : 'white' }}>{addedToCart ? 'Added!' : 'Add to Cart'}</span>
                 </button>
-                <button className="btn" onClick={() => onNavigate('purchases')} style={{ padding: '11px 6px', background: c.successBg, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <button className="btn" onClick={restock} style={{ padding: '11px 6px', background: c.successBg, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                   <span style={{ fontSize: 18 }}>📦</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: '#2E7D32' }}>Restock</span>
                 </button>
@@ -314,17 +347,6 @@ export default function SmartScanScreen({ onNavigate }: Props) {
               ))}
             </div>
 
-            {/* Quick scan barcodes */}
-            <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 10 }}>Quick Scan (tap any barcode)</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {Object.entries(productDB).map(([code, p]) => (
-                <button key={code} className="btn" onClick={() => startScan(code)}
-                  style={{ padding: '6px 12px', background: c.card, border: '1.5px solid #E8ECF4', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
-                  <span style={{ fontSize: 14 }}>{p.emoji}</span>
-                  <span style={{ fontSize: 10, fontFamily: 'monospace', color: c.muted }}>{code.slice(-5)}</span>
-                </button>
-              ))}
-            </div>
           </div>
         )}
       </div>

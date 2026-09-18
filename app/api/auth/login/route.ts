@@ -28,20 +28,22 @@ export async function POST(request: Request) {
     const pin = String(body.pin ?? "");
     const businessId = String(body.businessId ?? request.headers.get("x-business-id") ?? "").trim();
 
-    if (!identifier || (!password && !pin) || (pin && !businessId)) {
+    if ((!identifier && !pin) || (!password && !pin) || (password && !identifier)) {
       return NextResponse.json(
-        { error: "Email, username, or PIN with business context is required." },
+        { error: "Business identifier and password, or business context and PIN, are required." },
         { status: 400 },
       );
     }
 
-    const user = await prisma.user.findFirst({
+    const users = await prisma.user.findMany({
       where: {
         ...(businessId ? { businessId } : {}),
-        OR: [
-          { email: normalizeUserLookup(identifier) },
-          { username: normalizeUserLookup(identifier) },
-        ],
+        ...(identifier ? {
+          OR: [
+            { email: normalizeUserLookup(identifier) },
+            { username: normalizeUserLookup(identifier) },
+          ],
+        } : {}),
       },
       include: {
         role: true,
@@ -56,29 +58,58 @@ export async function POST(request: Request) {
       },
     });
 
-    if (!user || user.status !== "ACTIVE") {
-      return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+    if (password) {
+      const user = users[0];
+      if (!user || user.status !== "ACTIVE") {
+        return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+      }
+      return completeLogin(user, password, "");
     }
 
+    if (!businessId) {
+      return NextResponse.json({ error: "Business context is required for PIN login." }, { status: 400 });
+    }
+
+    const activeUsers = users.filter((candidate) => candidate.status === "ACTIVE");
+    let user = null;
+    for (const candidate of activeUsers) {
+      if (candidate.pinHash && (candidate.pinHash.startsWith("$2")
+        ? bcrypt.compareSync(pin, candidate.pinHash)
+        : safeHashCompare(candidate.pinHash, pin))) {
+        user = candidate;
+        break;
+      }
+    }
+
+    if (!user) return NextResponse.json({ error: "Invalid PIN for this business." }, { status: 401 });
+    return completeLogin(user, "", pin);
+  } catch (error) {
+    console.error("Auth login failed:", error);
+    return NextResponse.json({ error: "Authentication failed." }, { status: 500 });
+  }
+}
+
+function safeHashCompare(storedHash: string, value: string) {
+  const expected = crypto.createHash("sha256").update(value).digest("hex");
+  const stored = Buffer.from(storedHash);
+  const candidate = Buffer.from(expected);
+  return stored.length === candidate.length && crypto.timingSafeEqual(stored, candidate);
+}
+
+function completeLogin(user: any, password: string, pin: string) {
     let passwordMatches = false;
     let pinMatches = false;
 
     if (password && user.passwordHash) {
       passwordMatches = user.passwordHash.startsWith("$2")
         ? bcrypt.compareSync(password, user.passwordHash)
-        : crypto.timingSafeEqual(
-            Buffer.from(user.passwordHash),
-            Buffer.from(crypto.createHash("sha256").update(password).digest("hex")),
-          );
+        : safeHashCompare(user.passwordHash, password);
     }
 
     if (pin && user.pinHash) {
       pinMatches = user.pinHash.startsWith("$2")
         ? bcrypt.compareSync(pin, user.pinHash)
-        : crypto.timingSafeEqual(
-            Buffer.from(user.pinHash),
-            Buffer.from(crypto.createHash("sha256").update(pin).digest("hex")),
-          );
+        : safeHashCompare(user.pinHash, pin);
     }
 
     if (!passwordMatches && !pinMatches) {
@@ -131,8 +162,4 @@ export async function POST(request: Request) {
         businessId: user.businessId,
       },
     });
-  } catch (error) {
-    console.error("Auth login failed:", error);
-    return NextResponse.json({ error: "Authentication failed." }, { status: 500 });
-  }
 }

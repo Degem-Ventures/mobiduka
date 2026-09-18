@@ -11,6 +11,19 @@
       "description": "Current app origin API router"
     }
   ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT issued by /auth/login. Use the token as Authorization: Bearer <token>."
+      }
+    }
+  },
+  "security": [
+    { "bearerAuth": [] }
+  ],
   "tags": [
     { "name": "Authentication", "description": "Owner and cashier login" },
     { "name": "Business", "description": "Tenant operations, cash, procurement, expenses, and reports" },
@@ -26,6 +39,7 @@
         "tags": ["Authentication"],
         "summary": "Multi-Factor Authentication Entry Gateway",
         "description": "Handles standard credential authorization maps for owners and fast PIN code verification sequences for shift cashiers.",
+        "security": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -371,6 +385,190 @@
         }
       }
     },
+    "/dashboard/summary": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Aggregate dashboard summary for a tenant",
+        "description": "Returns the dashboard metrics used by the web app and Flutter dashboards, including revenue, cash, low stock, recent sales, and scan activity for the seeded tenant.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Seeded deployed business ID from the demo tenant." },
+          { "name": "days", "in": "query", "required": false, "schema": { "type": "integer", "default": 30, "example": 30 }, "description": "Backward look window in days. Defaults to 30." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dashboard summary assembled from real sales, expenses, cash sessions, inventory, and scan events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "businessId": { "type": "string", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                        "name": { "type": "string", "example": "MobiDuka Wholesale Eldoret" },
+                        "country": { "type": "string", "example": "Kenya" },
+                        "currency": { "type": "string", "example": "KES" },
+                        "timezone": { "type": "string", "example": "Africa/Nairobi" },
+                        "date": { "type": "string", "example": "2026-09-18" }
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "todayRevenue": { "type": "number", "example": 84250 },
+                        "todayProfit": { "type": "number", "example": 61210 },
+                        "todayTransactionCount": { "type": "integer", "example": 18 },
+                        "periodRevenue": { "type": "number", "example": 524850 },
+                        "periodProfit": { "type": "number", "example": 318172 },
+                        "profitMarginPercentage": { "type": "number", "example": 60.6 },
+                        "cashInTill": { "type": "number", "example": 28200 },
+                        "creditOut": { "type": "number", "example": 15250 },
+                        "creditCustomerCount": { "type": "integer", "example": 6 },
+                        "inventoryValue": { "type": "number", "example": 64250 },
+                        "activeSkuCount": { "type": "integer", "example": 15 },
+                        "lowStockCount": { "type": "integer", "example": 3 }
+                      }
+                    },
+                    "paymentBreakdown": {
+                      "type": "object",
+                      "additionalProperties": { "type": "object", "properties": { "amount": { "type": "number" }, "transactions": { "type": "integer" } } }
+                    },
+                    "topProducts": { "type": "array", "items": { "type": "object" } },
+                    "recentTransactions": { "type": "array", "items": { "type": "object" } },
+                    "lowStockItems": { "type": "array", "items": { "type": "object" } },
+                    "cashSessions": { "type": "array", "items": { "type": "object" } },
+                    "scanActivity": { "type": "object", "properties": { "counts": { "type": "object" }, "recent": { "type": "array" } } }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Authenticated business context is required." },
+          "404": { "description": "Business not found." },
+          "500": { "description": "Failed to assemble dashboard data." }
+        }
+      }
+    },
+    "/scans": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "Look up a product by barcode and record scan activity",
+        "description": "Returns product details for a scanned barcode and logs the event for the authenticated tenant. The seeded demo catalog includes printer-friendly barcodes such as 6191000000158 for Safaricom Airtime 100 KES.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Authenticated business tenant ID." },
+          { "name": "barcode", "in": "query", "required": true, "schema": { "type": "string", "example": "6191000000158" }, "description": "Barcode to lookup in the store catalog." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lookup completed and scan logged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "found": { "type": "boolean", "example": true },
+                    "status": { "type": "string", "example": "FOUND" },
+                    "product": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "c8d8215e-3868-4378-9a72-b6fa28f80c3a" },
+                        "name": { "type": "string", "example": "Safaricom Airtime 100 KES" },
+                        "barcode": { "type": "string", "example": "6191000000158" },
+                        "category": { "type": "string", "example": "Fast Moving Consumer Goods" },
+                        "price": { "type": "number", "example": 100 },
+                        "stock": { "type": "integer", "example": 250 },
+                        "minimumStock": { "type": "integer", "example": 20 },
+                        "stockStatus": { "type": "string", "example": "GOOD" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Authenticated business and barcode are required." },
+          "500": { "description": "Failed to look up scanned product." }
+        }
+      },
+      "post": {
+        "tags": ["Inventory"],
+        "summary": "Process scan actions for lookup, add-to-cart, and restock",
+        "description": "Allows clients to look up a product, add it to a cart, or add inventory through a barcode-driven restock action. The demo tenant includes owner and cashier accounts like owner@mobiduka.com / OwnerPass123 and cashier1 / 2540.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "barcode"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                  "barcode": { "type": "string", "example": "6191000000158" },
+                  "statusOverride": { "type": "string", "enum": ["AUTO", "MANUAL"], "example": "AUTO" },
+                  "action": { "type": "string", "enum": ["LOOKUP", "ADD_TO_CART", "RESTOCK"], "example": "RESTOCK" },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4" },
+                  "quantity": { "type": "integer", "minimum": 1, "example": 12 },
+                  "reason": { "type": "string", "example": "Scan restock from POS" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restock completed successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "action": { "type": "string", "example": "RESTOCK" },
+                    "scanId": { "type": "string", "example": "cmg9a0g7q0000l6txk4j7f4r8" },
+                    "product": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "c8d8215e-3868-4378-9a72-b6fa28f80c3a" },
+                        "name": { "type": "string", "example": "Safaricom Airtime 100 KES" },
+                        "barcode": { "type": "string", "example": "6191000000158" },
+                        "stock": { "type": "integer", "example": 262 },
+                        "reservedStock": { "type": "integer", "example": 0 },
+                        "minimumStock": { "type": "integer", "example": 20 },
+                        "stockStatus": { "type": "string", "example": "GOOD" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Lookup or add-to-cart action completed and the scan event was persisted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "action": { "type": "string", "example": "ADD_TO_CART" },
+                    "scanId": { "type": "string" },
+                    "status": { "type": "string", "example": "FOUND" },
+                    "product": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "barcode": { "type": "string" }, "price": { "type": "number" }, "stock": { "type": "integer" }, "stockStatus": { "type": "string" } } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Malformed payload or invalid action/status combination." },
+          "403": { "description": "User does not belong to the authenticated business." },
+          "404": { "description": "Unknown barcode for a restock request." },
+          "500": { "description": "Failed to persist scan event." }
+        }
+      }
+    },
     "/reports/summary": {
       "get": {
         "tags": ["Business"],
@@ -453,6 +651,61 @@
           "201": { "description": "Staff employee profile saved." },
           "400": { "description": "Invalid role, tenant, or employee configuration." }
         }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": ["Authentication", "Employees"],
+        "summary": "Register a user inside the authenticated business",
+        "description": "Creates an active owner, manager, cashier, supervisor, or accountant account. The business is taken from the bearer token; client businessId values are not accepted.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "role"],
+                "properties": {
+                  "name": { "type": "string", "example": "Kamau Mwangi" },
+                  "email": { "type": "string", "format": "email", "example": "kamau@mobiduka.com" },
+                  "username": { "type": "string", "example": "kamau" },
+                  "phone": { "type": "string", "example": "+254700000002" },
+                  "role": { "type": "string", "enum": ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"], "example": "CASHIER" },
+                  "pin": { "type": "string", "pattern": "^[0-9]{4}$", "example": "2542" },
+                  "password": { "type": "string", "format": "password", "example": "ChangeMe123" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "User registered successfully." },
+          "400": { "description": "Invalid user registration data." },
+          "401": { "description": "Authenticated business context is required." },
+          "409": { "description": "Email or username is already registered." }
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Fetch low-stock notifications",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Notifications returned." }, "401": { "description": "Authenticated business context is required." } }
+      }
+    },
+    "/products": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "List products and inventory for a business",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Product catalog returned." }, "401": { "description": "Authenticated business context is required." } }
+      },
+      "post": {
+        "tags": ["Inventory"],
+        "summary": "Create a product",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } },
+        "responses": { "201": { "description": "Product created." }, "401": { "description": "Authenticated business context is required." }, "400": { "description": "Product creation failed." } }
       }
     },
     "/expenses": {
