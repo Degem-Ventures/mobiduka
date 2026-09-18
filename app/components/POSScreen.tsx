@@ -1,41 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import WebSmartScan from './WebSmartScan'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const creditCustomers = [
-  { id: 1, name: 'James Kariuki',   phone: '0712 345 678', balance: 4200 },
-  { id: 2, name: 'Mary Achieng',    phone: '0723 456 789', balance: 1800 },
-  { id: 3, name: 'David Mutua',     phone: '0734 567 890', balance: 0    },
-  { id: 4, name: 'Wanjiku Njoroge', phone: '0745 678 901', balance: 9500 },
-  { id: 5, name: 'Hassan Juma',     phone: '0756 789 012', balance: 3300 },
-  { id: 6, name: 'Grace Otieno',    phone: '0767 890 123', balance: 600  },
-  { id: 7, name: 'Peter Ndirangu',  phone: '0778 901 234', balance: 0    },
-  { id: 8, name: 'Faith Wambua',    phone: '0789 012 345', balance: 2150 },
-]
-
-const products = [
-  { id: 1, name: 'Unga Jogoo 2kg', price: 200, category: 'Flour', stock: 45, emoji: '🌾' },
-  { id: 2, name: 'Cooking Oil 1L', price: 190, category: 'Oils', stock: 32, emoji: '🫙' },
-  { id: 3, name: 'Sugar 1kg', price: 140, category: 'Sugar', stock: 28, emoji: '🍬' },
-  { id: 4, name: 'Blue Band 500g', price: 150, category: 'Spreads', stock: 18, emoji: '🧈' },
-  { id: 5, name: 'Milk 500ml', price: 100, category: 'Dairy', stock: 60, emoji: '🥛' },
-  { id: 6, name: 'Royco 75g', price: 45, category: 'Spices', stock: 5, emoji: '🌶️' },
-  { id: 7, name: 'Panadol 500mg', price: 30, category: 'Pharma', stock: 3, emoji: '💊' },
-  { id: 8, name: 'Omo 400g', price: 180, category: 'Detergent', stock: 8, emoji: '🧺' },
-  { id: 9, name: 'Colgate 100ml', price: 85, category: 'Personal', stock: 22, emoji: '🪥' },
-  { id: 10, name: 'Bread White', price: 55, category: 'Bakery', stock: 15, emoji: '🍞' },
-  { id: 11, name: 'Eggs (tray)', price: 480, category: 'Dairy', stock: 12, emoji: '🥚' },
-  { id: 12, name: 'Nescafé 100g', price: 320, category: 'Beverages', stock: 9, emoji: '☕' },
-]
-
-const categories = ['All', 'Flour', 'Oils', 'Sugar', 'Dairy', 'Pharma', 'Beverages', 'Spreads', 'Spices', 'Bakery']
-
-type CartItem = { id: number; name: string; price: number; qty: number; emoji: string }
+type ProductItem = { id: string; name: string; price: number; category: string; stock: number; emoji: string; barcode?: string | null }
+type CreditCustomer = { id: string; name: string; phone: string; balance: number }
+type CartItem = Pick<ProductItem, 'id' | 'name' | 'price' | 'emoji'> & { qty: number }
 
 interface Props {
   onNavigate: (screen: string) => void
 }
 
 export default function POSScreen({ onNavigate }: Props) {
+  const [products, setProducts] = useState<ProductItem[]>([])
+  const [creditCustomers, setCreditCustomers] = useState<CreditCustomer[]>([])
+  const [dataError, setDataError] = useState('')
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -43,12 +22,43 @@ export default function POSScreen({ onNavigate }: Props) {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'credit'>('cash')
   const [discount, setDiscount] = useState(0)
   // Credit customer picker state
-  const [selectedCreditor, setSelectedCreditor] = useState<{ id: number; name: string; phone: string } | null>(null)
+  const [selectedCreditor, setSelectedCreditor] = useState<{ id: string; name: string; phone: string } | null>(null)
   const [creditSearch, setCreditSearch] = useState('')
   const [showQuickAdd, setShowQuickAdd] = useState(false)
   const [quickName, setQuickName] = useState('')
   const [quickPhone, setQuickPhone] = useState('')
+  const [isWebScannerOpen, setIsWebScannerOpen] = useState(false)
   const c = useColors()
+  const session = getClientSession()
+  const currentBusinessId = session?.user.businessId ?? ''
+  const categories = ['All', ...new Set(products.map(product => product.category).filter(Boolean))]
+
+  useEffect(() => {
+    if (!session) {
+      setDataError('Please sign in to load products and customers.')
+      return
+    }
+    Promise.all([
+      apiFetch<Array<{ id: string; name: string; barcode: string | null; sellingPrice: number | null; category: { name: string } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<Array<{ id: string; name: string; phone: string | null; creditAccount: { balance: number } | null }>>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`),
+    ]).then(([productRows, customerRows]) => {
+      setProducts(productRows.map(product => ({
+        id: product.id,
+        name: product.name,
+        price: Number(product.sellingPrice ?? 0),
+        category: product.category?.name ?? 'Uncategorized',
+        stock: Number(product.inventory?.quantity ?? 0),
+        emoji: '📦',
+        barcode: product.barcode,
+      })))
+      setCreditCustomers(customerRows.map(customer => ({
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone ?? 'No phone number',
+        balance: Number(customer.creditAccount?.balance ?? 0),
+      })))
+    }).catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load POS data.'))
+  }, [session?.user.businessId])
 
   const filtered = products.filter(p =>
     (category === 'All' || p.category === category) &&
@@ -63,7 +73,49 @@ export default function POSScreen({ onNavigate }: Props) {
     })
   }
 
-  const updateQty = (id: number, delta: number) => {
+  const attachCustomerToSale = (customerId: string) => {
+    const customer = creditCustomers.find(candidate => String(candidate.id) === customerId)
+    if (!customer) return
+    setSelectedCreditor({ id: customer.id, name: customer.name, phone: customer.phone })
+    setPaymentMethod('credit')
+    setView('payment')
+  }
+
+  const handleBarcodeProductLookup = (scannedCode: string) => {
+    const product = products.find(candidate => candidate.barcode === scannedCode || String(candidate.id) === scannedCode || candidate.name.toLowerCase() === scannedCode.toLowerCase())
+    setSearch(scannedCode)
+    if (product) addToCart(product)
+  }
+
+  const addCustomer = async () => {
+    if (!session || !quickName.trim() || !quickPhone.trim()) return
+    try {
+      const response = await apiFetch<{ customerId: string }>('/api/customers', {
+        method: 'POST',
+        body: JSON.stringify({ businessId: session.user.businessId, name: quickName.trim(), phone: quickPhone.trim() }),
+      })
+      const customer = { id: response.customerId, name: quickName.trim(), phone: quickPhone.trim() }
+      setCreditCustomers(previous => [...previous, { ...customer, balance: 0 }])
+      setSelectedCreditor(customer)
+      setShowQuickAdd(false)
+      setQuickName('')
+      setQuickPhone('')
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to add customer.')
+    }
+  }
+
+  const handleWebScanSuccess = (scannedCode: string) => {
+    setIsWebScannerOpen(false)
+    if (scannedCode.startsWith('MOBIDUKA:USER:') || scannedCode.startsWith('CUST_')) {
+      const customerId = scannedCode.replace('MOBIDUKA:USER:', '').replace('CUST_', '')
+      attachCustomerToSale(customerId)
+    } else {
+      handleBarcodeProductLookup(scannedCode)
+    }
+  }
+
+  const updateQty = (id: string, delta: number) => {
     setCart(prev => prev.map(x => x.id === id ? { ...x, qty: Math.max(0, x.qty + delta) } : x).filter(x => x.qty > 0))
   }
 
@@ -260,7 +312,7 @@ export default function POSScreen({ onNavigate }: Props) {
                       <input className="input" placeholder="Phone Number *" value={quickPhone} onChange={e => setQuickPhone(e.target.value)} type="tel" style={{ marginBottom: 10 }} />
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button className="btn" onClick={() => { setShowQuickAdd(false); setQuickName(''); setQuickPhone('') }} style={{ flex: 1, padding: '10px', background: 'none', border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-                        <button className="btn" onClick={() => { if (quickName && quickPhone) { setSelectedCreditor({ id: Date.now(), name: quickName, phone: quickPhone }); setShowQuickAdd(false); setQuickName(''); setQuickPhone('') } }} style={{ flex: 2, padding: '10px', background: quickName && quickPhone ? '#123A8F' : c.cardAlt, border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, color: quickName && quickPhone ? 'white' : c.faint, cursor: quickName && quickPhone ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>Add &amp; Select</button>
+                        <button className="btn" onClick={() => void addCustomer()} disabled={!quickName || !quickPhone || !session} style={{ flex: 2, padding: '10px', background: quickName && quickPhone && session ? '#123A8F' : c.cardAlt, border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, color: quickName && quickPhone && session ? 'white' : c.faint, cursor: quickName && quickPhone && session ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>Add &amp; Select</button>
                       </div>
                     </div>
                   )}
@@ -364,6 +416,7 @@ export default function POSScreen({ onNavigate }: Props) {
   // Main POS view
   return (
     <div className="screen" style={{ background: c.bg }}>
+      {dataError && <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       {/* Search header */}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
@@ -379,8 +432,8 @@ export default function POSScreen({ onNavigate }: Props) {
                 borderRadius: 12, color: 'white', fontSize: 14, fontFamily: 'inherit', outline: 'none'
               }} />
           </div>
-          <button className="btn" style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.12)', border: '1.5px solid rgba(255,255,255,0.2)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer' }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 22 v-11h6v11"/></svg>
+          <button className="btn" type="button" onClick={() => setIsWebScannerOpen(true)} aria-label="Open webcam scanner" title="Open webcam scanner" style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.12)', border: '1.5px solid rgba(255,255,255,0.2)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', fontSize: 19 }}>
+            📷
           </button>
           <button className="btn" onClick={() => setView('cart')} style={{
             width: 44, height: 44, background: '#D4AF37', border: 'none',
@@ -449,6 +502,14 @@ export default function POSScreen({ onNavigate }: Props) {
             <div style={{ color: '#D4AF37', fontSize: 16, fontWeight: 800 }}>KSh {subtotal.toLocaleString()}</div>
           </button>
         </div>
+      )}
+
+      {isWebScannerOpen && (
+        <WebSmartScan
+          businessId={currentBusinessId}
+          onScanSuccess={handleWebScanSuccess}
+          onClose={() => setIsWebScannerOpen(false)}
+        />
       )}
     </div>
   )

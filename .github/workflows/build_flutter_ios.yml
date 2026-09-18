@@ -23,6 +23,27 @@ jobs:
       - name: Disable Swift Package Manager
         run: flutter config --no-enable-swift-package-manager
 
+      - name: Stabilize CocoaPods Git dependencies
+        run: |
+          # bluetooth_print_plus resolves GSDK from Gitee during pod install.
+          # Use HTTP/1.1 and a long low-speed window because the hosted Gitee
+          # repository can be slow to clone from macOS runners.
+          git config --global http.version HTTP/1.1
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 600
+          git config --global http.maxRequests 1
+
+          for attempt in 1 2 3 4 5; do
+            if git ls-remote https://gitee.com/besthandset/gsdk.git HEAD; then
+              exit 0
+            fi
+            echo "Gitee dependency preflight failed (attempt ${attempt}/5); retrying..."
+            sleep 10
+          done
+
+          echo "Unable to reach the GSDK repository after 5 attempts."
+          exit 1
+
       - name: Ensure iOS project exists
         run: |
           cd flutter_app
@@ -93,7 +114,17 @@ jobs:
       - name: Build Flutter iOS app without signing
         run: |
           cd flutter_app
-          flutter build ios --no-codesign --debug
+          for attempt in 1 2 3; do
+            if flutter build ios --no-codesign --debug; then
+              exit 0
+            fi
+            echo "Flutter iOS build failed (attempt ${attempt}/3); retrying CocoaPods resolution..."
+            rm -rf ios/Pods ios/Podfile.lock
+            sleep 15
+          done
+
+          echo "Flutter iOS build failed after 3 attempts."
+          exit 1
 
       - name: Upload iOS Simulator Build Artifact
         uses: actions/upload-artifact@v4
