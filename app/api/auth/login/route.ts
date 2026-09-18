@@ -45,6 +45,14 @@ export async function POST(request: Request) {
       },
       include: {
         role: true,
+        business: {
+          include: {
+            licenses: {
+              orderBy: { expiryDate: "desc" },
+              take: 1,
+            },
+          },
+        },
       },
     });
 
@@ -88,10 +96,24 @@ export async function POST(request: Request) {
       );
     }
 
+    const license = user.business.licenses[0];
+    const licenseExpiresAt = license?.expiryDate
+      ? Math.floor(license.expiryDate.getTime() / 1000)
+      : undefined;
+    const nowUnixTime = Math.floor(Date.now() / 1000);
+    const businessStatus = user.business.status.trim().toUpperCase();
+    const subscriptionStatus =
+      businessStatus !== "ACTIVE" || license?.status?.toUpperCase() === "EXPIRED" ||
+      (licenseExpiresAt !== undefined && nowUnixTime >= licenseExpiresAt)
+        ? "EXPIRED"
+        : businessStatus;
+
     const token = signToken({
       sub: user.id,
       businessId: user.businessId,
       role: user.role?.name ?? "CASHIER",
+      subscriptionStatus,
+      ...(licenseExpiresAt !== undefined ? { subscriptionExpiresAt: licenseExpiresAt } : {}),
       type: pin ? "pin" : "password",
       email: user.email,
       username: user.username,
