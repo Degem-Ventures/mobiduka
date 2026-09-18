@@ -9,6 +9,7 @@ import 'package:bluetooth_print_plus/bluetooth_print_plus.dart' show BluetoothDe
 import 'package:pdf/pdf.dart' as pdf;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 
 import 'services/cash_service.dart';
 import 'services/credit_service.dart';
@@ -28,7 +29,7 @@ import 'services/sms_watcher_service.dart';
 import 'services/sync_service.dart';
 import 'widgets/barcode_scanner_view.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FlutterError.onError = (details) {
     _lastFlutterError = details.exception.toString();
@@ -43,7 +44,21 @@ void main() {
   ErrorWidget.builder = (details) => StartupErrorScreen(
         message: details.exception.toString(),
       );
-  runApp(const MobiDukaApp());
+  await SentryFlutter.init(
+    (options) {
+      const dsn = String.fromEnvironment('SENTRY_DSN');
+      if (dsn.isNotEmpty) {
+        options.dsn = dsn;
+        options.environment = const String.fromEnvironment(
+          'SENTRY_ENVIRONMENT',
+          defaultValue: 'production',
+        );
+        options.tracesSampleRate = 0.1;
+        options.reportPackages = true;
+      }
+    },
+    appRunner: () => runApp(const MobiDukaApp()),
+  );
 }
 
 String? _lastFlutterError;

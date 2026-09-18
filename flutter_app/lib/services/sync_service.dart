@@ -7,10 +7,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'api_config.dart';
+import 'telemetry_http_client.dart';
 
 class SyncService {
+  SyncService({http.Client? client}) : _client = client ?? http.Client();
+
   static Database? _database;
   final String baseUrl = ApiConfig.apiBase;
+  final http.Client _client;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -121,7 +125,10 @@ class SyncService {
     };
 
     try {
-      final response = await http.post(
+      final response = await TelemetryHttpClient(
+        _client,
+        businessId: businessId,
+      ).post(
         Uri.parse('$baseUrl/sync'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestBody),
