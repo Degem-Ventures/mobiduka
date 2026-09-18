@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 const toPositiveAmount = (value: unknown) => {
   const amount = typeof value === "number" ? value : Number(value);
@@ -10,16 +11,17 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { action, businessId, customerId, amount, dueDate, creditBookId, userId } = body;
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
 
-    if (!businessId || !customerId || !action) {
+    if (!resolvedBusinessId || !customerId || !action) {
       return NextResponse.json(
-        { error: "Missing required core tenant parameters." },
-        { status: 400 },
+        { error: "Authenticated business context, customer, and action are required." },
+        { status: 401 },
       );
     }
 
     const customer = await prisma.customer.findFirst({
-      where: { id: customerId, businessId },
+      where: { id: customerId, businessId: resolvedBusinessId },
       select: { id: true },
     });
 
@@ -54,7 +56,7 @@ export async function POST(request: Request) {
         const entry = await tx.creditLedgerEntry.create({
           data: {
             id: creditBookId || undefined,
-            businessId,
+            businessId: resolvedBusinessId,
             customerId,
             type: "CHARGE",
             amount: parsedAmount,
@@ -110,7 +112,7 @@ export async function POST(request: Request) {
 
         await tx.auditLog.create({
           data: {
-            businessId,
+            businessId: resolvedBusinessId,
             userId: userId || null,
             action: "CREDIT_REPAYMENT",
             tableName: "CreditLedgerEntry",

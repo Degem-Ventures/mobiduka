@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 import { sendPushNotification } from "@/lib/firebase-admin";
 
 export async function GET(request: Request) {
   try {
-    const businessId = new URL(request.url).searchParams.get("businessId");
+    const businessId = requireBusinessAccess(request, new URL(request.url).searchParams.get("businessId"));
     if (!businessId) {
-      return NextResponse.json({ error: "businessId is required." }, { status: 400 });
+      return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     }
 
     const expenses = await prisma.expense.findMany({
@@ -26,18 +27,22 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { id, businessId, userId, category, amount, description, paidTo } = body;
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
+    const requestedExpenseId = typeof id === "string" && id.trim() && id.trim().toLowerCase() !== "string"
+      ? id.trim()
+      : undefined;
     const parsedAmount = Number(amount);
     const normalizedDescription = typeof description === "string" ? description.trim() : "";
 
-    if (!businessId || !userId || !category || !normalizedDescription || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    if (!resolvedBusinessId || !userId || !category || !normalizedDescription || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       return NextResponse.json(
-        { error: "businessId, userId, category, description, and a positive amount are required." },
-        { status: 400 },
+        { error: "Authenticated business context, userId, category, description, and a positive amount are required." },
+        { status: 401 },
       );
     }
 
     const user = await prisma.user.findFirst({
-      where: { id: userId, businessId },
+      where: { id: userId, businessId: resolvedBusinessId },
       select: { id: true },
     });
     if (!user) return NextResponse.json({ error: "User does not belong to this business." }, { status: 404 });
@@ -45,8 +50,8 @@ export async function POST(request: Request) {
     const expense = await prisma.$transaction(async (tx) => {
       const record = await tx.expense.create({
         data: {
-          id: id || undefined,
-          businessId,
+          id: requestedExpenseId,
+          businessId: resolvedBusinessId,
           category: String(category).trim(),
           description: normalizedDescription,
           amount: parsedAmount,
@@ -57,7 +62,7 @@ export async function POST(request: Request) {
 
       await tx.auditLog.create({
         data: {
-          businessId,
+          businessId: resolvedBusinessId,
           userId,
           action: "EXPENSE_LOGGED",
           tableName: "Expense",
@@ -74,7 +79,7 @@ export async function POST(request: Request) {
         "⚠️ Large Store Outflow Logged",
         `${String(category).trim()}: KSh ${parsedAmount.toFixed(2)}. ${normalizedDescription}`,
         {
-          businessId,
+          businessId: resolvedBusinessId,
           expenseId: expense.id,
           amount: parsedAmount.toFixed(2),
           category: String(category).trim(),

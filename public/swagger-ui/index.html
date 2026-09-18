@@ -161,19 +161,73 @@
     <script src="/swagger-ui/swagger-ui-standalone-preset.js"></script>
     <script>
       window.onload = function () {
+        const AUTH_KEY = 'mobiduka.swagger.token';
+        const DEMO_LOGIN = {
+          identifier: 'owner@mobiduka.com',
+          password: 'OwnerPass123',
+        };
+
+        function applyStoredToken(ui) {
+          const token = localStorage.getItem(AUTH_KEY);
+          if (!token) return;
+          ui.preauthorizeApiKey('bearerAuth', token);
+        }
+
+        function setToken(ui, token) {
+          if (!token) return;
+          localStorage.setItem(AUTH_KEY, token);
+          ui.preauthorizeApiKey('bearerAuth', token);
+        }
+
+        async function loginAndStoreToken(ui) {
+          const existingToken = localStorage.getItem(AUTH_KEY);
+          if (existingToken) {
+            applyStoredToken(ui);
+            return;
+          }
+
+          try {
+            const response = await fetch('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(DEMO_LOGIN),
+            });
+
+            const payload = await response.json();
+            if (!response.ok || !payload.token) {
+              throw new Error(payload.error || 'Login failed');
+            }
+
+            setToken(ui, payload.token);
+          } catch (error) {
+            console.warn('Swagger demo login failed:', error);
+          }
+        }
+
         const ui = window.SwaggerUIBundle({
           url: '/openapi.json',
           dom_id: '#swagger-ui',
           deepLinking: true,
           docExpansion: 'list',
           persistAuthorization: true,
+          requestInterceptor: (request) => {
+            const token = localStorage.getItem(AUTH_KEY);
+            if (token && !request.headers.Authorization) {
+              request.headers.Authorization = `Bearer ${token}`;
+            }
+            return request;
+          },
           presets: [
             window.SwaggerUIBundle.presets.apis,
             window.SwaggerUIStandalonePreset,
           ],
           layout: 'BaseLayout',
         });
+
         window.ui = ui;
+        ui.onComplete(() => {
+          loginAndStoreToken(ui);
+        });
       };
     </script>
   </body>

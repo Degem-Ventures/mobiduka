@@ -40,6 +40,7 @@ model Business {
   auditLogs         AuditLog[]
   syncQueues        SyncQueue[]
   notifications     Notification[]
+  scanEvents        ScanEvent[]
 }
 
 model License {
@@ -166,6 +167,24 @@ model Product {
   stockMoves    StockMovement[]
   saleItems     SaleItem[]
   purchaseItems PurchaseItem[]
+  scanEvents    ScanEvent[]
+}
+
+model ScanEvent {
+  id         String   @id @default(uuid())
+  businessId String
+  productId  String?
+  barcode    String
+  name       String
+  status     String
+  emoji      String?
+  createdAt  DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+  product  Product? @relation(fields: [productId], references: [id])
+
+  @@index([businessId, createdAt])
+  @@index([businessId, status, createdAt])
 }
 
 model PurchaseOrder {

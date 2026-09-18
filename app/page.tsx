@@ -24,6 +24,7 @@ import TwoFactorScreen from "./components/TwoFactorScreen";
 import AdminRegisterScreen from "./components/AdminRegisterScreen";
 import ShiftsScreen from "./components/ShiftsScreen";
 import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
+import { clearClientSession } from "../lib/client-api";
 
 type Screen =
   | "login"
@@ -162,6 +163,7 @@ function AppInner() {
   };
 
   const handleLogout = () => {
+    clearClientSession();
     setLoggedIn(false);
     setScreen("login");
   };

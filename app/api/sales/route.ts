@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
@@ -35,16 +36,17 @@ export async function POST(request: Request) {
     };
 
     const resolvedCashierId = cashierId ?? userId;
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
 
-    if (!businessId || !resolvedCashierId || !invoiceNo || !items || !Array.isArray(items)) {
+    if (!resolvedBusinessId || !resolvedCashierId || !invoiceNo || !items || !Array.isArray(items)) {
       return NextResponse.json(
-        { error: "Missing required core transactional parameters." },
-        { status: 400 },
+        { error: "Authenticated business context is required." },
+        { status: 401 },
       );
     }
 
     const business = await prisma.business.findUnique({
-      where: { id: businessId },
+      where: { id: resolvedBusinessId },
       select: { id: true },
     });
 
@@ -58,7 +60,7 @@ export async function POST(request: Request) {
     const cashier = await prisma.user.findFirst({
       where: {
         id: resolvedCashierId,
-        businessId,
+        businessId: resolvedBusinessId,
       },
       select: { id: true },
     });
@@ -67,6 +69,21 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "The cashier user does not belong to this business." },
         { status: 400 },
+      );
+    }
+
+    const existingSale = await prisma.sale.findUnique({
+      where: { saleNumber: String(invoiceNo).trim() },
+      select: { id: true, businessId: true },
+    });
+    if (existingSale) {
+      return NextResponse.json(
+        {
+          error: "An invoice with this invoice number already exists.",
+          saleId: existingSale.id,
+          sameBusiness: existingSale.businessId === resolvedBusinessId,
+        },
+        { status: 409 },
       );
     }
 
@@ -89,10 +106,10 @@ export async function POST(request: Request) {
     const completedSale = await prisma.$transaction(async (tx) => {
       const sale = await tx.sale.create({
         data: {
-          businessId,
+          businessId: resolvedBusinessId,
           cashierId: resolvedCashierId,
           customerId: customerId ?? null,
-          saleNumber: String(invoiceNo),
+          saleNumber: String(invoiceNo).trim(),
           subtotal: Number(totalAmount ?? subtotal),
           discount: discountTotal,
           tax: taxTotal,
@@ -126,7 +143,7 @@ export async function POST(request: Request) {
         if (!inventory) {
           await tx.inventory.create({
             data: {
-              businessId,
+              businessId: resolvedBusinessId,
               productId: item.productId,
               quantity: 0,
               reservedQuantity: 0,
@@ -160,7 +177,7 @@ export async function POST(request: Request) {
 
       await tx.auditLog.create({
         data: {
-          businessId,
+          businessId: resolvedBusinessId,
           userId: resolvedCashierId,
           action: "SALE_CREATED",
           tableName: "Sale",

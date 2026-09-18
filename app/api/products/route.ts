@@ -1,31 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
-async function getDefaultBusiness() {
-  const existing = await prisma.business.findFirst();
-
-  if (existing) {
-    return existing;
-  }
-
-  return prisma.business.create({
-    data: {
-      name: "MobiDuka Demo Store",
-      businessType: "retail",
-      country: "Kenya",
-      currency: "KES",
-      timezone: "Africa/Nairobi",
-      subscriptionPlan: "starter",
-      status: "ACTIVE",
-    },
-  });
-}
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const business = await getDefaultBusiness();
+    const businessId = requireBusinessAccess(request, new URL(request.url).searchParams.get("businessId"));
+    if (!businessId) {
+      return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
+    }
+
     const products = await prisma.product.findMany({
-      where: { businessId: business.id },
+      where: { businessId },
       orderBy: { createdAt: "desc" },
     });
 
@@ -42,11 +27,14 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const business = await getDefaultBusiness();
+    const businessId = requireBusinessAccess(request, body.businessId);
+    if (!businessId) {
+      return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
+    }
 
     const product = await prisma.product.create({
       data: {
-        businessId: business.id,
+        businessId,
         name: String(body.name ?? ""),
         sellingPrice: Number(body.sellingPrice ?? body.price ?? 0),
         costPrice: Number(body.costPrice ?? 0),

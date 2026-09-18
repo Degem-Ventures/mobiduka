@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { demoProducts } from "../data/demo-products";
 
 const requestedForceSeed = process.argv.includes("--force-seed-demo");
 const databaseUrl = (process.env.DATABASE_URL ?? "").trim();
@@ -21,24 +22,6 @@ if (isProductionLikeDatabase && requestedForceSeed) {
 }
 
 const prisma = new PrismaClient();
-
-const products = [
-  ["Jogoo Maize Flour 2kg", "JOG-2KG", "6191000000011", 145, 185, 18, 180],
-  ["Maji ya Premium 500ml", "MAJ-500", "6191000000028", 18, 30, 30, 300],
-  ["Chapa Mandashi Baking Powder 100g", "CHP-100", "6191000000035", 38, 55, 12, 100],
-  ["Kabras Brown Sugar 1kg", "KBR-1KG", "6191000000042", 118, 150, 15, 140],
-  ["Fresh Fri Cooking Oil 1L", "FFO-1L", "6191000000059", 245, 295, 10, 90],
-  ["Brookside Milk 500ml", "BRK-500", "6191000000066", 48, 65, 24, 220],
-  ["Kuku Paka Salt 500g", "KPS-500", "6191000000073", 28, 40, 18, 160],
-  ["Blue Band Margarine 500g", "BLB-500", "6191000000080", 155, 195, 10, 80],
-  ["Nescafe Classic 50g", "NES-050", "6191000000097", 170, 215, 8, 70],
-  ["Omo Detergent 500g", "OMO-500", "6191000000103", 105, 135, 10, 100],
-  ["Geisha Bathing Soap 125g", "GEI-125", "6191000000110", 52, 75, 20, 180],
-  ["Colgate Toothpaste 100ml", "COL-100", "6191000000127", 105, 145, 8, 70],
-  ["Royco Beef Cubes 10s", "ROY-010", "6191000000134", 42, 60, 15, 130],
-  ["Soko Maize Meal 2kg", "SOK-2KG", "6191000000141", 132, 175, 16, 150],
-  ["Safaricom Airtime 100 KES", "SAF-100", "6191000000158", 92, 100, 20, 250],
-] as const;
 
 function atStartOfDay(daysAgo: number) {
   const date = new Date();
@@ -176,7 +159,7 @@ async function main() {
   });
 
   const productRecords = await prisma.$transaction(
-    products.map(([name, sku, barcode, costPrice, sellingPrice, minimumStock, stock]) =>
+    demoProducts.map(([name, sku, barcode, costPrice, sellingPrice, minimumStock, stock]) =>
       prisma.product.create({
         data: {
           businessId: business.id,

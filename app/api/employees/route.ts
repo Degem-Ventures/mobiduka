@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"] as const;
 const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
@@ -36,8 +37,8 @@ function authenticatedBusinessId(request: Request): string | null {
 
 export async function GET(request: Request) {
   try {
-    const businessId = new URL(request.url).searchParams.get("businessId");
-    if (!businessId) return NextResponse.json({ error: "businessId is required." }, { status: 400 });
+    const businessId = requireBusinessAccess(request, new URL(request.url).searchParams.get("businessId"));
+    if (!businessId) return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     const includePinHashes = new URL(request.url).searchParams.get("includePinHashes") === "true";
     if (includePinHashes && authenticatedBusinessId(request) !== businessId) {
       return NextResponse.json({ error: "Authenticated business context is required for roster credential sync." }, { status: 403 });
@@ -77,8 +78,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const id = typeof body.id === "string" && body.id.length > 0 ? body.id : undefined;
-    const businessId = String(body.businessId ?? "").trim();
+    const id = typeof body.id === "string" && body.id.trim() && body.id.trim().toLowerCase() !== "string"
+      ? body.id.trim()
+      : undefined;
+    const businessId = requireBusinessAccess(request, body.businessId);
     const fullName = String(body.name ?? body.fullName ?? "").trim();
     const role = normalizeRole(body.role);
     const email = typeof body.email === "string" && body.email.trim() ? body.email.trim().toLowerCase() : null;
@@ -87,7 +90,7 @@ export async function POST(request: Request) {
     const status = body.isActive === false ? "INACTIVE" : "ACTIVE";
 
     if (!businessId || !fullName || !role) {
-      return NextResponse.json({ error: "businessId, name, and a valid role are required." }, { status: 400 });
+      return NextResponse.json({ error: "Authenticated business context, name, and a valid role are required." }, { status: 401 });
     }
     if (pin !== undefined && !/^\d{4}$/.test(pin)) {
       return NextResponse.json({ error: "PIN must contain exactly 4 digits." }, { status: 400 });

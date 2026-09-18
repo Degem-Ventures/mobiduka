@@ -1,15 +1,20 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { action, businessId, supplierId, orderNo, totalCost, items, orderId } = body;
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
+    const requestedOrderId = typeof orderId === "string" && orderId.trim() && orderId.trim().toLowerCase() !== "string"
+      ? orderId.trim()
+      : undefined;
 
-    if (!businessId || !action) {
+    if (!resolvedBusinessId || !action) {
       return NextResponse.json(
-        { error: "Missing required core configuration parameters." },
-        { status: 400 },
+        { error: "Authenticated business context and action are required." },
+        { status: 401 },
       );
     }
 
@@ -24,7 +29,7 @@ export async function POST(request: Request) {
       const supplierExists = await prisma.supplier.findFirst({
         where: {
           id: supplierId,
-          businessId,
+          businessId: resolvedBusinessId,
         },
         select: { id: true },
       });
@@ -39,8 +44,8 @@ export async function POST(request: Request) {
       const newOrder = await prisma.$transaction(async (tx) => {
         const order = await tx.purchaseOrder.create({
           data: {
-            id: orderId || undefined,
-            businessId,
+            id: requestedOrderId,
+            businessId: resolvedBusinessId,
             supplierId,
             orderNo,
             status: "REQUESTED",
@@ -69,7 +74,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "RECEIVE") {
-      if (!orderId) {
+      if (!requestedOrderId) {
         return NextResponse.json(
           { error: "Target purchase order ID is mandatory." },
           { status: 400 },
@@ -77,11 +82,11 @@ export async function POST(request: Request) {
       }
 
       const existingOrder = await prisma.purchaseOrder.findUnique({
-        where: { id: orderId },
+        where: { id: requestedOrderId },
         include: { items: true },
       });
 
-      if (!existingOrder || existingOrder.status === "RECEIVED") {
+      if (!existingOrder || existingOrder.businessId !== resolvedBusinessId || existingOrder.status === "RECEIVED") {
         return NextResponse.json(
           { error: "Purchase record is invalid or already finalized." },
           { status: 404 },
@@ -90,7 +95,7 @@ export async function POST(request: Request) {
 
       await prisma.$transaction(async (tx) => {
         await tx.purchaseOrder.update({
-          where: { id: orderId },
+          where: { id: requestedOrderId },
           data: { status: "RECEIVED" },
         });
 
@@ -108,7 +113,7 @@ export async function POST(request: Request) {
               quantity: { increment: item.quantity },
             },
             create: {
-              businessId,
+              businessId: resolvedBusinessId,
               productId: item.productId,
               quantity: item.quantity,
               reservedQuantity: 0,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireBusinessAccess } from "@/lib/auth";
 
 export async function POST(request: Request) {
   try {
@@ -11,11 +12,12 @@ export async function POST(request: Request) {
       adjustmentQuantity?: number | string;
       reason?: string;
     };
+    const resolvedBusinessId = requireBusinessAccess(request, businessId);
 
-    if (!businessId || !userId || !productId || adjustmentQuantity === undefined) {
+    if (!resolvedBusinessId || !userId || !productId || adjustmentQuantity === undefined) {
       return NextResponse.json(
-        { error: "Bad parameters. Missing metrics for verification logs." },
-        { status: 400 },
+        { error: "Authenticated business context and inventory parameters are required." },
+        { status: 401 },
       );
     }
 
@@ -25,7 +27,7 @@ export async function POST(request: Request) {
       const inventory = await tx.inventory.upsert({
         where: { productId },
         create: {
-          businessId,
+          businessId: resolvedBusinessId,
           productId,
           quantity: 0,
           reservedQuantity: 0,
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
 
       await tx.auditLog.create({
         data: {
-          businessId,
+          businessId: resolvedBusinessId,
           userId,
           action: "STOCK_ADJUSTMENT",
           tableName: "Inventory",
