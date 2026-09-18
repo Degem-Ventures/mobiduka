@@ -10,7 +10,11 @@ export async function GET(request: Request) {
     }
 
     const products = await prisma.product.findMany({
-      where: { businessId },
+      where: { businessId, deletedAt: null },
+      include: {
+        category: { select: { name: true } },
+        inventory: { select: { quantity: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
 

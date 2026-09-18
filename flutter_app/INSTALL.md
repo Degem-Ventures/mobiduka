@@ -25,6 +25,15 @@ Before running the app, make sure all of these are true:
 If you are on Ubuntu/Debian and want a single command that installs the required Linux packages, adds Flutter to your shell, enables web, and verifies the app can start, use:
 
 ```bash
+export PATH="$HOME/flutter/bin:$PATH" && \
+  sudo apt update && \
+  sudo apt install -y ninja-build libgtk-3-dev mesa-utils git curl unzip xz-utils zip clang cmake pkg-config && \
+  if ! grep -qxF 'export PATH="$HOME/flutter/bin:$PATH"' "$HOME/.bashrc"; then echo 'export PATH="$HOME/flutter/bin:$PATH"' >> "$HOME/.bashrc"; fi && \
+  source "$HOME/.bashrc" && hash -r && \
+  cd /workspaces/mobiduka/flutter_app && \
+  flutter config --enable-web && \
+  flutter pub get && \
+  flutter doctor
 ```
 
 This project was validated using:
