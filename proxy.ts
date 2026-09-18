@@ -10,6 +10,34 @@ function isAllowedOrigin(origin: string | null) {
   }
 }
 
+type EdgeTokenClaims = {
+  businessId?: unknown;
+  subscriptionStatus?: unknown;
+  subscriptionExpiresAt?: unknown;
+};
+
+function decodeTokenClaims(token: string): EdgeTokenClaims | null {
+  const payloadSegment = token.split(".")[1];
+  if (!payloadSegment) return null;
+
+  const base64 = payloadSegment.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes)) as EdgeTokenClaims;
+}
+
+function subscriptionIsExpired(claims: EdgeTokenClaims) {
+  const status = typeof claims.subscriptionStatus === "string"
+    ? claims.subscriptionStatus.toUpperCase()
+    : "";
+  const expiresAt = typeof claims.subscriptionExpiresAt === "number"
+    ? claims.subscriptionExpiresAt
+    : Number(claims.subscriptionExpiresAt);
+
+  return status === "EXPIRED" || (Number.isFinite(expiresAt) && Math.floor(Date.now() / 1000) >= expiresAt);
+}
+
 export function proxy(request: NextRequest) {
   const origin = request.headers.get("origin");
   const allowed = isAllowedOrigin(origin);
@@ -25,6 +53,30 @@ export function proxy(request: NextRequest) {
 
   if (request.method === "OPTIONS") {
     return new NextResponse(null, { status: allowed ? 204 : 403, headers });
+  }
+
+  const authHeader = request.headers.get("authorization");
+  const isAuthRoute = request.nextUrl.pathname.startsWith("/api/auth/login");
+
+  if (authHeader && /^Bearer\s+/i.test(authHeader) && !isAuthRoute) {
+    try {
+      const claims = decodeTokenClaims(authHeader.replace(/^Bearer\s+/i, "").trim());
+
+      if (claims && subscriptionIsExpired(claims)) {
+        headers.set("Content-Type", "application/json; charset=utf-8");
+        return new NextResponse(
+          JSON.stringify({
+            success: false,
+            error: "PAYMENT_REQUIRED",
+            message: "The MobiDuka subscription has expired. Please renew the subscription to continue.",
+            ...(typeof claims.businessId === "string" ? { businessId: claims.businessId } : {}),
+          }),
+          { status: 402, headers },
+        );
+      }
+    } catch {
+      // Route handlers perform the authoritative signature and credential checks.
+    }
   }
 
   const response = NextResponse.next();
