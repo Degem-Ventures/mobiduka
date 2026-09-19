@@ -10,7 +10,7 @@ const toPositiveAmount = (value: unknown) => {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, businessId, customerId, amount, dueDate, creditBookId, userId } = body;
+    const { action, businessId, customerId, amount, dueDate, creditBookId, userId, paymentMethod } = body;
     const resolvedBusinessId = requireBusinessAccess(request, businessId);
 
     if (!resolvedBusinessId || !customerId || !action) {
@@ -106,6 +106,7 @@ export async function POST(request: Request) {
             customerId,
             type: "PAYMENT",
             amount: parsedAmount,
+            paymentMethod: typeof paymentMethod === "string" ? paymentMethod.toUpperCase() : null,
             status: "COMPLETED",
           },
         });

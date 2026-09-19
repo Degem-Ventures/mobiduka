@@ -48,7 +48,8 @@ export async function GET(request: Request) {
       include: {
         creditAccount: { select: { balance: true, status: true } },
         _count: { select: { sales: true, creditEntries: true } },
-        sales: { select: { createdAt: true }, orderBy: { createdAt: "desc" }, take: 1 },
+        sales: { select: { id: true, createdAt: true, total: true }, orderBy: { createdAt: "desc" }, take: 1 },
+        creditEntries: { select: { id: true, type: true, amount: true, paymentMethod: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 1 },
       },
       orderBy: { name: "asc" },
     });

@@ -8,6 +8,7 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
+    "seed:customers": "node --import tsx prisma/seed-customers.ts",
     "format": "oxfmt",
     "postinstall": "prisma generate",
     "seed:demo": "node --import tsx prisma/seed-demo.ts --force-seed-demo",
