@@ -1,59 +1,75 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const shiftTypes = [
-  { id: 'morning',   label: 'Morning',   hours: '6:00 AM – 2:00 PM',   icon: '🌅', color: '#F57C00' },
-  { id: 'afternoon', label: 'Afternoon', hours: '2:00 PM – 10:00 PM',  icon: '☀️', color: '#0288D1' },
-  { id: 'night',     label: 'Night',     hours: '10:00 PM – 6:00 AM',  icon: '🌙', color: '#5E35B1' },
-]
-
-const staffList = [
-  { id: 1, name: 'Grace Wanjiku',  role: 'Cashier',    initials: 'GW' },
-  { id: 2, name: 'Brian Omondi',   role: 'Cashier',    initials: 'BO' },
-  { id: 3, name: 'Fatuma Hassan',  role: 'Supervisor', initials: 'FH' },
-  { id: 4, name: 'Peter Kamau',    role: 'Cashier',    initials: 'PK' },
-  { id: 5, name: 'Aisha Mwangi',   role: 'Cashier',    initials: 'AM' },
-]
+type ShiftType = { id: string; code: string; name: string; scheduledStart: string; scheduledEnd: string; icon: string | null; color: string | null }
 
 interface ShiftRecord {
-  id: number; cashier: string; initials: string
+  id: string; cashierId: string | null; cashier: string; initials: string
   type: string; label: string; icon: string; color: string
   start: string; end: string | null; sales: number; amount: number; date: string
 }
-
-const pastShifts: ShiftRecord[] = [
-  { id: 1, cashier: 'Grace Wanjiku',  initials: 'GW', type: 'morning',   label: 'Morning',   icon: '🌅', color: '#F57C00', start: '06:02 AM', end: '02:05 PM', sales: 34, amount: 28400,  date: 'Today' },
-  { id: 2, cashier: 'Brian Omondi',   initials: 'BO', type: 'afternoon', label: 'Afternoon', icon: '☀️', color: '#0288D1', start: '02:00 PM', end: '09:58 PM', sales: 21, amount: 19750,  date: 'Today' },
-  { id: 3, cashier: 'Fatuma Hassan',  initials: 'FH', type: 'morning',   label: 'Morning',   icon: '🌅', color: '#F57C00', start: '06:00 AM', end: '02:00 PM', sales: 41, amount: 35200,  date: 'Yesterday' },
-  { id: 4, cashier: 'Peter Kamau',    initials: 'PK', type: 'afternoon', label: 'Afternoon', icon: '☀️', color: '#0288D1', start: '02:00 PM', end: '09:55 PM', sales: 18, amount: 14800,  date: 'Yesterday' },
-  { id: 5, cashier: 'Aisha Mwangi',   initials: 'AM', type: 'night',     label: 'Night',     icon: '🌙', color: '#5E35B1', start: '10:00 PM', end: '06:02 AM', sales: 9,  amount: 7300,   date: '7 Sep' },
-]
 
 interface Props { onNavigate: (s: string) => void }
 
 export default function ShiftsScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [view, setView] = useState<'list' | 'start' | 'active'>('list')
-  const [selectedShift, setSelectedShift] = useState('morning')
-  const [selectedStaff, setSelectedStaff] = useState(1)
+  const [shiftTypes, setShiftTypes] = useState<ShiftType[]>([])
+  const [selectedShift, setSelectedShift] = useState('')
+  const [staffList, setStaffList] = useState<Array<{ id: string; name: string; role: string; initials: string }>>([])
+  const [selectedStaff, setSelectedStaff] = useState('')
+  const [pastShifts, setPastShifts] = useState<ShiftRecord[]>([])
   const [activeShift, setActiveShift] = useState<ShiftRecord | null>(null)
+  const [dataError, setDataError] = useState('')
 
-  const startShift = () => {
-    const member = staffList.find(s => s.id === selectedStaff)!
-    const sType = shiftTypes.find(s => s.id === selectedShift)!
-    const now = new Date()
-    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-    setActiveShift({
-      id: Date.now(), cashier: member.name, initials: member.initials,
-      type: sType.id, label: sType.label, icon: sType.icon, color: sType.color,
-      start: timeStr, end: null, sales: 0, amount: 0, date: 'Today',
-    })
-    setView('active')
+  const loadShiftData = async () => {
+    if (!session) { setDataError('Please sign in to load shifts.'); return }
+    try {
+      const [employeeResponse, shiftResponse, shiftTypeResponse] = await Promise.all([
+        apiFetch<{ employees: Array<{ id: string; fullName: string; role: string }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`),
+        apiFetch<{ sessions: Array<{ id: string; shiftType: string; shift: ShiftType | null; openedAt: string; closedAt: string | null; sales: number; amount: number; cashier: { id: string; fullName: string; role: { name: string } | null } | null }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`),
+        apiFetch<{ shiftTypes: ShiftType[] }>(`/api/shift-types?businessId=${encodeURIComponent(session.user.businessId)}`),
+      ])
+      setShiftTypes(shiftTypeResponse.shiftTypes ?? [])
+      if (!selectedShift && shiftTypeResponse.shiftTypes[0]) setSelectedShift(shiftTypeResponse.shiftTypes[0].id)
+      const activeCashierIds = new Set(shiftResponse.sessions.filter(item => !item.closedAt && item.cashier?.id).map(item => item.cashier?.id as string))
+      const staff = employeeResponse.employees.filter(employee => (employee.role === 'CASHIER' || employee.role === 'SUPERVISOR') && !activeCashierIds.has(employee.id)).map(employee => ({ id: employee.id, name: employee.fullName, role: employee.role, initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() }))
+      setStaffList(staff)
+      if (!selectedStaff && staff[0]) setSelectedStaff(staff[0].id)
+      const mappedSessions = shiftResponse.sessions.map(item => {
+        const type = item.shift ?? shiftTypeResponse.shiftTypes.find(shift => shift.code === item.shiftType) ?? shiftTypeResponse.shiftTypes[0]
+        return { id: item.id, cashierId: item.cashier?.id ?? null, cashier: item.cashier?.fullName ?? 'Unknown', initials: item.cashier?.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() ?? '??', type: type?.code ?? item.shiftType, label: type?.name ?? item.shiftType, icon: type?.icon ?? '🕐', color: type?.color ?? '#123A8F', start: new Date(item.openedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), end: item.closedAt ? new Date(item.closedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null, sales: item.sales, amount: Number(item.amount), date: new Date(item.openedAt).toLocaleDateString() }
+      })
+      setPastShifts(mappedSessions)
+      const active = shiftResponse.sessions.find(item => !item.closedAt)
+      if (active) setActiveShift(mappedSessions.find(shift => shift.id === active.id) ?? null)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load shifts.') }
   }
 
-  const endShift = () => {
-    setActiveShift(null)
-    setView('list')
+  useEffect(() => { void loadShiftData() }, [session?.user.businessId])
+
+  const startShift = async () => {
+    if (!session || !selectedStaff) return
+    const member = staffList.find(s => s.id === selectedStaff)
+    const sType = shiftTypes.find(s => s.id === selectedShift)
+    if (!sType) return
+    try {
+      await apiFetch('/api/cash/session', { method: 'POST', body: JSON.stringify({ action: 'OPEN', businessId: session.user.businessId, userId: member?.id, openingCash: 0, shiftTypeId: sType.id }) })
+      await loadShiftData()
+      setView('active')
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to start shift.') }
+  }
+
+  const endShift = async () => {
+    if (!session || !activeShift) return
+    try {
+      await apiFetch('/api/cash/session', { method: 'POST', body: JSON.stringify({ action: 'CLOSE', businessId: session.user.businessId, userId: activeShift.cashierId ?? session.user.id, sessionId: activeShift.id, closingCash: 0 }) })
+      await loadShiftData()
+      setActiveShift(null)
+      setView('list')
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to end shift.') }
   }
 
   // ── Start Shift ─────────────────────────────────────────────────────────
@@ -80,10 +96,10 @@ export default function ShiftsScreen({ onNavigate }: Props) {
                 background: selectedShift === s.id ? (c.isDark ? 'rgba(18,58,143,0.2)' : 'rgba(18,58,143,0.05)') : 'none',
                 cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
               }}>
-                <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(s.color), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{s.icon}</div>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(s.color ?? '#123A8F'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{s.icon ?? '🕐'}</div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{s.label} Shift</div>
-                  <div style={{ fontSize: 12, color: c.muted }}>{s.hours}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{s.name} Shift</div>
+                  <div style={{ fontSize: 12, color: c.muted }}>{s.scheduledStart} – {s.scheduledEnd}</div>
                 </div>
                 <div style={{
                   width: 22, height: 22, borderRadius: '50%',
@@ -189,6 +205,10 @@ export default function ShiftsScreen({ onNavigate }: Props) {
     acc[s.date] = acc[s.date] ? [...acc[s.date], s] : [s]
     return acc
   }, {})
+  const todayKey = new Date().toLocaleDateString()
+  const todayShifts = pastShifts.filter(shift => shift.date === todayKey)
+  const todaySales = todayShifts.reduce((sum, shift) => sum + shift.sales, 0)
+  const todayRevenue = todayShifts.reduce((sum, shift) => sum + shift.amount, 0)
 
   return (
     <div className="screen" style={{ background: c.bg }}>
@@ -208,6 +228,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+        {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {/* No active shift notice */}
         {!activeShift && (
           <div style={{ background: c.warningBg, border: `1px solid ${c.isDark ? 'rgba(249,168,37,0.3)' : '#FFE082'}`, borderRadius: 14, padding: '14px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -225,9 +246,9 @@ export default function ShiftsScreen({ onNavigate }: Props) {
         {/* Summary stats */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
           {[
-            { label: 'Today Shifts', value: '2' },
-            { label: 'Today Sales', value: '55' },
-            { label: 'Today Revenue', value: 'KSh 48.2k' },
+            { label: 'Today Shifts', value: String(todayShifts.length) },
+            { label: 'Today Sales', value: String(todaySales) },
+            { label: 'Today Revenue', value: `KSh ${todayRevenue.toLocaleString()}` },
           ].map(stat => (
             <div key={stat.label} className="card" style={{ padding: '12px 8px', textAlign: 'center' }}>
               <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{stat.value}</div>

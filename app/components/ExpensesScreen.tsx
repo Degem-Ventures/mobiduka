@@ -1,33 +1,98 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const expenses = [
-  { id: 1, desc: 'Electricity Bill', category: 'Utilities', amount: 8500, date: '8 Jul 2026', method: 'M-Pesa', icon: '⚡', recurring: true },
-  { id: 2, desc: 'Staff Salaries', category: 'Payroll', amount: 75000, date: '7 Jul 2026', method: 'Bank', icon: '👥', recurring: true },
-  { id: 3, desc: 'Shop Rent', category: 'Rent', amount: 35000, date: '1 Jul 2026', method: 'Bank', icon: '🏪', recurring: true },
-  { id: 4, desc: 'Plastic Bags & Packaging', category: 'Supplies', amount: 2300, date: '6 Jul 2026', method: 'Cash', icon: '🛍️', recurring: false },
-  { id: 5, desc: 'Internet & Data', category: 'Utilities', amount: 3500, date: '5 Jul 2026', method: 'M-Pesa', icon: '📶', recurring: true },
-  { id: 6, desc: 'Cleaning Supplies', category: 'Supplies', amount: 1200, date: '4 Jul 2026', method: 'Cash', icon: '🧹', recurring: false },
-  { id: 7, desc: 'Transport / Delivery', category: 'Logistics', amount: 4500, date: '3 Jul 2026', method: 'Cash', icon: '🚚', recurring: false },
-  { id: 8, desc: 'NHIF Deductions', category: 'Payroll', amount: 6400, date: '1 Jul 2026', method: 'Bank', icon: '🏥', recurring: true },
-]
+type Expense = { id: string; description: string; category: string | null; amount: number; createdAt: string; paymentMethod: string | null; icon: string | null; recurring: boolean }
 
-const categories = ['All', 'Utilities', 'Payroll', 'Rent', 'Supplies', 'Logistics']
 const categoryColors: Record<string, string> = {
   Utilities: '#0288D1', Payroll: '#5E35B1', Rent: '#2E7D32', Supplies: '#F57C00', Logistics: '#D32F2F'
+}
+
+const normalizeCategory = (category: string | null) => {
+  const value = category?.trim() ?? ''
+  const known = Object.keys(categoryColors).find(option => option.toLowerCase() === value.toLowerCase())
+  return known ?? (value ? value.charAt(0).toUpperCase() + value.slice(1).toLowerCase() : 'Uncategorized')
+}
+
+const getExpenseMethod = (expense: Expense) => {
+  if (expense.paymentMethod) return expense.paymentMethod
+  const text = `${expense.description} ${expense.category ?? ''}`.toLowerCase()
+  if (text.includes('rent') || text.includes('salary') || text.includes('payroll') || text.includes('nhif')) return 'Bank'
+  if (text.includes('electric') || text.includes('water') || text.includes('utilit') || text.includes('internet') || text.includes('data')) return 'M-Pesa'
+  return 'Cash'
+}
+
+const getExpenseIcon = (expense: Expense) => {
+  if (expense.icon) return expense.icon
+  const text = `${expense.description} ${expense.category ?? ''}`.toLowerCase()
+  if (text.includes('rent')) return '🏪'
+  if (text.includes('salary') || text.includes('payroll') || text.includes('nhif')) return '👥'
+  if (text.includes('transport') || text.includes('delivery')) return '🚚'
+  if (text.includes('clean')) return '🧹'
+  if (text.includes('packag') || text.includes('suppl')) return '🛍️'
+  if (text.includes('internet') || text.includes('data')) return '📶'
+  if (text.includes('electric') || text.includes('water') || text.includes('utilit')) return '⚡'
+  return '💸'
 }
 
 interface Props { onNavigate: (s: string) => void }
 
 export default function ExpensesScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
+  const [expenses, setExpenses] = useState<Expense[]>([])
   const [cat, setCat] = useState('All')
   const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: '', recurring: false })
+  const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
+  const [dataError, setDataError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  const filtered = expenses.filter(e => cat === 'All' || e.category === cat)
+  const loadExpenses = async () => {
+    if (!session) { setDataError('Please sign in to load expenses.'); return }
+    try {
+      setDataError('')
+      const rows = await apiFetch<Expense[]>(`/api/expenses?businessId=${encodeURIComponent(session.user.businessId)}`)
+      setExpenses(rows)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load expenses.') }
+  }
+
+  useEffect(() => { void loadExpenses() }, [session?.user.businessId])
+
+  const saveExpense = async () => {
+    if (!session || !form.desc.trim() || !form.amount) return
+    setSaving(true)
+    setDataError('')
+    try {
+      await apiFetch('/api/expenses', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessId: session.user.businessId,
+          userId: session.user.id,
+          description: form.desc.trim(),
+          amount: Number(form.amount),
+          category: form.category === 'Other' ? form.categoryOther.trim() : form.category,
+          paymentMethod: form.method,
+          recurring: form.recurring,
+          date: form.date,
+        }),
+      })
+      await loadExpenses()
+      setForm({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
+      setShowAdd(false)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save expense.') }
+    finally { setSaving(false) }
+  }
+
+  const categories = ['All', ...Array.from(new Set(expenses.map(expense => normalizeCategory(expense.category))))]
+  const filtered = expenses.filter(e => cat === 'All' || normalizeCategory(e.category) === cat)
   const total = filtered.reduce((s, e) => s + e.amount, 0)
-  const monthTotal = expenses.reduce((s, e) => s + e.amount, 0)
+  const now = new Date()
+  const monthTotal = expenses
+    .filter(expense => {
+      const date = new Date(expense.createdAt)
+      return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
+    })
+    .reduce((s, e) => s + e.amount, 0)
 
   if (showAdd) {
     return (
@@ -41,6 +106,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
+          {dataError && <div style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Description *</label>
@@ -73,7 +139,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
             </div>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Date</label>
-              <input className="input" type="date" defaultValue="2026-07-08" />
+              <input className="input" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', background: c.cardAlt, borderRadius: 12 }}>
               <div style={{ flex: 1 }}>
@@ -85,7 +151,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
               </button>
             </div>
           </div>
-          <button className="btn" onClick={() => setShowAdd(false)} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(211,47,47,0.35)' }}>
+          <button className="btn" disabled={saving || !form.desc.trim() || !form.amount || (form.category === 'Other' && !form.categoryOther.trim())} onClick={() => void saveExpense()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(211,47,47,0.35)', opacity: saving ? 0.7 : 1 }}>
             Save Expense
           </button>
         </div>
@@ -120,18 +186,19 @@ export default function ExpensesScreen({ onNavigate }: Props) {
         </div>
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+          {dataError && <div style={{ margin: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 8, letterSpacing: 0.4 }}>
           {cat === 'All' ? 'All Expenses' : cat} · KSh {total.toLocaleString()}
         </div>
         {filtered.map(e => (
           <div key={e.id} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(categoryColors[e.category] || '#6B7A99'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{e.icon}</div>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(categoryColors[normalizeCategory(e.category)] || '#6B7A99'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{getExpenseIcon(e)}</div>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{e.desc}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{e.description}</div>
                 {e.recurring && <span style={{ fontSize: 9, background: c.iconBg, color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>RECURRING</span>}
               </div>
-              <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{e.category} · {e.method} · {e.date}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{normalizeCategory(e.category)} · {getExpenseMethod(e)} · {new Date(e.createdAt).toLocaleDateString()}</div>
             </div>
             <div style={{ fontSize: 15, fontWeight: 800, color: '#D32F2F', flexShrink: 0 }}>KSh {e.amount.toLocaleString()}</div>
           </div>

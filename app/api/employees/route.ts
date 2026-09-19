@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 
-const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"] as const;
+const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"] as const;
 const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
 
 type AllowedRole = (typeof ALLOWED_ROLES)[number];
@@ -52,6 +52,9 @@ export async function GET(request: Request) {
         email: true,
         phone: true,
         status: true,
+        shift: true,
+        salary: true,
+        startDate: true,
         ...(includePinHashes ? { pinHash: true } : {}),
         createdAt: true,
         role: { select: { name: true } },
@@ -88,12 +91,18 @@ export async function POST(request: Request) {
     const phone = typeof body.phone === "string" && body.phone.trim() ? body.phone.trim() : null;
     const pin = typeof body.pin === "string" && body.pin.length > 0 ? body.pin : undefined;
     const status = body.isActive === false ? "INACTIVE" : "ACTIVE";
+    const shift = String(body.shift ?? "Morning").trim() || "Morning";
+    const salary = Number(body.salary ?? 0);
+    const startDate = body.startDate ? new Date(String(body.startDate)) : null;
 
     if (!businessId || !fullName || !role) {
       return NextResponse.json({ error: "Authenticated business context, name, and a valid role are required." }, { status: 401 });
     }
     if (pin !== undefined && !/^\d{4}$/.test(pin)) {
       return NextResponse.json({ error: "PIN must contain exactly 4 digits." }, { status: 400 });
+    }
+    if (!Number.isFinite(salary) || salary < 0 || (startDate && Number.isNaN(startDate.getTime()))) {
+      return NextResponse.json({ error: "Salary must be non-negative and startDate must be valid." }, { status: 400 });
     }
 
     const employee = await prisma.$transaction(async (tx) => {
@@ -128,6 +137,9 @@ export async function POST(request: Request) {
         phone,
         roleId: existingRole.id,
         status,
+        shift,
+        salary,
+        ...(startDate ? { startDate } : {}),
         ...(pinHash ? { pinHash } : {}),
       };
 
