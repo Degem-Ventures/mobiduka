@@ -41,6 +41,7 @@ model Business {
   syncQueues        SyncQueue[]
   notifications     Notification[]
   scanEvents        ScanEvent[]
+  shiftTypes        ShiftType[]
 }
 
 model License {
@@ -76,6 +77,9 @@ model User {
   passwordHash String?
   pinHash      String?
   status       String    @default("ACTIVE")
+  shift        String    @default("Morning")
+  salary       Float     @default(0)
+  startDate    DateTime  @default(now())
   lastLogin    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -88,6 +92,25 @@ model User {
   cashSessions  CashSession[]
   auditLogs     AuditLog[]
   notifications Notification[]
+}
+
+model ShiftType {
+  id              String        @id @default(uuid())
+  businessId      String
+  code            String
+  name            String
+  scheduledStart  String
+  scheduledEnd    String
+  icon            String?
+  color           String?
+  active          Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sessions  CashSession[]
+
+  @@unique([businessId, code])
 }
 
 model Device {
@@ -368,6 +391,9 @@ model Expense {
   category    String?
   description String
   amount      Float
+  paymentMethod String?
+  icon        String?
+  recurring   Boolean  @default(false)
   paidTo      String?
   recordedBy  String?
   createdAt   DateTime @default(now())
@@ -379,6 +405,10 @@ model CashSession {
   id              String    @id @default(uuid())
   businessId      String
   cashierId       String?
+  shiftTypeId     String?
+  shiftType       String      @default("morning")
+  salesCount      Int         @default(0)
+  salesAmount     Float       @default(0)
   openingBalance  Float     @default(0)
   closingBalance  Float?
   expectedBalance Float?
@@ -388,6 +418,7 @@ model CashSession {
 
   business Business @relation(fields: [businessId], references: [id])
   cashier  User?    @relation(fields: [cashierId], references: [id])
+  shift    ShiftType? @relation(fields: [shiftTypeId], references: [id])
 }
 
 model AuditLog {

@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 type Role = 'Store Manager' | 'Cashier' | 'Stock Keeper' | 'Supervisor' | 'Accountant'
 
 interface Employee {
-  id: number
+  id: string
   name: string
   role: Role
   phone: string
@@ -18,13 +19,8 @@ interface Employee {
   color: string
 }
 
-const employees: Employee[] = [
-  { id: 1, name: 'Admin User', role: 'Store Manager', phone: '0712 345 678', email: 'admin@mobiduka.co.ke', pin: '1234', shift: 'Morning', salary: 55000, startDate: '1 Jan 2024', active: true, initials: 'AU', color: '#123A8F' },
-  { id: 2, name: 'Kevin Ochieng', role: 'Cashier', phone: '0723 456 789', email: 'kevin@mobiduka.co.ke', pin: '2345', shift: 'Morning', salary: 28000, startDate: '15 Mar 2024', active: true, initials: 'KO', color: '#2E7D32' },
-  { id: 3, name: 'Fatuma Hassan', role: 'Stock Keeper', phone: '0734 567 890', email: 'fatuma@mobiduka.co.ke', pin: '3456', shift: 'Afternoon', salary: 30000, startDate: '1 Jun 2024', active: true, initials: 'FH', color: '#D32F2F' },
-  { id: 4, name: 'Brian Mutua', role: 'Cashier', phone: '0745 678 901', email: 'brian@mobiduka.co.ke', pin: '4567', shift: 'Evening', salary: 26000, startDate: '20 Aug 2024', active: false, initials: 'BM', color: '#F57C00' },
-  { id: 5, name: 'Linda Auma', role: 'Supervisor', phone: '0756 789 012', email: 'linda@mobiduka.co.ke', pin: '5678', shift: 'Morning', salary: 38000, startDate: '10 Feb 2025', active: true, initials: 'LA', color: '#7B1FA2' },
-]
+const roleFromApi = (role: string): Role => ({ OWNER: 'Store Manager', ADMIN: 'Store Manager', SUPERVISOR: 'Supervisor', STOCK_KEEPER: 'Stock Keeper', ACCOUNTANT: 'Accountant', CASHIER: 'Cashier' }[role] as Role ?? 'Cashier')
+const roleToApi = (role: Role) => ({ 'Store Manager': 'OWNER', Supervisor: 'SUPERVISOR', 'Stock Keeper': 'STOCK_KEEPER', Accountant: 'ACCOUNTANT', Cashier: 'CASHIER' }[role])
 
 const roleColors: Record<Role, string> = {
   'Store Manager': '#123A8F',
@@ -45,11 +41,37 @@ interface Props { onNavigate: (s: string) => void }
 
 export default function EmployeesScreen({ onNavigate }: Props) {
   const c = useColors()
-  const [list, setList] = useState(employees)
+  const session = getClientSession()
+  const [list, setList] = useState<Employee[]>([])
   const [selected, setSelected] = useState<Employee | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Employee | null>(null)
   const [form, setForm] = useState({ name: '', role: 'Cashier' as Role, phone: '', email: '', pin: '', shift: 'Morning', salary: '' })
+  const [dataError, setDataError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const loadEmployees = async () => {
+    if (!session) { setDataError('Please sign in to load employees.'); return }
+    try {
+      const response = await apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; phone: string | null; email: string | null; status: string; shift: string; salary: number; startDate: string }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`)
+      setList(response.employees.map((employee, index) => ({
+        id: employee.id,
+        name: employee.fullName,
+        role: roleFromApi(employee.role),
+        phone: employee.phone ?? '',
+        email: employee.email ?? '',
+        pin: '',
+        shift: employee.shift,
+        salary: Number(employee.salary),
+        startDate: new Date(employee.startDate).toLocaleDateString(),
+        active: employee.status === 'ACTIVE',
+        initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase(),
+        color: ['#123A8F', '#2E7D32', '#D32F2F', '#F57C00', '#7B1FA2'][index % 5] ?? '#123A8F',
+      })))
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load employees.') }
+  }
+
+  useEffect(() => { void loadEmployees() }, [session?.user.businessId])
 
   const _openAdd = () => {
     setEditing(null)
@@ -65,14 +87,24 @@ export default function EmployeesScreen({ onNavigate }: Props) {
     setSelected(null)
   }
 
-  const saveForm = () => {
-    if (editing) {
-      setList(l => l.map(e => e.id === editing.id ? { ...e, ...form, salary: Number(form.salary) } : e))
-    }
-    setShowForm(false)
+  const saveForm = async () => {
+    if (!session || !form.name.trim()) return
+    setSaving(true)
+    try {
+      await apiFetch('/api/employees', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, id: editing?.id, name: form.name, role: roleToApi(form.role), phone: form.phone, email: form.email, pin: form.pin || undefined, shift: form.shift, salary: Number(form.salary || 0), isActive: editing?.active ?? true, startDate: editing?.startDate }) })
+      await loadEmployees()
+      setShowForm(false)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save employee.') }
+    finally { setSaving(false) }
   }
 
-  const toggleActive = (id: number) => setList(l => l.map(e => e.id === id ? { ...e, active: !e.active } : e))
+  const toggleActive = async (employee: Employee) => {
+    if (!session) return
+    try {
+      await apiFetch('/api/employees', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, id: employee.id, name: employee.name, role: roleToApi(employee.role), phone: employee.phone, email: employee.email, shift: employee.shift, salary: employee.salary, isActive: !employee.active }) })
+      await loadEmployees()
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to change employee status.') }
+  }
 
   if (showForm) {
     const isEdit = !!editing
@@ -142,7 +174,8 @@ export default function EmployeesScreen({ onNavigate }: Props) {
             </div>
           </div>
 
-          <button className="btn" onClick={saveForm} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+          {dataError && <div style={{ marginBottom: 12, color: '#C62828', fontSize: 12 }}>{dataError}</div>}
+          <button className="btn" disabled={saving} onClick={() => void saveForm()} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
             {isEdit ? 'Save Changes' : 'Add Employee'}
           </button>
         </div>
@@ -191,7 +224,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => openEdit(emp)} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Edit Details</button>
-            <button className="btn" onClick={() => { toggleActive(emp.id); setSelected(null) }} style={{ flex: 1, padding: '13px', background: emp.active ? '#FFF5F5' : c.successBg, border: `1px solid ${emp.active ? '#FFCDD2' : '#C8E6C9'}`, borderRadius: 14, fontSize: 13, fontWeight: 600, color: emp.active ? '#D32F2F' : '#2E7D32', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" onClick={() => { void toggleActive(emp); setSelected(null) }} style={{ flex: 1, padding: '13px', background: emp.active ? '#FFF5F5' : c.successBg, border: `1px solid ${emp.active ? '#FFCDD2' : '#C8E6C9'}`, borderRadius: 14, fontSize: 13, fontWeight: 600, color: emp.active ? '#D32F2F' : '#2E7D32', cursor: 'pointer', fontFamily: 'inherit' }}>
               {emp.active ? 'Deactivate' : 'Activate'}
             </button>
           </div>
@@ -216,7 +249,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
               <span style={{ fontSize: 15 }}>🕐</span>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'white' }}>Shifts</span>
             </button>
-            <button className="btn" onClick={() => onNavigate('register')} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" onClick={_openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: 'inherit' }}>
               <span style={{ fontSize: 15, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 12, fontWeight: 700, color: '#0D1B3D' }}>Register</span>
             </button>
@@ -231,6 +264,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
           ))}
         </div>
       </div>
+      {dataError && <div style={{ margin: 12, marginBottom: 0, color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {list.map(emp => (
           <button key={emp.id} className="btn card" onClick={() => setSelected(emp)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', opacity: emp.active ? 1 : 0.6 }}>

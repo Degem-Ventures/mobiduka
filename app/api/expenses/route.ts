@@ -3,6 +3,17 @@ import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { sendPushNotification } from "@/lib/firebase-admin";
 
+function normalizeCategory(value: string) {
+  const known: Record<string, string> = {
+    utilities: "Utilities",
+    payroll: "Payroll",
+    rent: "Rent",
+    supplies: "Supplies",
+    logistics: "Logistics",
+  };
+  return known[value.trim().toLowerCase()] ?? value.trim();
+}
+
 export async function GET(request: Request) {
   try {
     const businessId = requireBusinessAccess(request, new URL(request.url).searchParams.get("businessId"));
@@ -16,6 +27,7 @@ export async function GET(request: Request) {
     });
     return NextResponse.json(expenses);
   } catch (error) {
+    console.error("Expense registration failed:", error);
     return NextResponse.json(
       { error: "Failed to load expenses ledger.", details: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 },
@@ -26,19 +38,23 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { id, businessId, userId, category, amount, description, paidTo } = body;
+    const { id, businessId, userId, category, amount, description, paidTo, paymentMethod, icon, recurring, date } = body;
     const resolvedBusinessId = requireBusinessAccess(request, businessId);
     const requestedExpenseId = typeof id === "string" && id.trim() && id.trim().toLowerCase() !== "string"
       ? id.trim()
       : undefined;
     const parsedAmount = Number(amount);
     const normalizedDescription = typeof description === "string" ? description.trim() : "";
+    const createdAt = date ? new Date(String(date)) : new Date();
 
     if (!resolvedBusinessId || !userId || !category || !normalizedDescription || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       return NextResponse.json(
         { error: "Authenticated business context, userId, category, description, and a positive amount are required." },
         { status: 401 },
       );
+    }
+    if (Number.isNaN(createdAt.getTime())) {
+      return NextResponse.json({ error: "Date must be valid." }, { status: 400 });
     }
 
     const user = await prisma.user.findFirst({
@@ -52,11 +68,15 @@ export async function POST(request: Request) {
         data: {
           id: requestedExpenseId,
           businessId: resolvedBusinessId,
-          category: String(category).trim(),
+          category: normalizeCategory(String(category)),
           description: normalizedDescription,
           amount: parsedAmount,
+          paymentMethod: paymentMethod ? String(paymentMethod).trim() : null,
+          icon: icon ? String(icon).trim() : null,
+          recurring: Boolean(recurring),
           paidTo: paidTo ? String(paidTo).trim() : null,
           recordedBy: userId,
+          createdAt,
         },
       });
 
