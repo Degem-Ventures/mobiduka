@@ -20,7 +20,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
   const [selected, setSelected] = useState<CustomerDetails | null>(null)
   const [tab, setTab] = useState<'all' | 'credit'>('all')
   const [showAdd, setShowAdd] = useState(false)
-  const [addForm, setAddForm] = useState({ name: '', phone: '', note: '' })
+  const [addForm, setAddForm] = useState({ name: '', phone: '', initialCreditLimit: '', note: '' })
   const [addSaved, setAddSaved] = useState(false)
   const [dataError, setDataError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -62,10 +62,18 @@ export default function CustomersScreen({ onNavigate }: Props) {
     setSaving(true)
     setDataError('')
     try {
-      await apiFetch('/api/customers', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, name: addForm.name.trim(), phone: addForm.phone.trim() || null }) })
+      await apiFetch('/api/customers', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessId: session.user.businessId,
+          name: addForm.name.trim(),
+          phone: addForm.phone.trim() || null,
+          initialCreditLimit: addForm.initialCreditLimit.trim() ? Number(addForm.initialCreditLimit) : 0,
+        }),
+      })
       setAddSaved(true)
-      setAddForm({ name: '', phone: '', note: '' })
-      loadCustomers()
+      setAddForm({ name: '', phone: '', initialCreditLimit: '', note: '' })
+      await loadCustomers()
       setTimeout(() => { setAddSaved(false); setShowAdd(false) }, 1200)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save customer.') }
     finally { setSaving(false) }
@@ -103,6 +111,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
+          {dataError && <div style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           {addSaved && (
             <div style={{ background: c.successBg, border: '1px solid #C8E6C9', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 18 }}>✅</span>
@@ -123,6 +132,10 @@ export default function CustomersScreen({ onNavigate }: Props) {
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Phone Number</label>
               <input className="input" type="tel" placeholder="e.g. 0712 345 678" value={addForm.phone} onChange={e => setAddForm(f => ({ ...f, phone: e.target.value }))} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Credit Limit (KSh)</label>
+              <input className="input" type="number" min="0" step="0.01" placeholder="0" value={addForm.initialCreditLimit} onChange={e => setAddForm(f => ({ ...f, initialCreditLimit: e.target.value }))} />
             </div>
             <div style={{ marginBottom: 20 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Note <span style={{ fontWeight: 400 }}>(optional)</span></label>
@@ -267,6 +280,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+        {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {filtered.map(cust => (
           <button key={cust.id} className="btn card" onClick={() => void handleSelectCustomer(cust)} style={{
             width: '100%', marginBottom: 8, padding: '14px 16px',

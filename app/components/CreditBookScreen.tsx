@@ -1,30 +1,86 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const credits = [
-  { id: 1, customer: 'Peter Otieno', phone: '0723 456 789', balance: 5200, lastTx: '8 Jul 2026', txCount: 4, initials: 'PO', color: '#2E7D32', daysOld: 1 },
-  { id: 2, customer: 'Grace Achieng', phone: '0756 789 012', balance: 9600, lastTx: '8 Jul 2026', txCount: 7, initials: 'GA', color: '#7B1FA2', daysOld: 0 },
-  { id: 3, customer: 'Jane Mwangi', phone: '0712 345 678', balance: 3400, lastTx: '7 Jul 2026', txCount: 2, initials: 'JM', color: '#123A8F', daysOld: 1 },
-  { id: 4, customer: 'James Kariuki', phone: '0745 678 901', balance: 1800, lastTx: '5 Jul 2026', txCount: 1, initials: 'JK', color: '#D4AF37', daysOld: 3 },
-  { id: 5, customer: 'Sarah Njeri', phone: '0778 901 234', balance: 2100, lastTx: '4 Jul 2026', txCount: 3, initials: 'SN', color: '#00796B', daysOld: 4 },
-]
+type Transaction = { id: string; date: string; desc: string; amount: number; type: 'credit' | 'payment' }
+type Credit = { id: string; customer: string; phone: string | null; balance: number; lastTx: string; txCount: number; initials: string; color: string; daysOld: number; transactions: Transaction[] }
 
-const txHistory = [
-  { date: '8 Jul 14:18', desc: 'Sale on credit', amount: 1200, type: 'credit' },
-  { date: '8 Jul 09:05', desc: 'Sale on credit', amount: 800, type: 'credit' },
-  { date: '7 Jul 16:30', desc: 'Cash payment received', amount: 2000, type: 'payment' },
-  { date: '6 Jul 11:20', desc: 'Sale on credit', amount: 1500, type: 'credit' },
-  { date: '5 Jul 10:00', desc: 'M-Pesa payment', amount: 1000, type: 'payment' },
-]
+const avatarColors = ['#123A8F', '#2E7D32', '#D32F2F', '#D4AF37', '#7B1FA2', '#F57C00', '#00796B']
 
 interface Props { onNavigate: (s: string) => void }
 
 export default function CreditBookScreen({ onNavigate }: Props) {
   const c = useColors()
-  const [selected, setSelected] = useState<typeof credits[0] | null>(null)
+  const session = getClientSession()
+  const [credits, setCredits] = useState<Credit[]>([])
+  const [selected, setSelected] = useState<Credit | null>(null)
   const [showRecord, setShowRecord] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState<'cash' | 'mpesa'>('cash')
+  const [dataError, setDataError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  type CustomerSummary = { id: string; name: string; phone: string | null; creditAccount: { balance: number } | null; _count?: { sales: number; creditEntries: number }; creditEntries?: Array<{ id: string; type: string; amount: number; paymentMethod?: string | null; createdAt: string }>; sales?: Array<{ id: string; createdAt: string; total?: number; payments?: Array<{ paymentMethod: { name: string } }>; items?: Array<{ quantity: number }> }> }
+
+  const mapCredit = (customer: CustomerSummary, index: number, transactions: Transaction[] = []): Credit => {
+    const latest = transactions[0]
+    const lastDate = latest?.date ?? 'No transactions'
+    const daysOld = latest ? Math.max(0, Math.floor((Date.now() - new Date(latest.date).getTime()) / 86400000)) : 0
+    return {
+      id: customer.id,
+      customer: customer.name,
+      phone: customer.phone,
+      balance: Number(customer.creditAccount?.balance ?? 0),
+      lastTx: lastDate,
+      txCount: (customer._count?.sales ?? 0) + (customer._count?.creditEntries ?? 0),
+      initials: customer.name.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase(),
+      color: avatarColors[index % avatarColors.length] ?? avatarColors[0],
+      daysOld,
+      transactions,
+    }
+  }
+
+  const toTransactions = (customer: CustomerSummary): Transaction[] => [
+    ...(customer.sales ?? []).filter(sale => typeof sale.total === 'number').map(sale => ({ id: sale.id, date: new Date(sale.createdAt).toLocaleString(), desc: 'Sale', amount: sale.total ?? 0, type: 'credit' as const })),
+    ...(customer.creditEntries ?? []).map(entry => ({ id: entry.id, date: new Date(entry.createdAt).toLocaleString(), desc: entry.type === 'PAYMENT' ? `${entry.paymentMethod === 'MPESA' ? 'M-Pesa' : 'Cash'} payment received` : 'Credit charge', amount: entry.amount, type: entry.type === 'PAYMENT' ? 'payment' as const : 'credit' as const })),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+  const loadCredits = async () => {
+    if (!session) { setDataError('Please sign in to load credit accounts.'); return }
+    try {
+      setDataError('')
+      const rows = await apiFetch<CustomerSummary[]>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`)
+      setCredits(rows.filter(row => Number(row.creditAccount?.balance ?? 0) > 0).map((row, index) => mapCredit(row, index, toTransactions(row))))
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load credit accounts.') }
+  }
+
+  useEffect(() => { void loadCredits() }, [session?.user.businessId])
+
+  const handleSelect = async (credit: Credit) => {
+    if (!session) return
+    try {
+      const details = await apiFetch<CustomerSummary>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}&customerId=${encodeURIComponent(credit.id)}`)
+      setSelected(mapCredit(details, credits.indexOf(credit), toTransactions(details)))
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load credit history.') }
+  }
+
+  const recordPayment = async () => {
+    if (!session || !selected) return
+    const amount = Number(payAmount)
+    if (!Number.isFinite(amount) || amount <= 0 || amount > selected.balance) {
+      setDataError('Enter a payment amount within the outstanding balance.')
+      return
+    }
+    setSaving(true)
+    try {
+      await apiFetch('/api/customers/credit', { method: 'POST', body: JSON.stringify({ action: 'RECORD_PAYMENT', businessId: session.user.businessId, customerId: selected.id, amount, userId: session.user.id, paymentMethod: payMethod.toUpperCase() }) })
+      await loadCredits()
+      setShowRecord(false)
+      setSelected(null)
+      setPayAmount('')
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to record payment.') }
+    finally { setSaving(false) }
+  }
 
   const total = credits.reduce((s, cr) => s + cr.balance, 0)
 
@@ -67,7 +123,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
               </div>
             </div>
           </div>
-          <button className="btn" onClick={() => { setShowRecord(false); setSelected(null) }} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)' }}>
+          <button className="btn" disabled={saving} onClick={() => void recordPayment()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)', opacity: saving ? 0.7 : 1 }}>
             Confirm Payment
           </button>
         </div>
@@ -104,8 +160,8 @@ export default function CreditBookScreen({ onNavigate }: Props) {
           </button>
           <div className="card" style={{ padding: '16px' }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Transaction History</div>
-            {txHistory.map((t, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < txHistory.length - 1 ? c.divider : 'none' }}>
+            {selected.transactions.map((t, i) => (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < selected.transactions.length - 1 ? c.divider : 'none' }}>
                 <div style={{ width: 36, height: 36, borderRadius: 10, background: t.type === 'payment' ? c.successBg : c.errorBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
                   {t.type === 'payment' ? '✅' : '📋'}
                 </div>
@@ -140,9 +196,10 @@ export default function CreditBookScreen({ onNavigate }: Props) {
           <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 2 }}>{credits.length} active credit accounts</div>
         </div>
       </div>
+      {dataError && <div style={{ margin: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {credits.map(cr => (
-          <button key={cr.id} className="btn card" onClick={() => setSelected(cr)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+          <button key={cr.id} className="btn card" onClick={() => void handleSelect(cr)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
             <div style={{ width: 46, height: 46, borderRadius: '50%', background: cr.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: 'white', flexShrink: 0 }}>{cr.initials}</div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{cr.customer}</div>

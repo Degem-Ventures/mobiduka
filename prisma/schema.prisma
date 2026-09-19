@@ -280,6 +280,7 @@ model CreditLedgerEntry {
   customerId String
   type       String
   amount     Float
+  paymentMethod String?
   dueDate    DateTime?
   status     String    @default("PENDING")
   createdAt  DateTime  @default(now())
