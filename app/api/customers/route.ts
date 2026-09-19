@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 
@@ -10,6 +10,27 @@ export async function GET(request: Request) {
 
     if (!businessId) {
       return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
+    }
+
+    const customerId = searchParams.get("customerId");
+    if (customerId) {
+      const customer = await prisma.customer.findFirst({
+        where: { id: customerId, businessId },
+        include: {
+          creditAccount: { select: { balance: true, status: true, lastPayment: true } },
+          sales: {
+            include: {
+              payments: { include: { paymentMethod: { select: { name: true } } } },
+              items: { select: { quantity: true } },
+            },
+            orderBy: { createdAt: "desc" },
+            take: 20,
+          },
+          creditEntries: { orderBy: { createdAt: "desc" }, take: 20 },
+        },
+      });
+      if (!customer) return NextResponse.json({ error: "Customer was not found." }, { status: 404 });
+      return NextResponse.json(customer);
     }
 
     const customers = await prisma.customer.findMany({
@@ -26,6 +47,8 @@ export async function GET(request: Request) {
       },
       include: {
         creditAccount: { select: { balance: true, status: true } },
+        _count: { select: { sales: true, creditEntries: true } },
+        sales: { select: { createdAt: true }, orderBy: { createdAt: "desc" }, take: 1 },
       },
       orderBy: { name: "asc" },
     });

@@ -1,11 +1,31 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+
+export async function GET(request: Request) {
+  try {
+    const businessId = requireBusinessAccess(request, new URL(request.url).searchParams.get("businessId"));
+    if (!businessId) return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
+
+    const orders = await prisma.purchaseOrder.findMany({
+      where: { businessId },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        items: { include: { product: { select: { id: true, name: true, unit: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    return NextResponse.json(orders);
+  } catch (error) {
+    console.error("Failed to fetch purchase orders:", error);
+    return NextResponse.json({ error: "Failed to fetch purchase orders" }, { status: 500 });
+  }
+}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, businessId, supplierId, orderNo, totalCost, items, orderId } = body;
+    const { action, businessId, supplierId, orderNo, totalCost, dueDate, items, orderId } = body;
     const resolvedBusinessId = requireBusinessAccess(request, businessId);
     const requestedOrderId = typeof orderId === "string" && orderId.trim() && orderId.trim().toLowerCase() !== "string"
       ? orderId.trim()
@@ -50,6 +70,7 @@ export async function POST(request: Request) {
             orderNo,
             status: "REQUESTED",
             totalCost: Number(totalCost ?? 0),
+            dueDate: dueDate ? new Date(dueDate) : null,
           },
         });
 

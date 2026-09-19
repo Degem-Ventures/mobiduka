@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requestedBusinessId } from "@/lib/auth";
 

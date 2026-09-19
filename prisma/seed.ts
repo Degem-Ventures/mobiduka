@@ -1,5 +1,8 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { demoSuppliers } from "../data/demo-suppliers";
+import { demoPurchaseOrders } from "../data/demo-purchase-orders";
+import { demoCustomers } from "../data/demo-customers";
 
 const requestedForceSeed = process.argv.includes("--force-seed-demo");
 const databaseUrl = (process.env.DATABASE_URL ?? "").trim();
@@ -39,6 +42,41 @@ const products = [
   ["Soko Maize Meal 2kg", "SOK-2KG", "6191000000141", 132, 175, 16, 150],
   ["Safaricom Airtime 100 KES", "SAF-100", "6191000000158", 92, 100, 20, 250],
 ] as const;
+
+const categorySeeds = [
+  ["Flour", "🌾"],
+  ["Oils", "🫙"],
+  ["Sugar", "🍬"],
+  ["Dairy", "🥛"],
+  ["Pharma", "💊"],
+  ["Beverages", "☕"],
+  ["Spreads", "🧈"],
+  ["Spices", "🌶️"],
+  ["Bakery", "🍞"],
+  ["Water", "💧"],
+  ["Baking", "🧁"],
+  ["Cleaning", "🧺"],
+  ["Personal", "🧼"],
+  ["Airtime", "📱"],
+] as const;
+
+const productMetadata: Record<string, { category: string; emoji: string }> = {
+  "JOG-2KG": { category: "Flour", emoji: "🌾" },
+  "MAJ-500": { category: "Water", emoji: "💧" },
+  "CHP-100": { category: "Baking", emoji: "🧁" },
+  "KBR-1KG": { category: "Sugar", emoji: "🍬" },
+  "FFO-1L": { category: "Oils", emoji: "🫙" },
+  "BRK-500": { category: "Dairy", emoji: "🥛" },
+  "KPS-500": { category: "Spices", emoji: "🧂" },
+  "BLB-500": { category: "Spreads", emoji: "🧈" },
+  "NES-050": { category: "Beverages", emoji: "☕" },
+  "OMO-500": { category: "Cleaning", emoji: "🧺" },
+  "GEI-125": { category: "Personal", emoji: "🧼" },
+  "COL-100": { category: "Personal", emoji: "🪥" },
+  "ROY-010": { category: "Spices", emoji: "🌶️" },
+  "SOK-2KG": { category: "Flour", emoji: "🥣" },
+  "SAF-100": { category: "Airtime", emoji: "📱" },
+};
 
 function atStartOfDay(daysAgo: number) {
   const date = new Date();
@@ -161,31 +199,48 @@ async function main() {
     },
   });
 
-  const supplier = await prisma.supplier.create({
-    data: {
-      businessId: business.id,
-      name: "MobiDuka Distribution Hub",
-      phone: "+254700112233",
-      email: "supplies@mobiduka.com",
-      location: "Nairobi",
-      contactPerson: "Grace Achieng",
-    },
-  });
+  const supplierRecords = await prisma.$transaction(
+    demoSuppliers.map((supplier) => prisma.supplier.create({ data: { businessId: business.id, ...supplier } })),
+  );
+  const supplierForCategory: Record<string, string> = {
+    Flour: "Unga Limited",
+    Oils: "Bidco Africa",
+    Sugar: "Unga Limited",
+    Dairy: "Brookside Dairy",
+    Beverages: "Procter & Gamble",
+    Spreads: "Bidco Africa",
+    Spices: "Procter & Gamble",
+    Water: "Brookside Dairy",
+    Baking: "Unga Limited",
+    Cleaning: "Procter & Gamble",
+    Personal: "Procter & Gamble",
+    Airtime: "Procter & Gamble",
+  };
+  const suppliersByName = new Map(supplierRecords.map((supplier) => [supplier.name, supplier]));
+  const supplier = supplierRecords[0];
 
-  const category = await prisma.category.create({
-    data: { businessId: business.id, name: "Fast Moving Consumer Goods" },
-  });
+  const categoryRecords = await prisma.$transaction(
+    categorySeeds.map(([name, emoji]) =>
+      prisma.category.create({ data: { businessId: business.id, name, emoji } }),
+    ),
+  );
+  const categoriesByName = new Map(categoryRecords.map((category) => [category.name, category]));
 
   const productRecords = await prisma.$transaction(
-    products.map(([name, sku, barcode, costPrice, sellingPrice, minimumStock, stock]) =>
-      prisma.product.create({
+    products.map(([name, sku, barcode, costPrice, sellingPrice, minimumStock, stock]) => {
+      const metadata = productMetadata[sku];
+      const category = metadata ? categoriesByName.get(metadata.category) : undefined;
+      if (!metadata || !category) throw new Error(`Missing seed metadata for product: ${sku}`);
+      const supplierRecord = suppliersByName.get(supplierForCategory[metadata.category] ?? supplier.name) ?? supplier;
+      return prisma.product.create({
         data: {
           businessId: business.id,
           categoryId: category.id,
-          supplierId: supplier.id,
+          supplierId: supplierRecord.id,
           name,
           sku,
           barcode,
+          emoji: metadata.emoji,
           unit: "piece",
           costPrice,
           sellingPrice,
@@ -202,9 +257,55 @@ async function main() {
           },
         },
         include: { inventory: true },
+      });
+    }),
+  );
+
+  const customerRecords = await prisma.$transaction(
+    demoCustomers.map((customer) =>
+      prisma.customer.create({
+        data: {
+          businessId: business.id,
+          name: customer.name,
+          phone: customer.phone,
+          creditLimit: Math.max(customer.credit, customer.creditCharge),
+          creditAccount: { create: { balance: customer.credit, status: customer.credit === 0 ? "CLEARED" : "ACTIVE" } },
+        },
       }),
     ),
   );
+  for (let index = 0; index < demoCustomers.length; index += 1) {
+    const customer = demoCustomers[index];
+    const record = customerRecords[index];
+    await prisma.creditLedgerEntry.createMany({
+      data: [
+        { businessId: business.id, customerId: record.id, type: "CHARGE", amount: customer.creditCharge, status: "PENDING" },
+        ...(customer.creditPayment > 0 ? [{ businessId: business.id, customerId: record.id, type: "PAYMENT", amount: customer.creditPayment, status: "COMPLETED" }] : []),
+      ],
+    });
+  }
+
+  const productsBySku = new Map(productRecords.map((product) => [product.sku, product]));
+  for (const purchaseOrderSeed of demoPurchaseOrders) {
+    const supplierRecord = suppliersByName.get(purchaseOrderSeed.supplier);
+    if (!supplierRecord) throw new Error(`Missing purchase-order supplier: ${purchaseOrderSeed.supplier}`);
+    const items = purchaseOrderSeed.items.map((item) => {
+      const product = productsBySku.get(item.sku);
+      if (!product) throw new Error(`Missing purchase-order product: ${item.sku}`);
+      return { productId: product.id, quantity: item.quantity, costPrice: item.costPrice };
+    });
+    await prisma.purchaseOrder.create({
+      data: {
+        businessId: business.id,
+        supplierId: supplierRecord.id,
+        orderNo: purchaseOrderSeed.orderNo,
+        status: purchaseOrderSeed.status,
+        totalCost: items.reduce((total, item) => total + item.quantity * item.costPrice, 0),
+        dueDate: new Date(`${purchaseOrderSeed.dueDate}T00:00:00.000Z`),
+        items: { create: items },
+      },
+    });
+  }
 
   const [cashPayment, mpesaPayment] = await prisma.$transaction([
     prisma.paymentMethod.create({ data: { name: "CASH" } }),
@@ -248,6 +349,7 @@ async function main() {
           data: {
             businessId: business.id,
             cashierId: cashier.id,
+            customerId: customerRecords[(daysAgo + saleIndex) % customerRecords.length].id,
             saleNumber: `DEMO-${daysAgo + 1}-${saleIndex + 1}`,
             subtotal,
             discount,

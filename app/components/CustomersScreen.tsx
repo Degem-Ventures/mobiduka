@@ -1,22 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const customers = [
-  { id: 1, name: 'Jane Mwangi', phone: '0712 345 678', credit: 3400, purchases: 28, lastVisit: '2h ago', initials: 'JM', color: '#123A8F' },
-  { id: 2, name: 'Peter Otieno', phone: '0723 456 789', credit: 5200, purchases: 45, lastVisit: 'Yesterday', initials: 'PO', color: '#2E7D32' },
-  { id: 3, name: 'Mary Wanjiku', phone: '0734 567 890', credit: 0, purchases: 32, lastVisit: '3 days ago', initials: 'MW', color: '#D32F2F' },
-  { id: 4, name: 'James Kariuki', phone: '0745 678 901', credit: 1800, purchases: 19, lastVisit: '1 week ago', initials: 'JK', color: '#D4AF37' },
-  { id: 5, name: 'Grace Achieng', phone: '0756 789 012', credit: 9600, purchases: 67, lastVisit: 'Today', initials: 'GA', color: '#7B1FA2' },
-  { id: 6, name: 'David Kamau', phone: '0767 890 123', credit: 0, purchases: 14, lastVisit: '2 weeks ago', initials: 'DK', color: '#F57C00' },
-  { id: 7, name: 'Sarah Njeri', phone: '0778 901 234', credit: 2100, purchases: 38, lastVisit: '4 days ago', initials: 'SN', color: '#00796B' },
-]
+type Customer = { id: string; name: string; phone: string | null; credit: number; purchases: number; lastVisit: string; initials: string; color: string }
+type Transaction = { id: string; date: string; type: string; amount: number; method: string; items: number }
+type CustomerDetails = Customer & { transactions: Transaction[] }
 
-const txHistory = [
-  { date: 'Today 14:18', type: 'Sale', amount: 3400, method: 'M-Pesa', items: 8 },
-  { date: 'Yesterday', type: 'Credit', amount: 1200, method: 'Credit', items: 4 },
-  { date: '5 Jul', type: 'Payment', amount: -2000, method: 'Cash', items: 0 },
-  { date: '3 Jul', type: 'Sale', amount: 4800, method: 'Cash', items: 12 },
-]
+const avatarColors = ['#123A8F', '#2E7D32', '#D32F2F', '#D4AF37', '#7B1FA2', '#F57C00', '#00796B']
 
 interface Props {
   onNavigate: (s: string) => void
@@ -24,17 +14,74 @@ interface Props {
 
 export default function CustomersScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
+  const [customers, setCustomers] = useState<Customer[]>([])
   const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState<typeof customers[0] | null>(null)
+  const [selected, setSelected] = useState<CustomerDetails | null>(null)
   const [tab, setTab] = useState<'all' | 'credit'>('all')
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState({ name: '', phone: '', note: '' })
   const [addSaved, setAddSaved] = useState(false)
+  const [dataError, setDataError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  const handleAddSave = () => {
-    if (!addForm.name.trim()) return
-    setAddSaved(true)
-    setTimeout(() => { setAddSaved(false); setShowAdd(false); setAddForm({ name: '', phone: '', note: '' }) }, 1800)
+  const mapCustomer = (customer: { id: string; name: string; phone: string | null; creditAccount?: { balance: number } | null; _count?: { sales: number }; sales?: Array<{ createdAt: string }> }): Customer => ({
+    id: customer.id,
+    name: customer.name,
+    phone: customer.phone,
+    credit: Number(customer.creditAccount?.balance ?? 0),
+    purchases: customer._count?.sales ?? 0,
+    lastVisit: customer.sales?.[0]?.createdAt ? new Date(customer.sales[0].createdAt).toLocaleDateString() : 'No visits',
+    initials: customer.name.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase(),
+    color: avatarColors[customers.length % avatarColors.length] ?? avatarColors[0],
+  })
+
+  const loadCustomers = () => {
+    if (!session) { setDataError('Please sign in to load customers.'); return }
+    apiFetch<Array<{ id: string; name: string; phone: string | null; creditAccount: { balance: number } | null; _count: { sales: number }; sales: Array<{ createdAt: string }> }>>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(rows => setCustomers(rows.map(mapCustomer)))
+      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load customers.'))
+  }
+
+  useEffect(loadCustomers, [session?.user.businessId])
+
+  const handleSelectCustomer = async (customer: Customer) => {
+    if (!session) return
+    try {
+      const details = await apiFetch<{ id: string; name: string; phone: string | null; creditAccount: { balance: number } | null; sales: Array<{ id: string; createdAt: string; total: number; payments: Array<{ amount: number; paymentMethod: { name: string } }>; items: Array<{ quantity: number }> }>; creditEntries: Array<{ id: string; type: string; amount: number; createdAt: string }> }>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}&customerId=${customer.id}`)
+      const transactions: Transaction[] = [
+        ...details.sales.map(sale => ({ id: sale.id, date: new Date(sale.createdAt).toLocaleDateString(), type: 'Sale', amount: sale.total, method: sale.payments[0]?.paymentMethod.name ?? 'Sale', items: sale.items.reduce((total, item) => total + item.quantity, 0) })),
+        ...details.creditEntries.map(entry => ({ id: entry.id, date: new Date(entry.createdAt).toLocaleDateString(), type: entry.type === 'PAYMENT' ? 'Payment' : 'Credit', amount: entry.type === 'PAYMENT' ? -entry.amount : entry.amount, method: entry.type === 'PAYMENT' ? 'Credit payment' : 'Credit', items: 0 })),
+      ].sort((a, b) => b.date.localeCompare(a.date))
+      setSelected({ ...customer, phone: details.phone, credit: Number(details.creditAccount?.balance ?? 0), transactions })
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load customer history.') }
+  }
+
+  const handleAddSave = async () => {
+    if (!session || !addForm.name.trim()) return
+    setSaving(true)
+    setDataError('')
+    try {
+      await apiFetch('/api/customers', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, name: addForm.name.trim(), phone: addForm.phone.trim() || null }) })
+      setAddSaved(true)
+      setAddForm({ name: '', phone: '', note: '' })
+      loadCustomers()
+      setTimeout(() => { setAddSaved(false); setShowAdd(false) }, 1200)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save customer.') }
+    finally { setSaving(false) }
+  }
+
+  const recordPayment = async () => {
+    if (!session || !selected || selected.credit <= 0) return
+    const amount = window.prompt(`Payment amount (outstanding KSh ${selected.credit.toLocaleString()})`)
+    if (!amount) return
+    setSaving(true)
+    try {
+      await apiFetch('/api/customers/credit', { method: 'POST', body: JSON.stringify({ action: 'RECORD_PAYMENT', businessId: session.user.businessId, customerId: selected.id, amount, userId: session.user.id }) })
+      await handleSelectCustomer(selected)
+      loadCustomers()
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to record payment.') }
+    finally { setSaving(false) }
   }
 
   const filtered = customers.filter(cust =>
@@ -81,7 +128,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Note <span style={{ fontWeight: 400 }}>(optional)</span></label>
               <input className="input" placeholder="e.g. Regular customer, prefer M-Pesa" value={addForm.note} onChange={e => setAddForm(f => ({ ...f, note: e.target.value }))} />
             </div>
-            <button className="btn" onClick={handleAddSave} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)', opacity: addForm.name.trim() ? 1 : 0.5 }}>
+            <button className="btn" disabled={saving || !addForm.name.trim()} onClick={() => void handleAddSave()} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)', opacity: addForm.name.trim() ? 1 : 0.5 }}>
               Save Customer
             </button>
           </div>
@@ -104,7 +151,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
             <div style={{ width: 60, height: 60, borderRadius: '50%', background: selected.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: 'white' }}>{selected.initials}</div>
             <div>
               <div style={{ color: 'white', fontSize: 18, fontWeight: 800 }}>{selected.name}</div>
-              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 2 }}>{selected.phone}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 2 }}>{selected.phone ?? 'No phone number'}</div>
               <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 2 }}>Last visit: {selected.lastVisit}</div>
             </div>
           </div>
@@ -133,7 +180,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C' }}>Outstanding Balance</div>
                   <div style={{ fontSize: 24, fontWeight: 900, color: '#D32F2F', marginTop: 2 }}>KSh {selected.credit.toLocaleString()}</div>
                 </div>
-                <button className="btn" style={{ background: '#D32F2F', border: 'none', borderRadius: 12, padding: '10px 16px', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <button className="btn" disabled={saving} onClick={() => void recordPayment()} style={{ background: '#D32F2F', border: 'none', borderRadius: 12, padding: '10px 16px', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                   Record Payment
                 </button>
               </div>
@@ -150,8 +197,8 @@ export default function CustomersScreen({ onNavigate }: Props) {
           {/* Transaction history */}
           <div className="card" style={{ padding: '16px' }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Transaction History</div>
-            {txHistory.map((t, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < txHistory.length - 1 ? c.divider : 'none' }}>
+            {selected.transactions.map((t, i) => (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < selected.transactions.length - 1 ? c.divider : 'none' }}>
                 <div style={{ width: 38, height: 38, borderRadius: 10, background: t.amount < 0 ? c.successBg : t.method === 'Credit' ? c.errorBg : c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
                   {t.amount < 0 ? '✅' : t.method === 'Credit' ? '📋' : t.method === 'M-Pesa' ? '📱' : '💵'}
                 </div>
@@ -221,7 +268,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {filtered.map(cust => (
-          <button key={cust.id} className="btn card" onClick={() => setSelected(cust)} style={{
+          <button key={cust.id} className="btn card" onClick={() => void handleSelectCustomer(cust)} style={{
             width: '100%', marginBottom: 8, padding: '14px 16px',
             display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
           }}>
