@@ -1,26 +1,30 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const suppliers = [
-  { id: 1, name: 'Unga Limited', category: 'Flour & Grains', contact: 'James Mwenda', phone: '+254 20 330 0000', email: 'orders@unga.com', orders: 12, outstanding: 48000, initials: 'UL', color: '#123A8F', rating: 5, terms: 'Net 30' },
-  { id: 2, name: 'Bidco Africa', category: 'Oils & Fats', contact: 'Sarah Kamau', phone: '+254 51 350 5000', email: 'supply@bidco.co.ke', orders: 8, outstanding: 0, initials: 'BA', color: '#2E7D32', rating: 4, terms: 'Net 14' },
-  { id: 3, name: 'Procter & Gamble', category: 'FMCG', contact: 'Peter Otieno', phone: '+254 20 421 0000', email: 'kenya@pg.com', orders: 15, outstanding: 32500, initials: 'PG', color: '#0288D1', rating: 5, terms: 'Net 21' },
-  { id: 4, name: 'Dawa Limited', category: 'Pharmaceuticals', contact: 'Dr. Mary Njeri', phone: '+254 20 802 8000', email: 'orders@dawa.co.ke', orders: 6, outstanding: 0, initials: 'DL', color: '#D32F2F', rating: 4, terms: 'Prepaid' },
-  { id: 5, name: 'Brookside Dairy', category: 'Dairy Products', contact: 'Alice Wambui', phone: '+254 722 111 000', email: 'trade@brookside.co.ke', orders: 22, outstanding: 12000, initials: 'BD', color: '#00796B', rating: 5, terms: 'COD' },
-  { id: 6, name: 'Kapa Oil', category: 'Cooking Oil', contact: 'David Kariuki', phone: '+254 20 534 5600', email: 'sales@kapaoil.co.ke', orders: 5, outstanding: 0, initials: 'KO', color: '#F57C00', rating: 3, terms: 'Net 7' },
-]
+type Supplier = { id: string; name: string; category: string | null; contactPerson: string | null; phone: string | null; email: string | null; _count: { purchaseOrders: number; products: number } }
 
 interface Props { onNavigate: (s: string) => void }
 
 export default function SuppliersScreen({ onNavigate }: Props) {
   const c = useColors()
+  const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState<typeof suppliers[0] | null>(null)
+  const [selected, setSelected] = useState<Supplier | null>(null)
   const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ name: '', category: '', contact: '', phone: '', email: '', terms: 'Net 30' })
+  const [form, setForm] = useState({ name: '', category: '', contact: '', phone: '', email: '' })
+  const [dataError, setDataError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const session = getClientSession()
 
-  const filtered = suppliers.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || s.category.toLowerCase().includes(search.toLowerCase()))
-  const totalOutstanding = suppliers.reduce((a, s) => a + s.outstanding, 0)
+  useEffect(() => {
+    if (!session) { setDataError('Please sign in to load suppliers.'); return }
+    apiFetch<Supplier[]>(`/api/suppliers?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(setSuppliers)
+      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load suppliers.'))
+  }, [session?.user.businessId])
+
+  const filtered = suppliers.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || (s.category ?? '').toLowerCase().includes(search.toLowerCase()))
 
   if (showAdd) {
     return (
@@ -33,7 +37,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Add Supplier</div>
           </div>
         </div>
-        <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
+        <div className="scroll-area" style={{ paddingTop: '20px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 100 }}>
           <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
             {[
               { label: 'Business Name *', key: 'name', placeholder: 'e.g. Unga Limited' },
@@ -47,15 +51,19 @@ export default function SuppliersScreen({ onNavigate }: Props) {
                 <input className="input" placeholder={f.placeholder} value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               </div>
             ))}
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Payment Terms</label>
-              <select className="input" value={form.terms} onChange={e => setForm(p => ({ ...p, terms: e.target.value }))} style={{ appearance: 'none' }}>
-                {['COD', 'Prepaid', 'Net 7', 'Net 14', 'Net 21', 'Net 30', 'Net 60'].map(t => <option key={t}>{t}</option>)}
-              </select>
-            </div>
           </div>
-          <button className="btn" onClick={() => setShowAdd(false)} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
-            Save Supplier
+          <button className="btn" disabled={saving} onClick={async () => {
+            if (!session || !form.name.trim()) return
+            setSaving(true)
+            try {
+              const supplier = await apiFetch<Supplier>('/api/suppliers', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, name: form.name, category: form.category, contactPerson: form.contact, phone: form.phone, email: form.email }) })
+              setSuppliers(previous => [...previous, supplier])
+              setForm({ name: '', category: '', contact: '', phone: '', email: '' })
+              setShowAdd(false)
+            } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save supplier.') }
+            finally { setSaving(false) }
+          }} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+            {saving ? 'Saving...' : 'Save Supplier'}
           </button>
         </div>
       </div>
@@ -76,19 +84,16 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             </button>
           </div>
           <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <div style={{ width: 60, height: 60, borderRadius: 18, background: selected.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 800, color: 'white' }}>{selected.initials}</div>
+            <div style={{ width: 60, height: 60, borderRadius: 18, background: '#123A8F', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 800, color: 'white' }}>{selected.name.split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div>
               <div style={{ color: 'white', fontSize: 17, fontWeight: 800 }}>{selected.name}</div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>{selected.category}</div>
-              <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
-                {[1,2,3,4,5].map(i => <span key={i} style={{ fontSize: 10, color: i <= selected.rating ? '#D4AF37' : 'rgba(255,255,255,0.2)' }}>★</span>)}
-              </div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>{selected.category ?? 'General supplier'}</div>
             </div>
           </div>
         </div>
-        <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+        <div className="scroll-area" style={{ paddingTop: '16px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 80 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-            {[['Total Orders', selected.orders, '#123A8F'], ['Outstanding', selected.outstanding > 0 ? `KSh ${selected.outstanding.toLocaleString()}` : 'Cleared', selected.outstanding > 0 ? '#D32F2F' : '#2E7D32']].map(([l, v, col], i) => (
+            {[['Total Orders', selected._count.purchaseOrders, '#123A8F'], ['Products Supplied', selected._count.products, '#2E7D32']].map(([l, v, col], i) => (
               <div key={i} className="card" style={{ padding: '14px', textAlign: 'center' }}>
                 <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{l}</div>
                 <div style={{ fontSize: 18, fontWeight: 800, color: String(col) }}>{v}</div>
@@ -97,7 +102,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
           </div>
           <div className="card" style={{ padding: '16px', marginBottom: 14 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 12 }}>Contact Information</div>
-            {[['Contact Person', selected.contact], ['Phone', selected.phone], ['Email', selected.email], ['Payment Terms', selected.terms]].map(([k, v], i) => (
+            {[['Contact Person', selected.contactPerson ?? 'Not provided'], ['Phone', selected.phone ?? 'Not provided'], ['Email', selected.email ?? 'Not provided']].map(([k, v], i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < 3 ? c.divider : 'none' }}>
                 <div style={{ fontSize: 12, color: c.muted }}>{k}</div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{v}</div>
@@ -135,28 +140,24 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>Total Suppliers</div>
             <div style={{ fontSize: 16, fontWeight: 800, color: 'white' }}>{suppliers.length}</div>
           </div>
-          <div style={{ flex: 1, background: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px' }}>
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>Outstanding</div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: '#FF6B6B' }}>KSh {(totalOutstanding / 1000).toFixed(0)}K</div>
-          </div>
         </div>
         <div style={{ position: 'relative' }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search suppliers..." style={{ width: '100%', padding: '11px 12px 11px 36px', background: 'rgba(255,255,255,0.12)', border: '1.5px solid rgba(255,255,255,0.2)', borderRadius: 12, color: 'white', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
         </div>
       </div>
-      <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+      <div className="scroll-area" style={{ paddingTop: '12px', paddingRight: '12px', paddingLeft: '12px', paddingBottom: 80 }}>
+        {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {filtered.map(s => (
           <button key={s.id} className="btn card" onClick={() => setSelected(s)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-            <div style={{ width: 48, height: 48, borderRadius: 14, background: s.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, color: 'white', flexShrink: 0 }}>{s.initials}</div>
+            <div style={{ width: 48, height: 48, borderRadius: 14, background: '#123A8F', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, color: 'white', flexShrink: 0 }}>{s.name.split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{s.name}</div>
-              <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{s.category} · {s.terms}</div>
-              <div style={{ display: 'flex', gap: 1, marginTop: 3 }}>{[1,2,3,4,5].map(i => <span key={i} style={{ fontSize: 9, color: i <= s.rating ? '#D4AF37' : c.faint }}>★</span>)}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginTop: 1 }}>{s.category ?? 'General supplier'}</div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{s.orders} orders</div>
-              {s.outstanding > 0 ? <span className="badge badge-error">KSh {(s.outstanding / 1000).toFixed(0)}K</span> : <span className="badge badge-success">Settled</span>}
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{s._count.purchaseOrders} orders</div>
+              <span className="badge badge-blue">{s._count.products} products</span>
             </div>
           </button>
         ))}

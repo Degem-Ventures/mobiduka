@@ -112,6 +112,7 @@ model Category {
   businessId       String
   name             String
   icon             String?
+  emoji            String?
   parentCategoryId String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -126,6 +127,7 @@ model Supplier {
   id            String   @id @default(uuid())
   businessId    String
   name          String
+  category      String?
   phone         String?
   email         String?
   location      String?
@@ -149,6 +151,7 @@ model Product {
   name         String
   description  String?
   unit         String?
+  emoji        String?
   costPrice    Float?
   sellingPrice Float?
   minimumStock Int?
@@ -194,6 +197,7 @@ model PurchaseOrder {
   orderNo    String?
   status     String   @default("REQUESTED")
   totalCost  Float    @default(0)
+  dueDate    DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

@@ -13,6 +13,7 @@ interface Props {
 
 export default function POSScreen({ onNavigate }: Props) {
   const [products, setProducts] = useState<ProductItem[]>([])
+  const [categoryRows, setCategoryRows] = useState<Array<{ id: string; name: string; emoji: string | null }>>([])
   const [creditCustomers, setCreditCustomers] = useState<CreditCustomer[]>([])
   const [dataError, setDataError] = useState('')
   const [search, setSearch] = useState('')
@@ -31,7 +32,7 @@ export default function POSScreen({ onNavigate }: Props) {
   const c = useColors()
   const session = getClientSession()
   const currentBusinessId = session?.user.businessId ?? ''
-  const categories = ['All', ...new Set(products.map(product => product.category).filter(Boolean))]
+  const categories = [{ name: 'All', emoji: null }, ...categoryRows]
 
   useEffect(() => {
     if (!session) {
@@ -39,16 +40,18 @@ export default function POSScreen({ onNavigate }: Props) {
       return
     }
     Promise.all([
-      apiFetch<Array<{ id: string; name: string; barcode: string | null; sellingPrice: number | null; category: { name: string } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; sellingPrice: number | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<Array<{ id: string; name: string; emoji: string | null }>>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
       apiFetch<Array<{ id: string; name: string; phone: string | null; creditAccount: { balance: number } | null }>>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`),
-    ]).then(([productRows, customerRows]) => {
+    ]).then(([productRows, categoryRows, customerRows]) => {
+      setCategoryRows(categoryRows)
       setProducts(productRows.map(product => ({
         id: product.id,
         name: product.name,
         price: Number(product.sellingPrice ?? 0),
         category: product.category?.name ?? 'Uncategorized',
         stock: Number(product.inventory?.quantity ?? 0),
-        emoji: '📦',
+        emoji: product.emoji ?? product.category?.emoji ?? '📦',
         barcode: product.barcode,
       })))
       setCreditCustomers(customerRows.map(customer => ({
@@ -448,12 +451,12 @@ export default function POSScreen({ onNavigate }: Props) {
         {/* Categories */}
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
           {categories.map(cat => (
-            <button key={cat} className="btn" onClick={() => setCategory(cat)} style={{
+            <button key={cat.name} className="btn" onClick={() => setCategory(cat.name)} style={{
               padding: '6px 14px', borderRadius: 100, flexShrink: 0, border: 'none',
-              background: category === cat ? '#D4AF37' : 'rgba(255,255,255,0.12)',
-              color: category === cat ? c.text : 'rgba(255,255,255,0.8)',
+              background: category === cat.name ? '#D4AF37' : 'rgba(255,255,255,0.12)',
+              color: category === cat.name ? c.text : 'rgba(255,255,255,0.8)',
               fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
-            }}>{cat}</button>
+            }}>{cat.emoji ? `${cat.emoji} ${cat.name}` : cat.name}</button>
           ))}
         </div>
       </div>

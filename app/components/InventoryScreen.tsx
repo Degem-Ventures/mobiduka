@@ -1,33 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-type ProductItem = { id: number; name: string; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: string }
+type ProductItem = { id: string; name: string; categoryId: string | null; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: 'good' | 'low' | 'critical'; barcode: string | null }
+type CategoryItem = { id: string; name: string; emoji: string | null }
 
-const defaultCategories = ['Flour', 'Oils', 'Sugar', 'Spreads', 'Dairy', 'Spices', 'Pharma', 'Detergent', 'Personal', 'Bakery', 'Beverages']
 const emojis = ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦', '🥤', '🍫', '🧃']
-
-const initialProducts: ProductItem[] = [
-  { id: 1, name: 'Unga Jogoo 2kg', category: 'Flour', cost: 160, price: 200, stock: 45, reorder: 20, emoji: '🌾', status: 'good' },
-  { id: 2, name: 'Cooking Oil 1L', category: 'Oils', cost: 150, price: 190, stock: 32, reorder: 15, emoji: '🫙', status: 'good' },
-  { id: 3, name: 'Sugar 1kg', category: 'Sugar', cost: 100, price: 140, stock: 28, reorder: 30, emoji: '🍬', status: 'low' },
-  { id: 4, name: 'Blue Band 500g', category: 'Spreads', cost: 110, price: 150, stock: 18, reorder: 20, emoji: '🧈', status: 'low' },
-  { id: 5, name: 'Milk 500ml', category: 'Dairy', cost: 75, price: 100, stock: 60, reorder: 40, emoji: '🥛', status: 'good' },
-  { id: 6, name: 'Royco 75g', category: 'Spices', cost: 30, price: 45, stock: 5, reorder: 20, emoji: '🌶️', status: 'critical' },
-  { id: 7, name: 'Panadol 500mg', category: 'Pharma', cost: 20, price: 30, stock: 3, reorder: 50, emoji: '💊', status: 'critical' },
-  { id: 8, name: 'Omo 400g', category: 'Detergent', cost: 130, price: 180, stock: 8, reorder: 15, emoji: '🧺', status: 'low' },
-  { id: 9, name: 'Colgate 100ml', category: 'Personal', cost: 60, price: 85, stock: 22, reorder: 20, emoji: '🪥', status: 'good' },
-  { id: 10, name: 'Bread White', category: 'Bakery', cost: 40, price: 55, stock: 15, reorder: 20, emoji: '🍞', status: 'low' },
-  { id: 11, name: 'Eggs (tray)', category: 'Dairy', cost: 380, price: 480, stock: 12, reorder: 10, emoji: '🥚', status: 'good' },
-  { id: 12, name: 'Nescafé 100g', category: 'Beverages', cost: 240, price: 320, stock: 9, reorder: 12, emoji: '☕', status: 'low' },
-]
 
 interface Props {
   onNavigate: (s: string) => void
 }
 
 export default function InventoryScreen({ onNavigate }: Props) {
-  const [products, setProducts] = useState<ProductItem[]>(initialProducts)
-  const [categories, setCategories] = useState(defaultCategories)
+  const [products, setProducts] = useState<ProductItem[]>([])
+  const [categories, setCategories] = useState<CategoryItem[]>([])
+  const [dataError, setDataError] = useState('')
+  const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'low' | 'critical'>('all')
   const [selected, setSelected] = useState<ProductItem | null>(null)
@@ -35,8 +23,45 @@ export default function InventoryScreen({ onNavigate }: Props) {
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [editProduct, setEditProduct] = useState<ProductItem | null>(null)
   const [newCat, setNewCat] = useState({ name: '', emoji: '📦' })
-  const [productForm, setProductForm] = useState({ name: '', category: 'Flour', cost: '', price: '', stock: '', reorder: '', emoji: '📦' })
+  const [productForm, setProductForm] = useState({ name: '', categoryId: '', cost: '', price: '', stock: '', reorder: '', emoji: '📦' })
   const c = useColors()
+  const session = getClientSession()
+
+  const getStatus = (stock: number, reorder: number): ProductItem['status'] => {
+    if (stock === 0 || (reorder > 0 && stock <= reorder * 0.3)) return 'critical'
+    if (reorder > 0 && stock <= reorder) return 'low'
+    return 'good'
+  }
+
+  useEffect(() => {
+    if (!session) {
+      setDataError('Please sign in to load inventory.')
+      return
+    }
+    Promise.all([
+      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<CategoryItem[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
+    ]).then(([productRows, categoryRows]) => {
+      setCategories(categoryRows)
+      setProducts(productRows.map(product => {
+        const stock = Number(product.inventory?.quantity ?? 0)
+        const reorder = Number(product.minimumStock ?? 0)
+        return {
+          id: product.id,
+          name: product.name,
+          categoryId: product.category?.id ?? null,
+          category: product.category?.name ?? 'Uncategorized',
+          cost: Number(product.costPrice ?? 0),
+          price: Number(product.sellingPrice ?? 0),
+          stock,
+          reorder,
+          emoji: product.emoji ?? product.category?.emoji ?? '📦',
+          status: getStatus(stock, reorder),
+          barcode: product.barcode,
+        }
+      }))
+    }).catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load inventory.'))
+  }, [session?.user.businessId])
 
   const filtered = products.filter(p => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
@@ -94,7 +119,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
 
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => {
-              setProductForm({ name: selected.name, category: selected.category, cost: String(selected.cost), price: String(selected.price), stock: String(selected.stock), reorder: String(selected.reorder), emoji: selected.emoji })
+              setProductForm({ name: selected.name, categoryId: selected.categoryId ?? '', cost: String(selected.cost), price: String(selected.price), stock: String(selected.stock), reorder: String(selected.reorder), emoji: selected.emoji })
               setEditProduct(selected)
               setSelected(null)
               setShowAddProduct(true)
@@ -109,17 +134,39 @@ export default function InventoryScreen({ onNavigate }: Props) {
   const criticalCount = products.filter(p => p.status === 'critical').length
   const lowCount = products.filter(p => p.status === 'low').length
 
-  const saveProduct = () => {
+  const saveProduct = async () => {
+    if (!session || !productForm.name.trim() || !productForm.categoryId) return
     const p = productForm
-    const cost = Number(p.cost), price = Number(p.price), stock = Number(p.stock), reorder = Number(p.reorder)
-    const status = stock === 0 ? 'critical' : stock <= reorder * 0.3 ? 'critical' : stock < reorder ? 'low' : 'good'
-    if (editProduct) {
-      setProducts(list => list.map(x => x.id === editProduct.id ? { ...x, name: p.name, category: p.category, cost, price, stock, reorder, emoji: p.emoji, status } : x))
-    } else {
-      setProducts(list => [...list, { id: Date.now(), name: p.name, category: p.category, cost, price, stock, reorder, emoji: p.emoji, status }])
+    setSaving(true)
+    setDataError('')
+    try {
+      await apiFetch('/api/products', {
+        method: editProduct ? 'PATCH' : 'POST',
+        body: JSON.stringify({
+          businessId: session.user.businessId,
+          ...(editProduct ? { id: editProduct.id } : {}),
+          name: p.name.trim(),
+          categoryId: p.categoryId,
+          costPrice: Number(p.cost),
+          sellingPrice: Number(p.price),
+          stock: Number(p.stock),
+          minimumStock: Number(p.reorder),
+          emoji: p.emoji,
+        }),
+      })
+      const refreshed = await apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`)
+      setProducts(refreshed.map(product => {
+        const stock = Number(product.inventory?.quantity ?? 0)
+        const reorder = Number(product.minimumStock ?? 0)
+        return { id: product.id, name: product.name, categoryId: product.category?.id ?? null, category: product.category?.name ?? 'Uncategorized', cost: Number(product.costPrice ?? 0), price: Number(product.sellingPrice ?? 0), stock, reorder, emoji: product.emoji ?? product.category?.emoji ?? '📦', status: getStatus(stock, reorder), barcode: product.barcode }
+      }))
+      setShowAddProduct(false)
+      setEditProduct(null)
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to save product.')
+    } finally {
+      setSaving(false)
     }
-    setShowAddProduct(false)
-    setEditProduct(null)
   }
 
   // Add Category modal
@@ -152,15 +199,25 @@ export default function InventoryScreen({ onNavigate }: Props) {
           <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Existing Categories</div>
             {categories.map((cat, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < categories.length - 1 ? c.divider : 'none' }}>
-                <div style={{ fontSize: 13, color: c.text, fontWeight: 500 }}>{cat}</div>
-                <div style={{ fontSize: 11, color: c.faint }}>{products.filter(p => p.category === cat).length} items</div>
+                <div key={cat.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < categories.length - 1 ? c.divider : 'none' }}>
+                <div style={{ fontSize: 13, color: c.text, fontWeight: 500 }}>{cat.emoji ?? '📦'} {cat.name}</div>
+                <div style={{ fontSize: 11, color: c.faint }}>{products.filter(p => p.categoryId === cat.id).length} items</div>
               </div>
             ))}
           </div>
-          <button className="btn" onClick={() => {
-            if (newCat.name) { setCategories(prev => [...prev, newCat.name]); setNewCat({ name: '', emoji: '📦' }) }
-            setShowAddCategory(false)
+          <button className="btn" disabled={saving} onClick={async () => {
+            if (!session || !newCat.name.trim()) return
+            setSaving(true)
+            try {
+              const category = await apiFetch<CategoryItem>('/api/categories', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, name: newCat.name.trim(), emoji: newCat.emoji }) })
+              setCategories(prev => [...prev, category])
+              setNewCat({ name: '', emoji: '📦' })
+              setShowAddCategory(false)
+            } catch (reason) {
+              setDataError(reason instanceof Error ? reason.message : 'Unable to save category.')
+            } finally {
+              setSaving(false)
+            }
           }} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
             Save Category
           </button>
@@ -201,8 +258,9 @@ export default function InventoryScreen({ onNavigate }: Props) {
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <select className="input" style={{ flex: 1, appearance: 'none' }} value={productForm.category} onChange={e => setProductForm(f => ({ ...f, category: e.target.value }))}>
-                  {categories.map(cat => <option key={cat}>{cat}</option>)}
+                <select className="input" style={{ flex: 1, appearance: 'none' }} value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
+                  <option value="">Select category</option>
+                  {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.emoji ?? '📦'} {cat.name}</option>)}
                 </select>
                 <button className="btn" onClick={() => setShowAddCategory(true)} style={{ padding: '11px 12px', background: c.iconBg, border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ Cat</button>
               </div>
@@ -235,8 +293,8 @@ export default function InventoryScreen({ onNavigate }: Props) {
             )}
           </div>
 
-          <button className="btn" onClick={saveProduct} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
-            {editProduct ? 'Save Changes' : 'Add Product'}
+          <button className="btn" onClick={() => void saveProduct()} disabled={saving || !productForm.name.trim() || !productForm.categoryId} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+            {saving ? 'Saving...' : editProduct ? 'Save Changes' : 'Add Product'}
           </button>
         </div>
       </div>
@@ -245,12 +303,13 @@ export default function InventoryScreen({ onNavigate }: Props) {
 
   return (
     <div className="screen" style={{ background: c.bg }}>
+      {dataError && <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Inventory</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={() => setShowAddCategory(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>+ Category</button>
-            <button className="btn" onClick={() => { setProductForm({ name: '', category: 'Flour', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
               <span style={{ fontSize: 16, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Product</span>
             </button>
@@ -260,7 +319,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
         {/* Summary strip */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           {[
-            { label: 'Total SKUs', value: '486', color: 'rgba(255,255,255,0.9)' },
+            { label: 'Total SKUs', value: String(products.length), color: 'rgba(255,255,255,0.9)' },
             { label: 'Critical', value: String(criticalCount), color: '#FF6B6B' },
             { label: 'Low Stock', value: String(lowCount), color: '#FFD93D' },
           ].map((s, i) => (
@@ -316,7 +375,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
 
       {/* FAB */}
       <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={() => { setProductForm({ name: '', category: 'Flour', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{
+        <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{
           width: 52, height: 52, borderRadius: '50%',
           background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
           border: 'none', fontSize: 24, color: '#0D1B3D',

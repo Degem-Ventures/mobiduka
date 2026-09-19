@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server.js";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authenticatedBusinessId } from "@/lib/auth";
