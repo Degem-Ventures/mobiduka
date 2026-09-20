@@ -6,6 +6,8 @@ import { apiFetch, getClientSession } from '../../lib/client-api'
 type ProductItem = { id: string; name: string; price: number; category: string; stock: number; emoji: string; barcode?: string | null }
 type CreditCustomer = { id: string; name: string; phone: string; balance: number }
 type CartItem = Pick<ProductItem, 'id' | 'name' | 'price' | 'emoji'> & { qty: number }
+type ActiveOperator = { id: string; name: string; shift: string }
+type ReceiptInfo = { saleNumber: string; createdAt: string; cashierName: string; businessName: string; businessBranch: string | null }
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -29,6 +31,10 @@ export default function POSScreen({ onNavigate }: Props) {
   const [quickName, setQuickName] = useState('')
   const [quickPhone, setQuickPhone] = useState('')
   const [isWebScannerOpen, setIsWebScannerOpen] = useState(false)
+  const [activeOperators, setActiveOperators] = useState<ActiveOperator[]>([])
+  const [selectedOperatorId, setSelectedOperatorId] = useState('')
+  const [isCompletingSale, setIsCompletingSale] = useState(false)
+  const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
   const c = useColors()
   const session = getClientSession()
   const currentBusinessId = session?.user.businessId ?? ''
@@ -61,6 +67,21 @@ export default function POSScreen({ onNavigate }: Props) {
         balance: Number(customer.creditAccount?.balance ?? 0),
       })))
     }).catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load POS data.'))
+  }, [session?.user.businessId])
+
+  useEffect(() => {
+    if (!session) return
+    apiFetch<{ sessions: Array<{ closedAt: string | null; cashier: { id: string; fullName: string; role: { name: string } | null } | null; shift: { name: string } | null; shiftType: string }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => {
+        const operators = response.sessions
+          .filter(item => !item.closedAt && item.cashier && ['CASHIER', 'SUPERVISOR'].includes(item.cashier.role?.name?.toUpperCase() ?? ''))
+          .map(item => ({ id: item.cashier!.id, name: item.cashier!.fullName, shift: item.shift?.name ?? item.shiftType }))
+          .filter((operator, index, rows) => rows.findIndex(candidate => candidate.id === operator.id) === index)
+        setActiveOperators(operators)
+        if (operators.length === 1) setSelectedOperatorId(operators[0].id)
+        else if (!operators.some(operator => operator.id === selectedOperatorId)) setSelectedOperatorId('')
+      })
+      .catch(() => setActiveOperators([]))
   }, [session?.user.businessId])
 
   const filtered = products.filter(p =>
@@ -127,6 +148,31 @@ export default function POSScreen({ onNavigate }: Props) {
   const total = subtotal - discountAmt
   const cartCount = cart.reduce((s, x) => s + x.qty, 0)
 
+  const completeSale = async () => {
+    if (!session || !selectedOperatorId || cart.length === 0 || isCompletingSale) return
+    setIsCompletingSale(true)
+    try {
+      const response = await apiFetch<{ saleNumber: string; createdAt: string; cashier: { name: string }; business: { name: string; branch: string | null } }>('/api/sales', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessId: currentBusinessId,
+          cashierId: selectedOperatorId,
+          invoiceNo: `POS-${Date.now()}`,
+          totalAmount: total,
+          paymentMode: paymentMethod === 'mpesa' ? 'MPESA' : paymentMethod === 'credit' ? 'CREDIT' : 'CASH',
+          customerId: paymentMethod === 'credit' ? selectedCreditor?.id : null,
+          items: cart.map(item => ({ productId: item.id, quantity: item.qty, unitPrice: item.price, total: item.price * item.qty })),
+        }),
+      })
+      setReceiptInfo({ saleNumber: response.saleNumber, createdAt: response.createdAt, cashierName: response.cashier.name, businessName: response.business.name, businessBranch: response.business.branch })
+      setView('receipt')
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to complete sale.')
+    } finally {
+      setIsCompletingSale(false)
+    }
+  }
+
   if (view === 'receipt') {
     return (
       <div className="screen" style={{ background: c.bg }}>
@@ -134,14 +180,15 @@ export default function POSScreen({ onNavigate }: Props) {
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 8 }}>✅</div>
             <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>Sale Complete!</div>
-            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 4 }}>Receipt #{Math.floor(Math.random() * 9000) + 1000}</div>
+            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 4 }}>Receipt #{receiptInfo?.saleNumber ?? 'Pending'}</div>
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 13, color: c.muted, marginBottom: 4 }}>MobiDuka Store · Nairobi CBD</div>
-              <div style={{ fontSize: 12, color: c.faint }}>Tue 8 Jul 2026, 14:45</div>
+              <div style={{ fontSize: 13, color: c.muted, marginBottom: 4 }}>{[receiptInfo?.businessName, receiptInfo?.businessBranch].filter(Boolean).join(' · ') || 'Business'}</div>
+              <div style={{ fontSize: 12, color: c.faint }}>{new Date(receiptInfo?.createdAt ?? Date.now()).toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}</div>
+              <div style={{ fontSize: 12, color: c.muted, marginTop: 4 }}>Served by {receiptInfo?.cashierName ?? 'Unknown operator'}</div>
             </div>
             <div style={{ borderTop: '1px dashed #E8ECF4', paddingTop: 16, marginBottom: 16 }}>
               {cart.map((item, i) => (
@@ -197,7 +244,7 @@ export default function POSScreen({ onNavigate }: Props) {
               borderRadius: 14, fontSize: 14, fontWeight: 600, color: '#123A8F',
               cursor: 'pointer', fontFamily: 'inherit'
             }}>Print Receipt</button>
-            <button className="btn" onClick={() => { setCart([]); setView('pos'); setDiscount(0); setSelectedCreditor(null); setCreditSearch('') }} style={{
+            <button className="btn" onClick={() => { setCart([]); setView('pos'); setDiscount(0); setSelectedCreditor(null); setCreditSearch(''); setReceiptInfo(null) }} style={{
               flex: 1, padding: '14px',
               background: 'linear-gradient(135deg, #123A8F, #1A4FBF)',
               border: 'none', borderRadius: 14, fontSize: 14, fontWeight: 700, color: 'white',
@@ -339,10 +386,22 @@ export default function POSScreen({ onNavigate }: Props) {
             </div>
           </div>
 
+          {activeOperators.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Sale Attributed To</div>
+              {activeOperators.map(operator => (
+                <button key={operator.id} className="btn" onClick={() => setSelectedOperatorId(operator.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, borderRadius: 12, background: selectedOperatorId === operator.id ? 'rgba(18,58,143,0.08)' : c.card, border: selectedOperatorId === operator.id ? '2px solid #123A8F' : `1px solid ${c.divider}`, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                  <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{operator.name}</div><div style={{ fontSize: 11, color: c.muted }}>{operator.shift} · Active</div></div>
+                  {selectedOperatorId === operator.id && <span style={{ color: '#123A8F', fontWeight: 800 }}>✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
           {(() => {
-            const canComplete = paymentMethod !== 'credit' || !!selectedCreditor
+            const canComplete = !!selectedOperatorId && (paymentMethod !== 'credit' || !!selectedCreditor)
             return (
-              <button className="btn" onClick={() => { if (canComplete) setView('receipt') }} style={{
+              <button className="btn" onClick={() => { if (canComplete) void completeSale() }} disabled={!canComplete || isCompletingSale} style={{
                 width: '100%', marginTop: 28, padding: '18px',
                 background: canComplete ? 'linear-gradient(135deg, #123A8F, #1A4FBF)' : (c.isDark ? '#162B5A' : '#E3EAF8'),
                 border: 'none', borderRadius: 16, fontSize: 17, fontWeight: 800,
@@ -350,9 +409,11 @@ export default function POSScreen({ onNavigate }: Props) {
                 cursor: canComplete ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
                 boxShadow: canComplete ? '0 6px 24px rgba(18,58,143,0.4)' : 'none',
               }}>
-                {paymentMethod === 'credit' && !selectedCreditor
+                {!selectedOperatorId
+                  ? 'Select an active shift operator'
+                  : paymentMethod === 'credit' && !selectedCreditor
                   ? 'Select a customer to proceed'
-                  : `Complete Sale · KSh ${total.toLocaleString()}`}
+                  : isCompletingSale ? 'Recording Sale…' : `Complete Sale · KSh ${total.toLocaleString()}`}
               </button>
             )
           })()}

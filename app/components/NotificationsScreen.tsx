@@ -1,18 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-const notifications = [
-  { id: 1, type: 'critical', title: 'Critical Stock Alert', body: 'Panadol 500mg has only 3 units remaining. Reorder level is 50 units.', time: '14:30', date: 'Today', read: false, icon: '🔴' },
-  { id: 2, type: 'warning', title: 'Low Stock Warning', body: 'Royco 75g is running low (5 units). Consider placing a purchase order.', time: '13:55', date: 'Today', read: false, icon: '⚠️' },
-  { id: 3, type: 'success', title: 'Daily Sales Target Achieved', body: "Congratulations! Today's sales of KSh 84,250 exceeded the daily target of KSh 70,000.", time: '13:00', date: 'Today', read: false, icon: '🎯' },
-  { id: 4, type: 'info', title: 'New Purchase Order Received', body: 'PO-2026-083 from Bidco Africa has been marked as delivered. 4 items received.', time: '11:20', date: 'Today', read: true, icon: '📦' },
-  { id: 5, type: 'warning', title: 'Credit Account Overdue', body: 'Grace Achieng\'s credit balance of KSh 9,600 is overdue by 5 days.', time: '09:00', date: 'Today', read: true, icon: '💳' },
-  { id: 6, type: 'info', title: 'Backup Completed', body: 'Your data has been successfully backed up to the cloud. All records are safe.', time: '06:00', date: 'Today', read: true, icon: '☁️' },
-  { id: 7, type: 'success', title: 'New Customer Registered', body: 'Grace Achieng has been added as a new customer to your database.', time: '15:30', date: 'Yesterday', read: true, icon: '👤' },
-  { id: 8, type: 'info', title: 'Monthly Report Available', body: 'Your June 2026 monthly sales and profit report is ready to view.', time: '07:00', date: 'Yesterday', read: true, icon: '📊' },
-  { id: 9, type: 'warning', title: 'Low Cash in Till', body: 'Cash in till is below KSh 20,000. Consider topping up or depositing excess.', time: '16:00', date: '6 Jul', read: true, icon: '💵' },
-  { id: 10, type: 'critical', title: 'Expired Product Alert', body: 'Dawa Product Batch #DW2209 is approaching expiry in 7 days. Check pharmacy stock.', time: '10:00', date: '6 Jul', read: true, icon: '💊' },
-]
+type NotificationItem = { id: string; type: string; title: string; body: string; createdAt: string; read: boolean; icon: string }
+type DisplayNotification = NotificationItem & { date: string; time: string }
 
 const typeColors: Record<string, { bg: string; border: string; dot: string }> = {
   critical: { bg: '#FFF5F5', border: '#FFCDD2', dot: '#D32F2F' },
@@ -25,18 +16,64 @@ interface Props { onNavigate: (s: string) => void }
 
 export default function NotificationsScreen({ onNavigate }: Props) {
   const c = useColors()
-  const [items, setItems] = useState(notifications)
+  const [items, setItems] = useState<NotificationItem[]>([])
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
+  const [dataError, setDataError] = useState('')
+
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) { setDataError('Please sign in to load notifications.'); return }
+    apiFetch<{ notifications: NotificationItem[] }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => setItems(response.notifications))
+      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load notifications.'))
+  }, [])
 
   const unreadCount = items.filter(n => !n.read).length
-  const markAllRead = () => setItems(i => i.map(n => ({ ...n, read: true })))
-  const markRead = (id: number) => setItems(i => i.map(n => n.id === id ? { ...n, read: true } : n))
+  const markAllRead = async () => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      await apiFetch('/api/notifications', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, markAllRead: true }) })
+      setItems(i => i.map(n => ({ ...n, read: true })))
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to mark notifications as read.')
+    }
+  }
+  const markRead = async (id: string) => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      await apiFetch('/api/notifications', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, id }) })
+      setItems(i => i.map(n => n.id === id ? { ...n, read: true } : n))
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to mark notification as read.')
+    }
+  }
+  const deleteNotification = async (id: string) => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      await apiFetch('/api/notifications', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, id }) })
+      setItems(i => i.filter(n => n.id !== id))
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to delete notification.')
+    }
+  }
 
-  const today = items.filter(n => n.date === 'Today' && (filter === 'all' || !n.read))
-  const yesterday = items.filter(n => n.date === 'Yesterday' && (filter === 'all' || !n.read))
-  const older = items.filter(n => n.date !== 'Today' && n.date !== 'Yesterday' && (filter === 'all' || !n.read))
+  const formatDate = (createdAt: string) => {
+    const date = new Date(createdAt)
+    const today = new Date()
+    const todayKey = today.toLocaleDateString()
+    const dateKey = date.toLocaleDateString()
+    return dateKey === todayKey ? 'Today' : dateKey === new Date(today.getTime() - 86400000).toLocaleDateString() ? 'Yesterday' : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  }
+  const withDisplayFields: DisplayNotification[] = items.map(item => ({ ...item, date: formatDate(item.createdAt), time: new Date(item.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }))
 
-  const Section = ({ title, data }: { title: string; data: typeof items }) => data.length === 0 ? null : (
+  const today = withDisplayFields.filter(n => n.date === 'Today' && (filter === 'all' || !n.read))
+  const yesterday = withDisplayFields.filter(n => n.date === 'Yesterday' && (filter === 'all' || !n.read))
+  const older = withDisplayFields.filter(n => n.date !== 'Today' && n.date !== 'Yesterday' && (filter === 'all' || !n.read))
+
+  const Section = ({ title, data }: { title: string; data: DisplayNotification[] }) => data.length === 0 ? null : (
     <div style={{ marginBottom: 16 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</div>
       {data.map(n => (
@@ -51,7 +88,10 @@ export default function NotificationsScreen({ onNavigate }: Props) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: n.read ? 600 : 700, color: c.text, flex: 1 }}>{n.title}</div>
-                {!n.read && <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColors[n.type].dot, flexShrink: 0, marginTop: 4 }} />}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  {!n.read && <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColors[n.type].dot, marginTop: 4 }} />}
+                  {n.read && <span role="button" tabIndex={0} aria-label="Delete notification" onClick={event => { event.stopPropagation(); void deleteNotification(n.id) }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); void deleteNotification(n.id) } }} style={{ color: c.faint, fontSize: 18, lineHeight: 1, cursor: 'pointer', padding: '0 2px' }}>×</span>}
+                </div>
               </div>
               <div style={{ fontSize: 12, color: c.muted, marginTop: 3, lineHeight: 1.5 }}>{n.body}</div>
               <div style={{ fontSize: 11, color: c.faint, marginTop: 4 }}>{n.time}</div>
@@ -89,6 +129,7 @@ export default function NotificationsScreen({ onNavigate }: Props) {
         </div>
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+        {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {today.length === 0 && yesterday.length === 0 && older.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: c.faint }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>🔔</div>

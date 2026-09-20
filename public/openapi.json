@@ -162,6 +162,11 @@
       }
     },
     "/cash/session": {
+      "get": {
+        "tags": ["Business"], "summary": "List cash sessions and shift performance",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
+        "responses": { "200": { "description": "Sessions ordered from earliest start to latest, including cashier, shift type, sales count, and revenue. Open sessions have closedAt set to null." }, "401": { "description": "Authenticated business context is required." } }
+      },
       "post": {
         "tags": ["Business"],
         "summary": "Cashier Shift Drawer Reconciliation System",
@@ -665,7 +670,14 @@
       }
     },
     "/notifications": {
-      "get": { "tags": ["Business"], "summary": "Fetch low-stock notifications", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Notifications returned." }, "401": { "description": "Authenticated business context is required." } } }
+      "get": { "tags": ["Business"], "summary": "List active notifications", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active notifications ordered newest first, with unread count and seeded examples." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Business"], "summary": "Create a notification", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "title", "message"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string", "enum": ["critical", "warning", "success", "info"] }, "isRead": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Notification created." } } },
+      "patch": { "tags": ["Business"], "summary": "Mark or update notifications", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "markAllRead": { "type": "boolean" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string" }, "isRead": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Notification read state or fields updated." }, "404": { "description": "Notification not found." } } },
+      "delete": { "tags": ["Business"], "summary": "Soft-delete a read notification", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" } } } } } }, "responses": { "200": { "description": "Read notification soft-deleted." }, "409": { "description": "Only an existing read notification can be deleted." } } }
+    },
+    "/shift-types": {
+      "get": { "tags": ["Business"], "summary": "List active business shift types", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active shift types ordered by scheduled start time. Seeded schedules include Morning 06:00-14:00, Afternoon 14:00-22:00, and Night 22:00-06:00." } } },
+      "post": { "tags": ["Business"], "summary": "Create or update a business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "code", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" }, "icon": { "type": "string", "nullable": true }, "color": { "type": "string", "nullable": true }, "active": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "201": { "description": "Shift type created." } } }
     },
     "/suppliers": {
       "get": { "tags": ["Business"], "summary": "List suppliers for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Suppliers returned with product and purchase-order counts." }, "401": { "description": "Authenticated business context is required." } } },

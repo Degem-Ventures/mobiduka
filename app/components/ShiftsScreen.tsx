@@ -12,6 +12,24 @@ interface ShiftRecord {
 
 interface Props { onNavigate: (s: string) => void }
 
+const timeToMinutes = (value: string) => {
+  const [hours, minutes] = value.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+const isShiftTypeAvailableNow = (shiftType: ShiftType, now = new Date()) => {
+  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  const startMinutes = timeToMinutes(shiftType.scheduledStart)
+  const endMinutes = timeToMinutes(shiftType.scheduledEnd)
+
+  if (startMinutes === endMinutes) return true
+  if (startMinutes < endMinutes) {
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes
+  }
+
+  return currentMinutes >= startMinutes || currentMinutes < endMinutes
+}
+
 export default function ShiftsScreen({ onNavigate }: Props) {
   const c = useColors()
   const session = getClientSession()
@@ -32,18 +50,26 @@ export default function ShiftsScreen({ onNavigate }: Props) {
         apiFetch<{ sessions: Array<{ id: string; shiftType: string; shift: ShiftType | null; openedAt: string; closedAt: string | null; sales: number; amount: number; cashier: { id: string; fullName: string; role: { name: string } | null } | null }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`),
         apiFetch<{ shiftTypes: ShiftType[] }>(`/api/shift-types?businessId=${encodeURIComponent(session.user.businessId)}`),
       ])
-      setShiftTypes(shiftTypeResponse.shiftTypes ?? [])
-      if (!selectedShift && shiftTypeResponse.shiftTypes[0]) setSelectedShift(shiftTypeResponse.shiftTypes[0].id)
-      const activeCashierIds = new Set(shiftResponse.sessions.filter(item => !item.closedAt && item.cashier?.id).map(item => item.cashier?.id as string))
+      const orderedShiftTypes = [...(shiftTypeResponse.shiftTypes ?? [])].sort((left, right) => {
+        const startDifference = timeToMinutes(left.scheduledStart) - timeToMinutes(right.scheduledStart)
+        if (startDifference !== 0) return startDifference
+        const endDifference = timeToMinutes(left.scheduledEnd) - timeToMinutes(right.scheduledEnd)
+        return endDifference !== 0 ? endDifference : left.name.localeCompare(right.name)
+      })
+      setShiftTypes(orderedShiftTypes)
+      const availableShift = orderedShiftTypes.find(shiftType => isShiftTypeAvailableNow(shiftType))
+      if (availableShift) setSelectedShift(availableShift.id)
+      const operationalSessions = shiftResponse.sessions.filter(item => ['CASHIER', 'SUPERVISOR'].includes(item.cashier?.role?.name?.toUpperCase() ?? ''))
+      const activeCashierIds = new Set(operationalSessions.filter(item => !item.closedAt && item.cashier?.id).map(item => item.cashier?.id as string))
       const staff = employeeResponse.employees.filter(employee => (employee.role === 'CASHIER' || employee.role === 'SUPERVISOR') && !activeCashierIds.has(employee.id)).map(employee => ({ id: employee.id, name: employee.fullName, role: employee.role, initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() }))
       setStaffList(staff)
       if (!selectedStaff && staff[0]) setSelectedStaff(staff[0].id)
-      const mappedSessions = shiftResponse.sessions.map(item => {
+      const mappedSessions = operationalSessions.map(item => {
         const type = item.shift ?? shiftTypeResponse.shiftTypes.find(shift => shift.code === item.shiftType) ?? shiftTypeResponse.shiftTypes[0]
         return { id: item.id, cashierId: item.cashier?.id ?? null, cashier: item.cashier?.fullName ?? 'Unknown', initials: item.cashier?.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() ?? '??', type: type?.code ?? item.shiftType, label: type?.name ?? item.shiftType, icon: type?.icon ?? '🕐', color: type?.color ?? '#123A8F', start: new Date(item.openedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), end: item.closedAt ? new Date(item.closedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null, sales: item.sales, amount: Number(item.amount), date: new Date(item.openedAt).toLocaleDateString() }
       })
       setPastShifts(mappedSessions)
-      const active = shiftResponse.sessions.find(item => !item.closedAt)
+      const active = operationalSessions.find(item => !item.closedAt)
       if (active) setActiveShift(mappedSessions.find(shift => shift.id === active.id) ?? null)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load shifts.') }
   }
@@ -54,18 +80,28 @@ export default function ShiftsScreen({ onNavigate }: Props) {
     if (!session || !selectedStaff) return
     const member = staffList.find(s => s.id === selectedStaff)
     const sType = shiftTypes.find(s => s.id === selectedShift)
-    if (!sType) return
+    if (!sType || !isShiftTypeAvailableNow(sType)) {
+      setDataError('Only the shift type scheduled for the current time can be started.')
+      return
+    }
     try {
       await apiFetch('/api/cash/session', { method: 'POST', body: JSON.stringify({ action: 'OPEN', businessId: session.user.businessId, userId: member?.id, openingCash: 0, shiftTypeId: sType.id }) })
+      window.dispatchEvent(new Event('mobiduka:shift-changed'))
       await loadShiftData()
       setView('active')
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to start shift.') }
+  }
+
+  const openStartView = async () => {
+    await loadShiftData()
+    setView('start')
   }
 
   const endShift = async () => {
     if (!session || !activeShift) return
     try {
       await apiFetch('/api/cash/session', { method: 'POST', body: JSON.stringify({ action: 'CLOSE', businessId: session.user.businessId, userId: activeShift.cashierId ?? session.user.id, sessionId: activeShift.id, closingCash: 0 }) })
+      window.dispatchEvent(new Event('mobiduka:shift-changed'))
       await loadShiftData()
       setActiveShift(null)
       setView('list')
@@ -88,13 +124,15 @@ export default function ShiftsScreen({ onNavigate }: Props) {
 
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Shift Type</div>
           <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
-            {shiftTypes.map((s, i, arr) => (
-              <button key={s.id} className="btn" onClick={() => setSelectedShift(s.id)} style={{
+            {shiftTypes.map((s, i, arr) => {
+              const availableNow = isShiftTypeAvailableNow(s)
+              return (
+              <button key={s.id} className="btn" disabled={!availableNow} onClick={() => { if (availableNow) setSelectedShift(s.id) }} style={{
                 width: '100%', display: 'flex', alignItems: 'center', gap: 14,
                 padding: '14px 16px', border: 'none',
                 borderBottom: i < arr.length - 1 ? c.divider : 'none',
                 background: selectedShift === s.id ? (c.isDark ? 'rgba(18,58,143,0.2)' : 'rgba(18,58,143,0.05)') : 'none',
-                cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                cursor: availableNow ? 'pointer' : 'not-allowed', opacity: availableNow ? 1 : 0.45, fontFamily: 'inherit', textAlign: 'left',
               }}>
                 <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(s.color ?? '#123A8F'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{s.icon ?? '🕐'}</div>
                 <div style={{ flex: 1 }}>
@@ -110,7 +148,8 @@ export default function ShiftsScreen({ onNavigate }: Props) {
                   {selectedShift === s.id && <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'white' }} />}
                 </div>
               </button>
-            ))}
+              )
+            })}
           </div>
 
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Assign Cashier</div>
@@ -221,7 +260,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Shift Management</div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>{pastShifts.length} shifts logged this week</div>
           </div>
-          <button className="btn" onClick={() => setView('start')} style={{ marginLeft: 'auto', background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" onClick={() => void openStartView()} style={{ marginLeft: 'auto', background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit' }}>
             + Start
           </button>
         </div>
@@ -237,7 +276,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 13, fontWeight: 700, color: c.isDark ? '#FFD54F' : '#5D4037' }}>No Active Shift</div>
               <div style={{ fontSize: 12, color: c.isDark ? '#F9A825' : '#8D6E63', marginTop: 2 }}>Start a shift to track cashier performance</div>
             </div>
-            <button className="btn" onClick={() => setView('start')} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
+            <button className="btn" onClick={() => void openStartView()} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
               Start
             </button>
           </div>
@@ -262,7 +301,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
           <div key={date} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{date}</div>
             {shifts.map(s => (
-              <div key={s.id} className="card" style={{ padding: '14px 16px', marginBottom: 10 }}>
+              <div key={s.id} className="card" onClick={() => { if (!s.end) { setActiveShift(s); setView('active') } }} style={{ padding: '14px 16px', marginBottom: 10, cursor: s.end ? 'default' : 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: 'white', flexShrink: 0 }}>
                     {s.initials}
@@ -278,7 +317,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>KSh {s.amount.toLocaleString()}</div>
-                    <span className="badge badge-success" style={{ fontSize: 10, marginTop: 4 }}>Closed</span>
+                    <span className={s.end ? 'badge badge-success' : 'badge'} style={{ fontSize: 10, marginTop: 4, color: s.end ? undefined : '#2E7D32', background: s.end ? undefined : '#E8F5E9' }}>{s.end ? 'Closed' : 'In Progress'}</span>
                   </div>
                 </div>
               </div>

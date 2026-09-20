@@ -1,22 +1,57 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 interface Props { onNavigate: (s: string) => void }
+type Profile = { id: string; name: string; phone: string | null; email: string | null; role: string; memberSince: string; business: { name: string; branch: string | null; country: string | null } }
 
 export default function UserProfileScreen({ onNavigate }: Props) {
   const c = useColors()
   const [editing, setEditing] = useState(false)
   const [changingPin, setChangingPin] = useState(false)
-  const [form, setForm] = useState({ name: 'Admin User', phone: '0712 345 678', email: 'admin@mobiduka.co.ke', store: 'MobiDuka Store', branch: 'Nairobi CBD' })
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [form, setForm] = useState({ name: '', phone: '', email: '', store: '', branch: '' })
   const [pinForm, setPinForm] = useState({ current: '', newPin: '', confirm: '' })
   const [pinError, setPinError] = useState('')
   const [pinDone, setPinDone] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [dataError, setDataError] = useState('')
+  const initials = (profile?.name ?? 'User').split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase()
 
-  const handleSave = () => {
-    setSaved(true)
-    setEditing(false)
-    setTimeout(() => setSaved(false), 2000)
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) { setDataError('Please sign in to load your profile.'); return }
+    apiFetch<{ profile: Profile }>(`/api/profile?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => {
+        setProfile(response.profile)
+        setForm({ name: response.profile.name, phone: response.profile.phone ?? '', email: response.profile.email ?? '', store: response.profile.business.name, branch: response.profile.business.branch ?? '' })
+      })
+      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load profile.'))
+  }, [])
+
+  const handleSave = async () => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      const response = await apiFetch<{ profile: Profile }>('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, name: form.name, phone: form.phone, email: form.email }) })
+      setProfile(response.profile)
+      setEditing(false)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to update profile.') }
+  }
+
+  const updatePin = async () => {
+    const session = getClientSession()
+    if (!session) return
+    if (!pinForm.current) { setPinError('Enter your current PIN'); return }
+    if (pinForm.newPin.length !== 4) { setPinError('New PIN must be 4 digits'); return }
+    if (pinForm.newPin !== pinForm.confirm) { setPinError('New PINs do not match'); return }
+    try {
+      await apiFetch('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, currentPin: pinForm.current, newPin: pinForm.newPin }) })
+      setPinError('')
+      setPinDone(true)
+    } catch (reason) { setPinError(reason instanceof Error ? reason.message : 'Unable to update PIN.') }
   }
 
   if (changingPin) {
@@ -60,13 +95,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
                 {pinError && (
                   <div style={{ background: c.errorBg, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>⚠️ {pinError}</div>
                 )}
-                <button className="btn" onClick={() => {
-                  if (!pinForm.current) { setPinError('Enter your current PIN'); return }
-                  if (pinForm.newPin.length < 4) { setPinError('New PIN must be 4 digits'); return }
-                  if (pinForm.newPin !== pinForm.confirm) { setPinError('New PINs do not match'); return }
-                  setPinError('')
-                  setPinDone(true)
-                }} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+                <button className="btn" onClick={() => void updatePin()} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
                   Update PIN
                 </button>
               </>
@@ -93,19 +122,20 @@ export default function UserProfileScreen({ onNavigate }: Props) {
         {/* Avatar */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
           <div style={{ position: 'relative' }}>
-            <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg, #D4AF37, #F0D060)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, fontWeight: 800, color: '#0D1B3D', border: '3px solid rgba(255,255,255,0.3)' }}>A</div>
+            <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg, #D4AF37, #F0D060)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, fontWeight: 800, color: '#0D1B3D', border: '3px solid rgba(255,255,255,0.3)' }}>{initials}</div>
             {editing && (
               <button className="btn" style={{ position: 'absolute', bottom: 0, right: 0, width: 26, height: 26, borderRadius: '50%', background: '#D4AF37', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 12 }}>✏️</button>
             )}
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>{form.name}</div>
-            <span style={{ background: 'rgba(212,175,55,0.25)', border: '1px solid rgba(212,175,55,0.4)', borderRadius: 100, padding: '3px 12px', fontSize: 11, fontWeight: 600, color: '#D4AF37', marginTop: 6, display: 'inline-block' }}>Store Manager</span>
+            <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>{profile?.name ?? 'Loading profile…'}</div>
+            <span style={{ background: 'rgba(212,175,55,0.25)', border: '1px solid rgba(212,175,55,0.4)', borderRadius: 100, padding: '3px 12px', fontSize: 11, fontWeight: 600, color: '#D4AF37', marginTop: 6, display: 'inline-block' }}>{profile?.role ?? 'User'}</span>
           </div>
         </div>
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+        {dataError && <div style={{ background: c.errorBg, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>{dataError}</div>}
         {saved && (
           <div style={{ background: c.successBg, border: '1px solid #C8E6C9', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 18 }}>✅</span>
@@ -167,8 +197,8 @@ export default function UserProfileScreen({ onNavigate }: Props) {
         </div>
 
         <div style={{ background: c.cardAlt, borderRadius: 12, padding: '14px 16px', textAlign: 'center' }}>
-          <div style={{ fontSize: 12, color: c.faint }}>Member since January 2024</div>
-          <div style={{ fontSize: 12, color: c.faint, marginTop: 2 }}>MobiDuka POS · Store Manager</div>
+          <div style={{ fontSize: 12, color: c.faint }}>Member since {profile ? new Date(profile.memberSince).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) : '—'}</div>
+          <div style={{ fontSize: 12, color: c.faint, marginTop: 2 }}>MobiDuka POS · {profile?.role ?? 'User'} · {profile?.business.name ?? '—'} · {profile?.business.branch ?? '—'}</div>
         </div>
       </div>
     </div>
