@@ -4,6 +4,7 @@ import { demoCategories, demoProducts } from "../data/demo-products";
 import { demoSuppliers } from "../data/demo-suppliers";
 import { demoPurchaseOrders } from "../data/demo-purchase-orders";
 import { demoCustomers } from "../data/demo-customers";
+import { demoNotifications } from "../data/demo-notifications";
 
 const requestedForceSeed = process.argv.includes("--force-seed-demo");
 const databaseUrl = (process.env.DATABASE_URL ?? "").trim();
@@ -77,7 +78,8 @@ async function main() {
 
   const business = await prisma.business.create({
     data: {
-      name: "MobiDuka Wholesale Eldoret",
+      name: "MobiDuka Wholesale",
+      branch: "Eldoret Branch",
       businessType: "retail",
       ownerName: "John Kamau",
       phone: "+254700000001",
@@ -378,6 +380,17 @@ async function main() {
 
     await prisma.$transaction(dailyOps);
   }
+
+  await prisma.notification.createMany({
+    data: demoNotifications.map(notification => ({
+      businessId: business.id,
+      title: notification.title,
+      message: notification.message,
+      type: notification.type,
+      isRead: notification.isRead,
+      createdAt: notification.createdAt,
+    })),
+  });
 
   console.log(`Created tenant ${business.id}`);
   console.log(`Seeded ${productRecords.length} products, ${saleCount} sales, and ${expenseCount} expenses across 30 days.`);

@@ -10,6 +10,7 @@ datasource db {
 model Business {
   id               String   @id @default(uuid())
   name             String
+  branch           String?
   businessType     String?
   ownerName        String?
   phone            String?
@@ -459,6 +460,7 @@ model Notification {
   type       String?
   isRead     Boolean  @default(false)
   createdAt  DateTime @default(now())
+  deletedAt  DateTime?
 
   business Business @relation(fields: [businessId], references: [id])
   user     User?    @relation(fields: [userId], references: [id])

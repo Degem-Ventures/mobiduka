@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 interface Props {
   onLogout: () => void
@@ -18,7 +20,7 @@ const menuItems = [
     { label: 'Customer List', icon: '🙂', color: '#0288D1', screen: 'customers' },
   ]},
   { section: 'System', items: [
-    { label: 'Notifications', icon: '🔔', color: '#E91E63', screen: 'notifications', badge: '3' },
+    { label: 'Notifications', icon: '🔔', color: '#E91E63', screen: 'notifications' },
     { label: 'Backup & Cloud Sync', icon: '☁️', color: '#0288D1', screen: 'backup' },
     { label: 'Settings', icon: '⚙️', color: '#546E7A', screen: 'settings' },
     { label: 'User Profile', icon: '👤', color: '#123A8F', screen: 'profile' },
@@ -27,6 +29,19 @@ const menuItems = [
 
 export default function MoreScreen({ onLogout, onNavigate }: Props) {
   const c = useColors()
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const [businessInfo, setBusinessInfo] = useState({ name: 'Business', branch: 'Branch' })
+
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) return
+    apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => setUnreadNotifications(response.unreadCount))
+      .catch(() => setUnreadNotifications(0))
+    apiFetch<{ profile: { business: { name: string; branch: string | null } } }>('/api/profile')
+      .then(response => setBusinessInfo({ name: response.profile.business.name, branch: response.profile.business.branch ?? 'Branch' }))
+      .catch(() => undefined)
+  }, [])
   return (
     <div className="screen" style={{ background: c.bg }}>
       {/* Header */}
@@ -50,7 +65,7 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
 
         {/* Business info */}
         <div style={{ marginTop: 16, background: 'rgba(255,255,255,0.08)', borderRadius: 12, padding: '12px 14px', display: 'flex', gap: 0 }}>
-          {[['Store', 'MobiDuka Store'], ['Branch', 'Nairobi CBD'], ['Shift', 'Morning']].map(([k, v], i) => (
+          {[['Store', businessInfo.name], ['Branch', businessInfo.branch], ['Shift', 'Morning']].map(([k, v], i) => (
             <div key={i} style={{ flex: 1, textAlign: 'center', borderRight: i < 2 ? '1px solid rgba(255,255,255,0.15)' : 'none', padding: '0 8px' }}>
               <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>{k}</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: i === 2 ? '#D4AF37' : 'white', marginTop: 2 }}>{v}</div>
@@ -74,8 +89,8 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
                 }}>
                   <div style={{ width: 40, height: 40, borderRadius: 11, background: c.tint(item.color), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{item.icon}</div>
                   <div style={{ flex: 1, fontSize: 14, fontWeight: 600, color: c.text }}>{item.label}</div>
-                  {'badge' in item && item.badge && (
-                    <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#D32F2F', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'white' }}>{item.badge}</div>
+                  {item.screen === 'notifications' && unreadNotifications > 0 && (
+                    <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#D32F2F', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'white' }}>{unreadNotifications}</div>
                   )}
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.faint} strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
                 </button>

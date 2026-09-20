@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
 
     const business = await prisma.business.findUnique({
       where: { id: businessId },
-      select: { id: true, name: true, country: true, currency: true, timezone: true },
+      select: { id: true, name: true, branch: true, country: true, currency: true, timezone: true },
     });
     if (!business) return NextResponse.json({ error: "Business not found." }, { status: 404 });
 
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      metadata: { businessId: business.id, name: business.name, country: business.country, currency: business.currency, timezone: timeZone, date: today },
+      metadata: { businessId: business.id, name: business.name, branch: business.branch, country: business.country, currency: business.currency, timezone: timeZone, date: today },
       summary: {
         todayRevenue: money(todayRevenue),
         todayProfit: money(todayProfit),

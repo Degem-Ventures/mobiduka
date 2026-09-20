@@ -1,6 +1,6 @@
 "use client";
 
-import { JSX, useState } from "react";
+import { JSX, useEffect, useState } from "react";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import LoginScreen from "./components/LoginScreen";
 import Dashboard from "./components/Dashboard";
@@ -24,7 +24,7 @@ import TwoFactorScreen from "./components/TwoFactorScreen";
 import AdminRegisterScreen from "./components/AdminRegisterScreen";
 import ShiftsScreen from "./components/ShiftsScreen";
 import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
-import { clearClientSession } from "../lib/client-api";
+import { apiFetch, clearClientSession, getClientSession } from "../lib/client-api";
 
 type Screen =
   | "login"
@@ -156,6 +156,48 @@ function AppInner() {
   const { isDark } = useTheme();
   const [screen, setScreen] = useState<Screen>("login");
   const [loggedIn, setLoggedIn] = useState(false);
+  const [activeShiftCount, setActiveShiftCount] = useState(0);
+  const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!loggedIn) {
+      setActiveShiftCount(0);
+      setActiveShiftNames([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadActiveShifts = async () => {
+      const clientSession = getClientSession();
+      if (!clientSession) return;
+      try {
+        const response = await apiFetch<{
+          sessions: Array<{ closedAt: string | null; cashier: { fullName: string; role: { name: string } | null } | null }>;
+        }>(`/api/cash/session?businessId=${encodeURIComponent(clientSession.user.businessId)}`);
+        if (cancelled) return;
+        const active = response.sessions.filter((session) =>
+          !session.closedAt &&
+          ['CASHIER', 'SUPERVISOR'].includes(session.cashier?.role?.name?.toUpperCase() ?? ''),
+        );
+        setActiveShiftCount(active.length);
+        setActiveShiftNames(active.map((session) => session.cashier?.fullName ?? "Unassigned"));
+      } catch {
+        if (!cancelled) {
+          setActiveShiftCount(0);
+          setActiveShiftNames([]);
+        }
+      }
+    };
+
+    void loadActiveShifts();
+    const refreshTimer = window.setInterval(() => void loadActiveShifts(), 30000);
+    window.addEventListener('mobiduka:shift-changed', loadActiveShifts);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('mobiduka:shift-changed', loadActiveShifts);
+    };
+  }, [loggedIn, screen]);
 
   const handleLogin = () => {
     setLoggedIn(true);
@@ -259,6 +301,35 @@ function AppInner() {
           <div
             style={{ height: "100%", display: "flex", flexDirection: "column" }}
           >
+            {activeShiftCount > 0 && (
+              <button
+                className="btn"
+                onClick={() => setScreen("shifts")}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  borderBottom: "1px solid rgba(46,125,50,0.2)",
+                  background: isDark ? "#17351E" : "#E8F5E9",
+                  color: isDark ? "#A5D6A7" : "#2E7D32",
+                  padding: "9px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                <span style={{ fontSize: 14 }}>●</span>
+                <span style={{ flex: 1 }}>
+                  {activeShiftCount} shift{activeShiftCount === 1 ? "" : "s"} in progress
+                  {activeShiftNames.length > 0 ? ` · ${activeShiftNames.join(", ")}` : ""}
+                </span>
+                <span>Manage ›</span>
+              </button>
+            )}
             <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
               {renderScreen()}
             </div>

@@ -8,13 +8,11 @@ type TokenPayload = {
   exp?: unknown;
 };
 
-export function authenticatedBusinessId(request: Request): string | null {
+function tokenPayload(request: Request): TokenPayload | null {
   const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return null;
-
   const [encodedHeader, encodedPayload, encodedSignature] = token.split(".");
   if (!encodedHeader || !encodedPayload || !encodedSignature) return null;
-
   const expectedSignature = crypto
     .createHmac("sha256", JWT_SECRET)
     .update(`${encodedHeader}.${encodedPayload}`)
@@ -22,15 +20,25 @@ export function authenticatedBusinessId(request: Request): string | null {
   const actual = Buffer.from(encodedSignature);
   const expected = Buffer.from(expectedSignature);
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
-
   try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as TokenPayload;
-    if (typeof payload.businessId !== "string") return null;
-    if (typeof payload.exp === "number" && payload.exp < Date.now() / 1000) return null;
-    return payload.businessId;
+    return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as TokenPayload;
   } catch {
     return null;
   }
+}
+
+export function authenticatedBusinessId(request: Request): string | null {
+  const payload = tokenPayload(request);
+  if (!payload || typeof payload.businessId !== "string") return null;
+  if (typeof payload.exp === "number" && payload.exp < Date.now() / 1000) return null;
+  return payload.businessId;
+}
+
+export function authenticatedUserId(request: Request): string | null {
+  const payload = tokenPayload(request);
+  if (!payload || typeof payload.sub !== "string") return null;
+  if (typeof payload.exp === "number" && payload.exp < Date.now() / 1000) return null;
+  return payload.sub;
 }
 
 export function requestedBusinessId(request: Request, value: unknown): string | null {

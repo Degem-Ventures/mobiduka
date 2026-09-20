@@ -47,7 +47,7 @@ export async function POST(request: Request) {
 
     const business = await prisma.business.findUnique({
       where: { id: resolvedBusinessId },
-      select: { id: true },
+      select: { id: true, name: true, branch: true, country: true },
     });
 
     if (!business) {
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
         id: resolvedCashierId,
         businessId: resolvedBusinessId,
       },
-      select: { id: true },
+      select: { id: true, fullName: true },
     });
 
     if (!cashier) {
@@ -190,7 +190,14 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json(
-      { success: true, saleId: completedSale.id, saleNumber: completedSale.saleNumber },
+      {
+        success: true,
+        saleId: completedSale.id,
+        saleNumber: completedSale.saleNumber,
+        createdAt: completedSale.createdAt,
+        cashier: { id: cashier.id, name: cashier.fullName },
+        business: { name: business.name, branch: business.branch, country: business.country },
+      },
       { status: 201 },
     );
   } catch (error: any) {

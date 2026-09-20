@@ -7,7 +7,7 @@ interface Props {
 }
 
 type DashboardData = {
-  metadata: { name: string; country: string; currency: string; timezone: string; date: string }
+  metadata: { name: string; branch: string | null; country: string; currency: string; timezone: string; date: string }
   summary: Record<string, number>
   paymentBreakdown: Record<string, { amount: number; transactions: number }>
   topProducts: Array<{ name: string; units: number; revenue: number }>
@@ -18,11 +18,49 @@ type DashboardData = {
 
 const money = (value: number) => `KSh ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 
+const calendarDate = (value: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value)
+  const get = (type: string) => parts.find(part => part.type === type)?.value ?? '00'
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+const dayDifference = (timestamp: string, timeZone: string) => {
+  const target = calendarDate(new Date(timestamp), timeZone).split('-').map(Number)
+  const today = calendarDate(new Date(), timeZone).split('-').map(Number)
+  const targetUtc = Date.UTC(target[0], target[1] - 1, target[2])
+  const todayUtc = Date.UTC(today[0], today[1] - 1, today[2])
+  return Math.max(0, Math.floor((todayUtc - targetUtc) / 86400000))
+}
+
+const relativeTimeLabel = (timestamp: string, timeZone: string) => {
+  const time = new Date(timestamp).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone,
+  })
+  const days = dayDifference(timestamp, timeZone)
+  if (days === 0) return time
+  if (days === 1) return `Yesterday · ${time}`
+  if (days < 7) return `${days} days ago · ${time}`
+  const weeks = Math.floor(days / 7)
+  if (days < 30) return `${weeks === 1 ? 'a' : weeks} week${weeks === 1 ? '' : 's'} ago · ${time}`
+  const months = Math.floor(days / 30)
+  if (days < 365) return `${months === 1 ? 'a' : months} month${months === 1 ? '' : 's'} ago · ${time}`
+  const years = Math.floor(days / 365)
+  return `${years === 1 ? 'a' : years} year${years === 1 ? '' : 's'} ago · ${time}`
+}
+
 export default function Dashboard({ onNavigate }: Props) {
   const c = useColors()
   const [scanPulse, setScanPulse] = useState(false)
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState('')
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
   const statsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -34,6 +72,14 @@ export default function Dashboard({ onNavigate }: Props) {
     apiFetch<DashboardData>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
       .then(setData)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load dashboard data.'))
+  }, [])
+
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) return
+    apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => setUnreadNotifications(response.unreadCount))
+      .catch(() => setUnreadNotifications(0))
   }, [])
 
   useEffect(() => {
@@ -83,8 +129,13 @@ export default function Dashboard({ onNavigate }: Props) {
     { label: 'M-Pesa Sales', value: money(data?.paymentBreakdown?.MPESA?.amount ?? 0), sub: `${data?.paymentBreakdown?.MPESA?.transactions ?? 0} transactions`, icon: '📱', bg: 'linear-gradient(135deg, #005F2E 0%, #00A651 100%)' },
   ]
   const topProducts = (data?.topProducts ?? []).map(product => ({ ...product, sold: product.units, revenueLabel: money(product.revenue), change: 'Today' }))
-  const recentTransactions = (data?.recentTransactions ?? []).map(transaction => ({ ...transaction, amountLabel: money(transaction.amount), timeLabel: new Date(transaction.time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }))
-  const recentScans = data?.scanActivity.recent ?? []
+  const timeZone = data?.metadata.timezone ?? 'Africa/Nairobi'
+  const recentTransactions = [...(data?.recentTransactions ?? [])]
+    .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime())
+    .map(transaction => ({ ...transaction, amountLabel: money(transaction.amount), timeLabel: relativeTimeLabel(transaction.time, timeZone) }))
+  const recentScans = [...(data?.scanActivity.recent ?? [])]
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .map(scan => ({ ...scan, timeLabel: relativeTimeLabel(scan.createdAt, timeZone) }))
 
   return (
     <div className="screen">
@@ -96,18 +147,18 @@ export default function Dashboard({ onNavigate }: Props) {
               {data?.metadata.date ?? 'Loading dashboard…'}
             </div>
             <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>{data?.metadata.name ?? 'MobiDuka Store'}</div>
-            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{data?.metadata.country ?? 'Kenya'} · Live data</div>
+            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{data?.metadata.branch ?? data?.metadata.country ?? 'Kenya'} · Live data</div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn" style={{
+            <button className="btn" onClick={() => onNavigate('notifications')} aria-label="Open notifications" style={{
               width: 38, height: 38, borderRadius: 12,
               background: 'rgba(255,255,255,0.12)', border: 'none',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', position: 'relative'
             }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
               </svg>
-              <div style={{ position: 'absolute', top: -2, right: -2, width: 8, height: 8, background: '#D32F2F', borderRadius: '50%' }} />
+              {unreadNotifications > 0 && <div style={{ position: 'absolute', top: -6, right: -6, minWidth: 18, height: 18, padding: '0 4px', background: '#D32F2F', borderRadius: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 10, fontWeight: 800 }}>{unreadNotifications > 99 ? '99+' : unreadNotifications}</div>}
             </button>
             <button className="btn" onClick={() => onNavigate('more')} style={{
               width: 38, height: 38, borderRadius: 12,
@@ -285,7 +336,7 @@ export default function Dashboard({ onNavigate }: Props) {
                   <div style={{ fontSize: 12, fontWeight: 600, color: s.status === 'UNKNOWN' ? '#C62828' : c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
                   <div style={{ fontSize: 10, color: c.muted, fontFamily: 'monospace' }}>{s.barcode}</div>
                 </div>
-                <div style={{ fontSize: 10, color: c.faint, flexShrink: 0 }}>{new Date(s.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</div>
+                <div style={{ fontSize: 10, color: c.faint, flexShrink: 0 }}>{s.timeLabel}</div>
               </button>
             ))}
           </div>

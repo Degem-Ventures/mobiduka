@@ -3,6 +3,81 @@ import { prisma } from "@/lib/prisma";
 import { sendPushNotification } from "@/lib/firebase-admin";
 import { requireBusinessAccess } from "@/lib/auth";
 
+export async function GET(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const resolvedBusinessId = requireBusinessAccess(
+      request,
+      url.searchParams.get("businessId"),
+    );
+
+    if (!resolvedBusinessId) {
+      return NextResponse.json(
+        { error: "Authenticated business context is required." },
+        { status: 401 },
+      );
+    }
+
+    const sessions = await prisma.cashSession.findMany({
+      where: { businessId: resolvedBusinessId },
+      include: {
+        cashier: {
+          select: {
+            id: true,
+            fullName: true,
+            role: { select: { name: true } },
+          },
+        },
+        shift: true,
+      },
+      orderBy: { openedAt: "asc" },
+    });
+
+    const enrichedSessions = await Promise.all(
+      sessions.map(async (session) => {
+        const sales = await prisma.sale.aggregate({
+          where: {
+            businessId: resolvedBusinessId,
+            cashierId: session.cashierId,
+            createdAt: {
+              gte: session.openedAt,
+              ...(session.closedAt ? { lte: session.closedAt } : {}),
+            },
+          },
+          _count: { id: true },
+          _sum: { total: true },
+        });
+
+        return {
+          id: session.id,
+          cashierId: session.cashierId,
+          cashier: session.cashier,
+          shiftType: session.shiftType,
+          shift: session.shift,
+          openedAt: session.openedAt,
+          closedAt: session.closedAt,
+          sales: sales._count.id,
+          amount: Number(sales._sum.total ?? 0),
+          openingBalance: session.openingBalance,
+          closingBalance: session.closingBalance,
+          expectedBalance: session.expectedBalance,
+          variance: session.variance,
+        };
+      }),
+    );
+
+    return NextResponse.json({ sessions: enrichedSessions });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Failed to load cash sessions.",
+        details: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 },
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -14,6 +89,7 @@ export async function POST(request: Request) {
       closingCash,
       sessionId,
       id,
+      shiftTypeId,
     } = body as {
       action?: string;
       businessId?: string;
@@ -22,6 +98,7 @@ export async function POST(request: Request) {
       closingCash?: number | string;
       sessionId?: string;
       id?: string;
+      shiftTypeId?: string;
     };
 
     const resolvedBusinessId = requireBusinessAccess(request, businessId);
@@ -64,6 +141,17 @@ export async function POST(request: Request) {
           id: id || undefined,
           businessId: resolvedBusinessId,
           cashierId: userId,
+          shiftTypeId: shiftTypeId || undefined,
+          ...(shiftTypeId
+            ? {
+                shiftType: (
+                  await prisma.shiftType.findFirst({
+                    where: { id: shiftTypeId, businessId: resolvedBusinessId, active: true },
+                    select: { code: true },
+                  })
+                )?.code,
+              }
+            : {}),
           openingBalance: Number(openingCash),
           openedAt: new Date(),
         },
@@ -98,17 +186,19 @@ export async function POST(request: Request) {
         where: { id: sessionId },
       });
 
-      if (!activeSession || activeSession.closedAt) {
+      if (!activeSession || activeSession.businessId !== resolvedBusinessId || activeSession.closedAt) {
         return NextResponse.json(
           { error: "Target session is invalid or already closed out." },
           { status: 404 },
         );
       }
 
+      const sessionCashierId = activeSession.cashierId ?? userId;
+
       const sales = await prisma.sale.findMany({
         where: {
           businessId: resolvedBusinessId,
-          cashierId: userId,
+          cashierId: sessionCashierId,
           createdAt: { gte: activeSession.openedAt },
           payments: {
             some: {
@@ -125,7 +215,7 @@ export async function POST(request: Request) {
       const cashExpenses = await prisma.expense.findMany({
         where: {
           businessId: resolvedBusinessId,
-          recordedBy: userId,
+          recordedBy: sessionCashierId,
           createdAt: { gte: activeSession.openedAt },
         },
         select: { amount: true },
