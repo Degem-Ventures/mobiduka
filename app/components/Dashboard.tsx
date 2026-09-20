@@ -147,7 +147,7 @@ export default function Dashboard({ onNavigate }: Props) {
               {data?.metadata.date ?? 'Loading dashboard…'}
             </div>
             <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>{data?.metadata.name ?? 'MobiDuka Store'}</div>
-            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{data?.metadata.branch ?? data?.metadata.country ?? 'Kenya'} · Live data</div>
+            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>Live data</div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => onNavigate('notifications')} aria-label="Open notifications" style={{

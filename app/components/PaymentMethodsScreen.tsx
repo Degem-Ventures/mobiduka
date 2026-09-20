@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 interface Method {
   id: string; label: string; sub: string; icon: string; color: string
@@ -7,6 +8,17 @@ interface Method {
 }
 
 interface Props { onNavigate: (s: string) => void }
+
+type PaymentConfig = {
+  methods: Record<string, boolean>
+  mpesaConfig: { type: string; till: string; paybill: string; account: string }
+  bankConfig: { name: string; account: string; branch: string }
+  roundCash: boolean
+  creditLimit: string
+  requireApproval: boolean
+}
+
+type SettingsResponse = { preferences: { paymentConfig: PaymentConfig | null } }
 
 export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const c = useColors()
@@ -36,14 +48,48 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const [showCreditConfig, setShowCreditConfig] = useState(false)
 
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  const paymentConfig = (): PaymentConfig => ({
+    methods: Object.fromEntries(methods.map(method => [method.id, method.enabled])),
+    mpesaConfig,
+    bankConfig,
+    roundCash,
+    creditLimit,
+    requireApproval,
+  })
+
+  const applyPaymentConfig = (config: PaymentConfig) => {
+    if (config.methods) setMethods(current => current.map(method => ({ ...method, enabled: config.methods[method.id] ?? method.enabled })))
+    if (config.mpesaConfig) setMpesaConfig(config.mpesaConfig)
+    if (config.bankConfig) setBankConfig(config.bankConfig)
+    if (config.roundCash !== undefined) setRoundCash(config.roundCash)
+    if (config.creditLimit !== undefined) setCreditLimit(config.creditLimit)
+    if (config.requireApproval !== undefined) setRequireApproval(config.requireApproval)
+  }
+
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) return
+    apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => { if (response.preferences.paymentConfig) applyPaymentConfig(response.preferences.paymentConfig) })
+      .catch(reason => setSaveError(reason instanceof Error ? reason.message : 'Unable to load payment settings.'))
+  }, [])
 
   const toggle = (id: string) => {
     setMethods(ms => ms.map(m => m.id === id ? { ...m, enabled: !m.enabled } : m))
   }
 
-  const handleSave = () => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  const handleSave = async () => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      const response = await apiFetch<SettingsResponse>('/api/settings', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, paymentConfig: paymentConfig() }) })
+      if (response.preferences.paymentConfig) applyPaymentConfig(response.preferences.paymentConfig)
+      setSaveError('')
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (reason) { setSaveError(reason instanceof Error ? reason.message : 'Unable to save payment settings.') }
   }
 
   const enabledCount = methods.filter(m => m.enabled).length
@@ -69,6 +115,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
             <span style={{ fontSize: 13, fontWeight: 600, color: '#2E7D32' }}>Payment settings saved</span>
           </div>
         )}
+        {saveError && <div style={{ background: c.errorBg, borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 13, color: '#D32F2F' }}>{saveError}</div>}
 
         <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Accepted Payment Methods</div>
 

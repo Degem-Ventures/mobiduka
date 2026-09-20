@@ -84,11 +84,22 @@ async function main() {
       ownerName: "John Kamau",
       phone: "+254700000001",
       email: "owner@mobiduka.com",
+      kraPin: "A123456789B",
       country: "Kenya",
       currency: "KES",
       timezone: "Africa/Nairobi",
       subscriptionPlan: "starter",
       status: "ACTIVE",
+    },
+  });
+  await prisma.businessSettings.create({
+    data: {
+      businessId: business.id,
+      receiptPrint: true,
+      lowStockAlerts: true,
+      dailyReport: false,
+      autoBackup: true,
+      mpesaEnabled: true,
     },
   });
 
@@ -167,10 +178,16 @@ async function main() {
     Airtime: "Procter & Gamble",
   };
   const supplier = supplierRecords[0];
+  const reportGroups: Record<string, string> = {
+    Flour: "Grains & Baking", Bakery: "Grains & Baking", Baking: "Grains & Baking", Sugar: "Grains & Baking",
+    Dairy: "Fresh & Dairy", Water: "Fresh & Dairy", Oils: "Cooking & Spreads", Spreads: "Cooking & Spreads", Spices: "Cooking & Spreads",
+    Pharma: "Care & Wellness", Cleaning: "Care & Wellness", Personal: "Care & Wellness",
+    Beverages: "Drinks & Digital", Airtime: "Drinks & Digital",
+  };
 
   const categoryRecords = await prisma.$transaction(
     demoCategories.map(([name, emoji]) =>
-      prisma.category.create({ data: { businessId: business.id, name, emoji } }),
+      prisma.category.create({ data: { businessId: business.id, name, emoji, reportGroup: reportGroups[name] ?? "Others" } }),
     ),
   );
   const categoriesByName = new Map(categoryRecords.map((category) => [category.name, category]));

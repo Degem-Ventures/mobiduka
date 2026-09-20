@@ -3,78 +3,24 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, ReferenceLine,
 } from 'recharts'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
-// ─── Real-time anchors ────────────────────────────────────────────────────────
-const NOW        = new Date()
-const JS_DAY     = NOW.getDay()          // 0=Sun … 6=Sat
-const MON_IDX    = (JS_DAY + 6) % 7     // Mon=0 … Sun=6
-const CUR_MON    = NOW.getMonth()        // 0=Jan … 11=Dec
-const CUR_DATE   = NOW.getDate()
-const YEAR       = NOW.getFullYear()
-const DAYS_IN_MON = new Date(YEAR, CUR_MON + 1, 0).getDate()
-
-// ─── Weekly data — future days keep their shape but are marked "future" ───────
-const WEEK_FULL = [
-  { day: 'Mon', sales: 62000,  profit: 15500 },
-  { day: 'Tue', sales: 84250,  profit: 22100 },
-  { day: 'Wed', sales: 71000,  profit: 18200 },
-  { day: 'Thu', sales: 95000,  profit: 25400 },
-  { day: 'Fri', sales: 110000, profit: 30800 },
-  { day: 'Sat', sales: 130000, profit: 38000 },
-  { day: 'Sun', sales: 78000,  profit: 20200 },
-]
-
-const weekData = WEEK_FULL.map((d, i) => ({
-  day:     d.day,
-  sales:   i <= MON_IDX ? d.sales  : 0,
-  profit:  i <= MON_IDX ? d.profit : 0,
-  future:  i >  MON_IDX,
-  isToday: i === MON_IDX,
-}))
-
-const todayLabel = WEEK_FULL[MON_IDX].day
-
-// ─── Monthly data — future months kept as 0 + flagged ────────────────────────
-const MONTH_FULL = [
-  { month: 'Jan', sales: 1.80, profit: 0.46 },
-  { month: 'Feb', sales: 2.10, profit: 0.54 },
-  { month: 'Mar', sales: 2.40, profit: 0.63 },
-  { month: 'Apr', sales: 2.00, profit: 0.52 },
-  { month: 'May', sales: 2.70, profit: 0.71 },
-  { month: 'Jun', sales: 3.10, profit: 0.82 },
-  { month: 'Jul', sales: 2.90, profit: 0.76 },
-  { month: 'Aug', sales: 3.40, profit: 0.90 },
-  { month: 'Sep', sales: 3.00, profit: 0.78 },
-  { month: 'Oct', sales: 3.60, profit: 0.95 },
-  { month: 'Nov', sales: 3.20, profit: 0.84 },
-  { month: 'Dec', sales: 4.10, profit: 1.08 },
-]
-
-const monthData = MONTH_FULL.map((d, i) => ({
-  month:   d.month,
-  sales:   i <= CUR_MON ? d.sales  : 0,
-  profit:  i <= CUR_MON ? d.profit : 0,
-  future:  i >  CUR_MON,
-  isNow:   i === CUR_MON,
-}))
-
-const curMonthLabel = MONTH_FULL[CUR_MON].month
-
-// ─── Category breakdown ───────────────────────────────────────────────────────
-const categoryData = [
-  { name: 'Flour & Grains', value: 28, color: '#123A8F' },
-  { name: 'Dairy',          value: 22, color: '#D4AF37' },
-  { name: 'Oils & Fats',    value: 18, color: '#2E7D32' },
-  { name: 'Pharma',         value: 15, color: '#D32F2F' },
-  { name: 'Others',         value: 17, color: '#6B7A99' },
-]
+type WeekPoint = { day: string; sales: number; profit: number; future: boolean; isToday: boolean }
+type MonthPoint = { month: string; sales: number; profit: number; future: boolean; isNow: boolean }
+type CategoryPoint = { name: string; value: number; revenue: number; color: string }
+type ReportsData = {
+  summary: { todaySales: number; weekSales: number; weekProfit: number; weekExpenses: number; avgMargin: number; currentMonth: string; year: number; daysInMonth: number; currentDay: number; bestMonth: string }
+  trends: WeekPoint[]
+  monthly: MonthPoint[]
+  categories: Array<{ name: string; value: number; revenue: number }>
+}
 
 // ─── Tooltips ─────────────────────────────────────────────────────────────────
-const WeekTip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; name: string }[]; label?: string }) => {
+const WeekTip = ({ active, payload, label, data }: { active?: boolean; payload?: { value: number; name: string }[]; label?: string; data: WeekPoint[] }) => {
   if (!active || !payload?.length) return null
-  const d = weekData.find(x => x.day === label)
+  const d = data.find(x => x.day === label)
   if (d?.future) return (
     <div style={{ background: 'white', border: '1px solid #E8ECF4', borderRadius: 10, padding: '8px 12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
       <div style={{ fontSize: 11, color: '#6B7A99' }}>{label} — upcoming</div>
@@ -93,19 +39,19 @@ const WeekTip = ({ active, payload, label }: { active?: boolean; payload?: { val
   )
 }
 
-const MonthTip = ({ active, payload, label }: { active?: boolean; payload?: { value: number }[]; label?: string }) => {
+const MonthTip = ({ active, payload, label, data, year }: { active?: boolean; payload?: { value: number }[]; label?: string; data: MonthPoint[]; year: number }) => {
   if (!active || !payload?.length) return null
-  const d = monthData.find(x => x.month === label)
+  const d = data.find(x => x.month === label)
   if (d?.future) return (
     <div style={{ background: 'white', border: '1px solid #E8ECF4', borderRadius: 10, padding: '8px 12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-      <div style={{ fontSize: 11, color: '#6B7A99' }}>{label} {YEAR} — upcoming</div>
+      <div style={{ fontSize: 11, color: '#6B7A99' }}>{label} {year} — upcoming</div>
       <div style={{ fontSize: 11, color: '#B0BAD3', marginTop: 2 }}>No data yet</div>
     </div>
   )
   return (
     <div style={{ background: 'white', border: '1px solid #E8ECF4', borderRadius: 10, padding: '8px 12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-      <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 2 }}>{label} {YEAR}{d?.isNow ? ' · Current' : ''}</div>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#123A8F' }}>KSh {((payload[0].value) * 1000000).toLocaleString()}</div>
+      <div style={{ fontSize: 11, color: '#6B7A99', marginBottom: 2 }}>{label} {year}{d?.isNow ? ' · Current' : ''}</div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#123A8F' }}>KSh {payload[0].value.toLocaleString()}</div>
     </div>
   )
 }
@@ -115,13 +61,35 @@ interface Props { onNavigate: (s: string) => void }
 
 export default function ReportsScreen({ onNavigate }: Props) {
   const [tab, setTab] = useState<'daily' | 'monthly' | 'profit'>('daily')
+  const [report, setReport] = useState<ReportsData | null>(null)
+  const [error, setError] = useState('')
   const c = useColors()
 
-  const todaySales   = weekData.find(d => d.isToday)?.sales  ?? 0
-  // todayProfit available for future use
-  const weekSales    = weekData.filter(d => !d.future).reduce((s, d) => s + d.sales,  0)
-  const weekProfit   = weekData.filter(d => !d.future).reduce((s, d) => s + d.profit, 0)
-  const avgMargin    = weekSales > 0 ? ((weekProfit / weekSales) * 100).toFixed(1) : '0'
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) { setError('Please sign in to load reports.'); return }
+    apiFetch<ReportsData>(`/api/reports/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(setReport)
+      .catch(reason => setError(reason instanceof Error ? reason.message : 'Unable to load reports.'))
+  }, [])
+
+  const weekData = report?.trends ?? []
+  const monthData = report?.monthly ?? []
+  const categoryData: CategoryPoint[] = (report?.categories ?? []).map((category, index) => ({ ...category, color: ['#123A8F', '#D4AF37', '#2E7D32', '#D32F2F', '#6B7A99'][index % 5] }))
+  const todayLabel = weekData.find(d => d.isToday)?.day ?? 'Today'
+  const curMonthLabel = report?.summary.currentMonth ?? 'Current month'
+  const year = report?.summary.year ?? new Date().getFullYear()
+  const todaySales = report?.summary.todaySales ?? 0
+  const weekSales = report?.summary.weekSales ?? 0
+  const weekProfit = report?.summary.weekProfit ?? 0
+  const avgMargin = (report?.summary.avgMargin ?? 0).toFixed(1)
+  const daysInMonth = report?.summary.daysInMonth ?? 0
+  const currentDay = report?.summary.currentDay ?? 0
+  const weekExpenses = report?.summary.weekExpenses ?? 0
+  const maxWeekSales = Math.max(...weekData.map(day => day.sales), 1)
+  const maxMonthSales = Math.max(...monthData.map(month => month.sales), 1)
+
+  if (error) return <div className="screen" style={{ background: c.bg, padding: 24, color: '#D32F2F' }}>{error}</div>
 
   return (
     <div className="screen" style={{ background: c.bg }}>
@@ -138,7 +106,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
           <div style={{ flex: 1 }}>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Reports & Analytics</div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 1 }}>
-              Week of {curMonthLabel} {YEAR} · Up to {todayLabel}
+              Week of {curMonthLabel} {year} · Up to {todayLabel}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(46,125,50,0.28)', borderRadius: 100, padding: '4px 10px', border: '1px solid rgba(76,175,80,0.4)' }}>
@@ -205,7 +173,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                     }}
                   />
                   <YAxis tick={{ fontSize: 10, fill: '#6B7A99' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<WeekTip />} />
+                  <Tooltip content={<WeekTip data={weekData} />} />
                   <ReferenceLine x={todayLabel} stroke="#D4AF37" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: 'Today', fontSize: 9, fill: '#D4AF37', position: 'insideTopRight' }} />
                   <Area type="monotone" dataKey="sales"  stroke="#123A8F" strokeWidth={2} fill="url(#salesGrad)"  dot={false} />
@@ -241,7 +209,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                     <div style={{ height: 6, background: '#F0F3F9', borderRadius: 3, overflow: 'hidden' }}>
                       {!d.future && (
                         <div style={{
-                          width: `${(d.sales / 130000) * 100}%`, height: '100%', borderRadius: 3,
+                          width: `${(d.sales / maxWeekSales) * 100}%`, height: '100%', borderRadius: 3,
                           background: d.isToday
                             ? 'linear-gradient(90deg, #D4AF37, #F0D060)'
                             : 'linear-gradient(90deg, #123A8F, #1A4FBF)',
@@ -255,7 +223,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                   </div>
                   <div style={{ width: 42, textAlign: 'right', fontSize: 11, fontWeight: 600,
                     color: d.future ? '#C8D0E0' : '#2E7D32' }}>
-                    {d.future ? '' : `${Math.round(d.profit / d.sales * 100)}%`}
+                    {d.future ? '' : `${d.sales > 0 ? Math.round(d.profit / d.sales * 100) : 0}%`}
                   </div>
                 </div>
               ))}
@@ -275,7 +243,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                       <div style={{ width: 10, height: 10, borderRadius: 3, background: cat.color, flexShrink: 0 }} />
                       <div style={{ fontSize: 12, color: c.text, flex: 1 }}>{cat.name}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: c.muted }}>{cat.value}%</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: c.muted }}>{cat.value.toFixed(1)}%</div>
                     </div>
                   ))}
                 </div>
@@ -288,15 +256,15 @@ export default function ReportsScreen({ onNavigate }: Props) {
         {tab === 'monthly' && (
           <>
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Sales {YEAR}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Sales {year}</div>
               <div style={{ fontSize: 11, color: c.muted, marginBottom: 14 }}>
-                KSh Millions · data through {curMonthLabel} · remaining months empty
+                KSh · data through {curMonthLabel} · remaining months empty
               </div>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={monthData} margin={{ top: 8, right: 5, bottom: 0, left: -20 }}>
                   <XAxis dataKey="month" tick={{ fontSize: 10, fill: '#6B7A99' }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 9,  fill: '#6B7A99' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<MonthTip />} />
+                  <Tooltip content={<MonthTip data={monthData} year={year} />} />
                   <ReferenceLine x={curMonthLabel} stroke="#D4AF37" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: 'Now', fontSize: 9, fill: '#D4AF37', position: 'insideTopRight' }} />
                   <Bar dataKey="sales" radius={[6, 6, 0, 0]}>
@@ -334,7 +302,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                     <div style={{ height: 6, background: '#F0F3F9', borderRadius: 3, overflow: 'hidden' }}>
                       {!m.future && (
                         <div style={{
-                          width: `${(m.sales / 4.1) * 100}%`, height: '100%', borderRadius: 3,
+                          width: `${(m.sales / maxMonthSales) * 100}%`, height: '100%', borderRadius: 3,
                           background: m.isNow
                             ? 'linear-gradient(90deg, #D4AF37, #F0D060)'
                             : 'linear-gradient(90deg, #123A8F, #1A4FBF)',
@@ -344,7 +312,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                   </div>
                   <div style={{ width: 72, textAlign: 'right', fontSize: 12, fontWeight: 700,
                     color: m.future ? '#C8D0E0' : c.text }}>
-                    {m.future ? '—' : `KSh ${(m.sales * 1000000).toLocaleString()}`}
+                    {m.future ? '—' : `KSh ${m.sales.toLocaleString()}`}
                   </div>
                 </div>
               ))}
@@ -352,9 +320,9 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
             {/* Summary cards */}
             {[
-              { label: 'Best Month (so far)', value: 'June 2026', sub: 'KSh 3.1M revenue', icon: '🏆', color: '#D4AF37' },
-              { label: 'YTD Revenue', value: `KSh ${(monthData.filter(m => !m.future).reduce((s, m) => s + m.sales, 0) * 1000000).toLocaleString()}`, sub: '+18% vs last year', icon: '📈', color: '#2E7D32' },
-              { label: `Days left in ${curMonthLabel}`, value: `${DAYS_IN_MON - CUR_DATE} days`, sub: `${CUR_DATE} of ${DAYS_IN_MON} elapsed`, icon: '📅', color: '#123A8F' },
+              { label: 'Best Month (so far)', value: report?.summary.bestMonth ?? '—', sub: 'Database revenue leader', icon: '🏆', color: '#D4AF37' },
+              { label: 'YTD Revenue', value: `KSh ${monthData.reduce((s, m) => s + m.sales, 0).toLocaleString()}`, sub: 'Current calendar year', icon: '📈', color: '#2E7D32' },
+              { label: `Days left in ${curMonthLabel}`, value: `${daysInMonth - currentDay} days`, sub: `${currentDay} of ${daysInMonth} elapsed`, icon: '📅', color: '#123A8F' },
             ].map((s, i) => (
               <div key={i} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 14 }}>
                 <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(s.color), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{s.icon}</div>
@@ -379,7 +347,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                 <BarChart data={weekData} margin={{ top: 8, right: 5, bottom: 0, left: -20 }}>
                   <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#6B7A99' }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 9,  fill: '#6B7A99' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<WeekTip />} />
+                  <Tooltip content={<WeekTip data={weekData} />} />
                   <ReferenceLine x={todayLabel} stroke="#D4AF37" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: 'Today', fontSize: 9, fill: '#D4AF37', position: 'insideTopRight' }} />
                   <Bar dataKey="profit" radius={[6, 6, 0, 0]}>
@@ -405,8 +373,8 @@ export default function ReportsScreen({ onNavigate }: Props) {
             {/* P&L summary */}
             {[
               { label: 'Gross Profit (week to date)', value: `KSh ${weekProfit.toLocaleString()}`,                          margin: `${avgMargin}%`, color: '#2E7D32',  err: false },
-              { label: 'Operating Expenses',          value: 'KSh 33,600',                                                  margin: '5.7%',         color: '#D32F2F',  err: true  },
-              { label: 'Net Profit (week to date)',   value: `KSh ${(weekProfit - 33600).toLocaleString()}`,                margin: `${(((weekProfit - 33600) / weekSales) * 100).toFixed(1)}%`, color: '#123A8F', err: false },
+              { label: 'Operating Expenses',          value: `KSh ${weekExpenses.toLocaleString()}`,                       margin: weekSales > 0 ? `${((weekExpenses / weekSales) * 100).toFixed(1)}%` : '0.0%', color: '#D32F2F',  err: true  },
+              { label: 'Net Profit (week to date)',   value: `KSh ${(weekProfit - weekExpenses).toLocaleString()}`,       margin: `${(weekSales > 0 ? ((weekProfit - weekExpenses) / weekSales) * 100 : 0).toFixed(1)}%`, color: '#123A8F', err: false },
             ].map((s, i) => (
               <div key={i} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
@@ -419,8 +387,8 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
             {/* Monthly profit area */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Profit {YEAR}</div>
-              <div style={{ fontSize: 11, color: c.muted, marginBottom: 12 }}>KSh Millions · future months empty</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Profit {year}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 12 }}>KSh · future months empty</div>
               <ResponsiveContainer width="100%" height={150}>
                 <AreaChart data={monthData} margin={{ top: 8, right: 5, bottom: 0, left: -20 }}>
                   <defs>
@@ -431,7 +399,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
                   </defs>
                   <XAxis dataKey="month" tick={{ fontSize: 10, fill: '#6B7A99' }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 9,  fill: '#6B7A99' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<MonthTip />} />
+                  <Tooltip content={<MonthTip data={monthData} year={year} />} />
                   <ReferenceLine x={curMonthLabel} stroke="#D4AF37" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: 'Now', fontSize: 9, fill: '#D4AF37', position: 'insideTopRight' }} />
                   <Area type="monotone" dataKey="profit" stroke="#2E7D32" strokeWidth={2} fill="url(#mProfitGrad)" dot={false} />

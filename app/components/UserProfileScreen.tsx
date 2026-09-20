@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
+import { formatPhoneForDisplay } from '../utils/format-phone'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
 interface Props { onNavigate: (s: string) => void }
-type Profile = { id: string; name: string; phone: string | null; email: string | null; role: string; memberSince: string; business: { name: string; branch: string | null; country: string | null } }
+type Profile = { id: string; name: string; phone: string | null; email: string | null; role: string; memberSince: string; pinConfigured: boolean; business: { name: string; branch: string | null; country: string | null } }
 
 export default function UserProfileScreen({ onNavigate }: Props) {
   const c = useColors()
@@ -44,11 +45,11 @@ export default function UserProfileScreen({ onNavigate }: Props) {
   const updatePin = async () => {
     const session = getClientSession()
     if (!session) return
-    if (!pinForm.current) { setPinError('Enter your current PIN'); return }
+    if (profile?.pinConfigured && !pinForm.current) { setPinError('Enter your current PIN'); return }
     if (pinForm.newPin.length !== 4) { setPinError('New PIN must be 4 digits'); return }
     if (pinForm.newPin !== pinForm.confirm) { setPinError('New PINs do not match'); return }
     try {
-      await apiFetch('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, currentPin: pinForm.current, newPin: pinForm.newPin }) })
+      await apiFetch('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, ...(profile?.pinConfigured ? { currentPin: pinForm.current } : {}), newPin: pinForm.newPin }) })
       setPinError('')
       setPinDone(true)
     } catch (reason) { setPinError(reason instanceof Error ? reason.message : 'Unable to update PIN.') }
@@ -79,8 +80,8 @@ export default function UserProfileScreen({ onNavigate }: Props) {
             ) : (
               <>
                 {[
-                  { label: 'Current PIN', key: 'current', placeholder: '••••' },
-                  { label: 'New PIN', key: 'newPin', placeholder: '••••' },
+                  ...(profile?.pinConfigured ? [{ label: 'Current PIN', key: 'current', placeholder: '••••' }] : []),
+                  { label: profile?.pinConfigured ? 'New PIN' : 'Create PIN', key: 'newPin', placeholder: '••••' },
                   { label: 'Confirm New PIN', key: 'confirm', placeholder: '••••' },
                 ].map(f => (
                   <div key={f.key} style={{ marginBottom: 20 }}>
@@ -155,7 +156,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
               {editing ? (
                 <input className="input" value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               ) : (
-                <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form]}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{f.key === 'phone' ? formatPhoneForDisplay(form.phone) : form[f.key as keyof typeof form]}</div>
               )}
             </div>
           ))}
@@ -169,11 +170,12 @@ export default function UserProfileScreen({ onNavigate }: Props) {
           {[{ label: 'Store Name', key: 'store' }, { label: 'Branch', key: 'branch' }].map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>{f.label}</label>
-              {editing ? (
+              {/* {editing ? (
                 <input className="input" value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               ) : (
                 <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form]}</div>
-              )}
+              )} */}
+              <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form] || '—'}</div>
             </div>
           ))}
         </div>
