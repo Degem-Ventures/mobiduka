@@ -10,6 +10,7 @@ export type ClientSession = {
 
 const SESSION_KEY = "mobiduka_session";
 const PIN_LOGIN_CONTEXT_KEY = "mobiduka_pin_login_context";
+const LAST_SCREEN_KEY = "mobiduka_last_screen";
 
 export type PinLoginContext = {
   identifier?: string;
@@ -33,6 +34,19 @@ export function saveClientSession(session: ClientSession) {
 
 export function clearClientSession() {
   window.localStorage.removeItem(SESSION_KEY);
+}
+
+export function getLastScreen() {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(LAST_SCREEN_KEY);
+}
+
+export function saveLastScreen(screen: string) {
+  window.localStorage.setItem(LAST_SCREEN_KEY, screen);
+}
+
+export function clearLastScreen() {
+  window.localStorage.removeItem(LAST_SCREEN_KEY);
 }
 
 export function getPinLoginContext(): PinLoginContext | null {

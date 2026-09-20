@@ -46,7 +46,7 @@ export default function TwoFactorScreen({ onNavigate }: Props) {
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Two-Factor Auth</div>
           </div>
         </div>
-        <div className="scroll-area" style={{ padding: '24px 20px', paddingBottom: 80 }}>
+        <div className="scroll-area" style={{ paddingTop: 24, paddingRight: 20, paddingBottom: 80, paddingLeft: 20 }}>
           <div style={{ textAlign: 'center', marginBottom: 28 }}>
             <div style={{ fontSize: 60, marginBottom: 12 }}>🛡️</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: '#2E7D32', marginBottom: 8 }}>2FA Enabled!</div>
@@ -90,7 +90,7 @@ export default function TwoFactorScreen({ onNavigate }: Props) {
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Verify {methodLabel}</div>
           </div>
         </div>
-        <div className="scroll-area" style={{ padding: '24px 20px', paddingBottom: 80 }}>
+        <div className="scroll-area" style={{ paddingTop: 24, paddingRight: 20, paddingBottom: 80, paddingLeft: 20 }}>
           {method === 'totp' && (
             <div className="card" style={{ padding: '20px', marginBottom: 16, textAlign: 'center' }}>
               <div style={{ fontSize: 14, color: c.muted, marginBottom: 12 }}>Scan with your authenticator app</div>
@@ -148,7 +148,7 @@ export default function TwoFactorScreen({ onNavigate }: Props) {
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Choose Method</div>
           </div>
         </div>
-        <div className="scroll-area" style={{ padding: '20px 16px', paddingBottom: 80 }}>
+        <div className="scroll-area" style={{ paddingTop: 20, paddingRight: 16, paddingBottom: 80, paddingLeft: 16 }}>
           {[
             { key: 'sms', icon: '📱', title: 'SMS OTP', sub: 'Receive a one-time code via text message to +254 712 *** 678', rec: false },
             { key: 'totp', icon: '🔐', title: 'Authenticator App', sub: 'Use Google Authenticator, Authy, or any TOTP app', rec: true },
@@ -183,7 +183,7 @@ export default function TwoFactorScreen({ onNavigate }: Props) {
           </div>
         </div>
       </div>
-      <div className="scroll-area" style={{ padding: '24px 20px', paddingBottom: 80 }}>
+      <div className="scroll-area" style={{ paddingTop: 24, paddingRight: 20, paddingBottom: 80, paddingLeft: 20 }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ fontSize: 60, marginBottom: 12 }}>🛡️</div>
           <div style={{ fontSize: 20, fontWeight: 800, color: c.text, marginBottom: 8 }}>Add Extra Security</div>

@@ -8,6 +8,7 @@ function profileResponse(user: {
   fullName: string;
   email: string | null;
   phone: string | null;
+  pinHash: string | null;
   createdAt: Date;
   role: { name: string } | null;
   business: { id: string; name: string; branch: string | null; country: string | null; phone: string | null; email: string | null };
@@ -19,6 +20,7 @@ function profileResponse(user: {
     phone: user.phone,
     role: user.role?.name ?? "USER",
     memberSince: user.createdAt,
+    pinConfigured: Boolean(user.pinHash),
     business: {
       id: user.business.id,
       name: user.business.name,
@@ -68,11 +70,13 @@ export async function PATCH(request: Request) {
     if (body.email !== undefined) data.email = body.email?.trim().toLowerCase() || null;
     if (body.newPin !== undefined) {
       if (!/^\d{4}$/.test(body.newPin)) return NextResponse.json({ error: "New PIN must be 4 digits." }, { status: 400 });
-      if (!body.currentPin || !existing.pinHash) return NextResponse.json({ error: "Current PIN is required." }, { status: 400 });
-      const matches = existing.pinHash.startsWith("$2")
-        ? await bcrypt.compare(body.currentPin, existing.pinHash)
-        : existing.pinHash === body.currentPin;
-      if (!matches) return NextResponse.json({ error: "Current PIN is incorrect." }, { status: 401 });
+      if (existing.pinHash) {
+        if (!body.currentPin) return NextResponse.json({ error: "Current PIN is required." }, { status: 400 });
+        const matches = existing.pinHash.startsWith("$2")
+          ? await bcrypt.compare(body.currentPin, existing.pinHash)
+          : existing.pinHash === body.currentPin;
+        if (!matches) return NextResponse.json({ error: "Current PIN is incorrect." }, { status: 401 });
+      }
       data.pinHash = await bcrypt.hash(body.newPin, 10);
     }
 

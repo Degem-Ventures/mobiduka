@@ -1,6 +1,7 @@
 "use client"; // Ensure the client directive shell is explicit for context providers
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
 
@@ -22,8 +23,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // A. Safely recover the custom merchant dark/light theme tracking choice
     try {
       const savedTheme = localStorage.getItem('md_theme') as ThemeMode
-      if (savedTheme) setThemeState(savedTheme)
+      if (savedTheme && ['light', 'dark', 'auto'].includes(savedTheme)) setThemeState(savedTheme)
     } catch {}
+
+    const session = getClientSession()
+    if (session) {
+      apiFetch<{ preferences: { themeMode: ThemeMode } }>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`)
+        .then(response => {
+          if (['light', 'dark', 'auto'].includes(response.preferences.themeMode)) {
+            setThemeState(response.preferences.themeMode)
+            localStorage.setItem('md_theme', response.preferences.themeMode)
+          }
+        })
+        .catch(() => undefined)
+    }
 
     // B. Reconcile system color preferences natively using matchMedia parameters
     const mq = window.matchMedia('(prefers-color-scheme: dark)')

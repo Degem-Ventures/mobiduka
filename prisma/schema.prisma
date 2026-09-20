@@ -43,6 +43,23 @@ model Business {
   notifications     Notification[]
   scanEvents        ScanEvent[]
   shiftTypes        ShiftType[]
+  settings          BusinessSettings?
+}
+
+model BusinessSettings {
+  id             String   @id @default(uuid())
+  businessId     String   @unique
+  receiptPrint   Boolean  @default(true)
+  lowStockAlerts Boolean  @default(true)
+  dailyReport    Boolean  @default(false)
+  autoBackup     Boolean  @default(true)
+  mpesaEnabled   Boolean  @default(true)
+  themeMode      String   @default("light")
+  paymentConfig  Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 }
 
 model License {
@@ -135,6 +152,7 @@ model Category {
   id               String   @id @default(uuid())
   businessId       String
   name             String
+  reportGroup      String    @default("Care & Wellness")
   icon             String?
   emoji            String?
   parentCategoryId String?

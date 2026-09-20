@@ -24,7 +24,7 @@ import TwoFactorScreen from "./components/TwoFactorScreen";
 import AdminRegisterScreen from "./components/AdminRegisterScreen";
 import ShiftsScreen from "./components/ShiftsScreen";
 import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
-import { apiFetch, clearClientSession, getClientSession } from "../lib/client-api";
+import { apiFetch, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
 
 type Screen =
   | "login"
@@ -156,8 +156,33 @@ function AppInner() {
   const { isDark } = useTheme();
   const [screen, setScreen] = useState<Screen>("login");
   const [loggedIn, setLoggedIn] = useState(false);
+  const [isHydratingSession, setIsHydratingSession] = useState(true);
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    const session = getClientSession();
+    const tokenParts = session?.token.split(".");
+    let sessionIsValid = Boolean(session);
+    if (session && tokenParts?.[1]) {
+      try {
+        const claims = JSON.parse(atob(tokenParts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+        sessionIsValid = typeof claims.exp !== "number" || claims.exp > Date.now() / 1000;
+      } catch {
+        sessionIsValid = false;
+      }
+    }
+    if (sessionIsValid) {
+      const savedScreen = getLastScreen() as Screen | null;
+      const restoredScreen = savedScreen && savedScreen !== "login" ? savedScreen : "dashboard";
+      setLoggedIn(true);
+      setScreen(restoredScreen);
+    } else {
+      clearClientSession();
+      clearLastScreen();
+    }
+    setIsHydratingSession(false);
+  }, []);
 
   useEffect(() => {
     if (!loggedIn) {
@@ -202,15 +227,21 @@ function AppInner() {
   const handleLogin = () => {
     setLoggedIn(true);
     setScreen("dashboard");
+    saveLastScreen("dashboard");
   };
 
   const handleLogout = () => {
     clearClientSession();
+    clearLastScreen();
     setLoggedIn(false);
     setScreen("login");
   };
 
-  const handleNavigate = (s: string) => setScreen(s as Screen);
+  const handleNavigate = (s: string) => {
+    const nextScreen = s as Screen;
+    setScreen(nextScreen);
+    if (nextScreen !== "login") saveLastScreen(nextScreen);
+  };
 
   const showNav = showNavFor.includes(screen);
   const navActiveColor = isDark ? "#8FB3FF" : "#123A8F";
@@ -267,6 +298,8 @@ function AppInner() {
     }
   };
 
+  if (isHydratingSession) return null;
+
   return (
     <div
       style={{
@@ -304,7 +337,7 @@ function AppInner() {
             {activeShiftCount > 0 && (
               <button
                 className="btn"
-                onClick={() => setScreen("shifts")}
+                onClick={() => handleNavigate("shifts")}
                 style={{
                   width: "100%",
                   border: "none",
@@ -345,7 +378,7 @@ function AppInner() {
                     <button
                       key={item.key}
                       className={`bottom-nav-item btn ${isActive ? "active" : ""}`}
-                      onClick={() => setScreen(item.key)}
+                      onClick={() => handleNavigate(item.key)}
                       style={{
                         position: "relative",
                         color: isActive ? navActiveColor : navInactiveColor,
@@ -409,7 +442,7 @@ function AppInner() {
                   >
                   <button
                     className="btn"
-                    onClick={() => setScreen("scan")}
+                    onClick={() => handleNavigate("scan")}
                     style={{
                       width: 58,
                       height: 58,
@@ -463,7 +496,7 @@ function AppInner() {
                     <button
                       key={item.key}
                       className={`bottom-nav-item btn ${isActive ? "active" : ""}`}
-                      onClick={() => setScreen(item.key)}
+                      onClick={() => handleNavigate(item.key)}
                       style={{
                         position: "relative",
                         color: isActive ? navActiveColor : navInactiveColor,

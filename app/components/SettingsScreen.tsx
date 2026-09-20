@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTheme, ThemeMode } from '../context/ThemeContext'
+import { formatPhoneForDisplay } from '../utils/format-phone'
+import { apiFetch, getClientSession } from '../../lib/client-api'
 
 interface Props {
   onNavigate: (s: string) => void
@@ -14,6 +16,12 @@ const CURRENCIES = [
   { code: 'EUR', label: 'EUR — Euro' },
 ]
 
+type SettingsResponse = {
+  business: { name: string; branch: string | null; country: string | null; phone: string | null; taxPin: string | null; currency: string }
+  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; dailyReport: boolean; autoBackup: boolean; mpesaEnabled: boolean; themeMode: ThemeMode; paymentConfig: unknown }
+  currencyOptions: Array<{ code: string; label: string }>
+}
+
 export default function SettingsScreen({ onNavigate }: Props) {
   const { theme, setTheme, isDark } = useTheme()
 
@@ -24,9 +32,12 @@ export default function SettingsScreen({ onNavigate }: Props) {
   const [mpesaEnabled, setMpesaEnabled] = useState(true)
 
   const [currency, setCurrency] = useState('KES')
-  const [taxPin, setTaxPin] = useState('A123456789B')
+  const [taxPin, setTaxPin] = useState('')
   const [editingTaxPin, setEditingTaxPin] = useState(false)
-  const [taxPinDraft, setTaxPinDraft] = useState(taxPin)
+  const [taxPinDraft, setTaxPinDraft] = useState('')
+  const [businessInfo, setBusinessInfo] = useState({ name: 'Business', branch: '', country: '', phone: '' })
+  const [currencyOptions, setCurrencyOptions] = useState(CURRENCIES)
+  const [settingsError, setSettingsError] = useState('')
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false)
 
   const [simState, setSimState] = useState<Record<string, 'idle' | 'loading' | 'done'>>({
@@ -38,6 +49,40 @@ export default function SettingsScreen({ onNavigate }: Props) {
     setTimeout(() => setSimState(s => ({ ...s, [key]: 'done' })), 2200)
     setTimeout(() => setSimState(s => ({ ...s, [key]: 'idle' })), 4500)
   }
+
+  const applySettings = (response: SettingsResponse) => {
+    setBusinessInfo({ name: response.business.name, branch: response.business.branch ?? '', country: response.business.country ?? '', phone: response.business.phone ?? '' })
+    setTaxPin(response.business.taxPin ?? '')
+    setTaxPinDraft(response.business.taxPin ?? '')
+    setCurrency(response.business.currency)
+    setCurrencyOptions(response.currencyOptions)
+    setReceiptPrint(response.preferences.receiptPrint)
+    setLowStockAlerts(response.preferences.lowStockAlerts)
+    setDailyReport(response.preferences.dailyReport)
+    setAutoBackup(response.preferences.autoBackup)
+    setMpesaEnabled(response.preferences.mpesaEnabled)
+    setTheme(response.preferences.themeMode)
+  }
+
+  const saveSettings = async (patch: Partial<SettingsResponse['business'] & SettingsResponse['preferences']>) => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      const response = await apiFetch<SettingsResponse>('/api/settings', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, ...patch }) })
+      applySettings(response)
+      setSettingsError('')
+    } catch (reason) {
+      setSettingsError(reason instanceof Error ? reason.message : 'Unable to save settings.')
+    }
+  }
+
+  useEffect(() => {
+    const session = getClientSession()
+    if (!session) { setSettingsError('Please sign in to load settings.'); return }
+    apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(applySettings)
+      .catch(reason => setSettingsError(reason instanceof Error ? reason.message : 'Unable to load settings.'))
+  }, [])
 
   const card = isDark ? '#0F2040' : '#FFFFFF'
   const bg = isDark ? '#09152A' : '#F5F7FA'
@@ -64,7 +109,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
     <div style={{ fontSize: 11, fontWeight: 700, color: muted, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{children}</div>
   )
 
-  const selectedCurrencyLabel = CURRENCIES.find(c => c.code === currency)?.label ?? currency
+  const selectedCurrencyLabel = currencyOptions.find(c => c.code === currency)?.label ?? currency
 
   if (showCurrencyPicker) {
     return (
@@ -79,8 +124,8 @@ export default function SettingsScreen({ onNavigate }: Props) {
         </div>
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
           <div className="card" style={{ overflow: 'hidden', background: card }}>
-            {CURRENCIES.map((c, i) => (
-              <button key={c.code} className="btn" onClick={() => { setCurrency(c.code); setShowCurrencyPicker(false) }} style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 14, border: 'none', borderBottom: i < CURRENCIES.length - 1 ? border : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+            {currencyOptions.map((c, i) => (
+              <button key={c.code} className="btn" onClick={() => { setCurrency(c.code); setShowCurrencyPicker(false); void saveSettings({ currency: c.code }) }} style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 14, border: 'none', borderBottom: i < currencyOptions.length - 1 ? border : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
                 <div style={{ flex: 1, textAlign: 'left' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: text }}>{c.label}</div>
                 </div>
@@ -109,6 +154,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+        {settingsError && <div style={{ background: isDark ? '#3A1F2A' : '#FFF5F5', color: '#D32F2F', borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 13 }}>{settingsError}</div>}
 
         {/* ── Appearance ── */}
         <SectionLabel>Appearance</SectionLabel>
@@ -119,7 +165,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
               const labels = { light: '☀️ Light', dark: '🌙 Dark', auto: '⚙️ Auto' }
               const active = theme === t
               return (
-                <button key={t} className="btn" onClick={() => setTheme(t)} style={{
+                <button key={t} className="btn" onClick={() => { setTheme(t); void saveSettings({ themeMode: t }) }} style={{
                   flex: 1, padding: '10px 6px', borderRadius: 12, border: active ? '2px solid #123A8F' : `1.5px solid ${isDark ? '#1A3366' : '#E8ECF4'}`,
                   background: active ? (isDark ? 'rgba(18,58,143,0.25)' : 'rgba(18,58,143,0.08)') : (isDark ? '#0D1B3D' : 'white'),
                   fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#123A8F' : muted,
@@ -134,9 +180,9 @@ export default function SettingsScreen({ onNavigate }: Props) {
         <SectionLabel>Business Information</SectionLabel>
         <div className="card" style={{ marginBottom: 16, overflow: 'hidden', background: card }}>
           {[
-            { label: 'Business Name', value: 'MobiDuka Store' },
-            { label: 'Location', value: 'Nairobi CBD, Kenya' },
-            { label: 'Phone', value: '+254 712 345 678' },
+            { label: 'Business Name', value: businessInfo.name },
+            { label: 'Location', value: [businessInfo.branch, businessInfo.country].filter(Boolean).join(', ') || '—' },
+            { label: 'Phone', value: businessInfo.phone ? formatPhoneForDisplay(businessInfo.phone) : '—' },
           ].map((item, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', borderBottom: border }}>
               <div style={{ fontSize: 13, color: muted }}>{item.label}</div>
@@ -149,7 +195,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
             {editingTaxPin ? (
               <>
                 <input className="input" value={taxPinDraft} onChange={e => setTaxPinDraft(e.target.value.toUpperCase())} style={{ width: 140, padding: '6px 10px', fontSize: 13, textAlign: 'right', fontFamily: 'monospace' }} />
-                <button className="btn" onClick={() => { setTaxPin(taxPinDraft); setEditingTaxPin(false) }} style={{ background: '#123A8F', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
+                <button className="btn" onClick={() => { setTaxPin(taxPinDraft); setEditingTaxPin(false); void saveSettings({ taxPin: taxPinDraft }) }} style={{ background: '#123A8F', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
               </>
             ) : (
               <>
@@ -164,7 +210,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
           <button className="btn" onClick={() => setShowCurrencyPicker(true)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
             <div style={{ fontSize: 13, color: muted }}>Currency</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#123A8F' }}>{selectedCurrencyLabel}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#123A8F' }}>{selectedCurrencyLabel}</div>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B0BAD3" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
             </div>
           </button>
@@ -174,11 +220,11 @@ export default function SettingsScreen({ onNavigate }: Props) {
         <SectionLabel>Preferences</SectionLabel>
         <div className="card" style={{ marginBottom: 16, overflow: 'hidden', background: card }}>
           {[
-            { label: 'Auto-print Receipt', sub: 'Print receipt after every sale', value: receiptPrint, onChange: setReceiptPrint },
-            { label: 'Low Stock Alerts', sub: 'Notify when stock is below reorder level', value: lowStockAlerts, onChange: setLowStockAlerts },
-            { label: 'Daily Report Email', sub: 'Send end-of-day report to email', value: dailyReport, onChange: setDailyReport },
-            { label: 'Auto Cloud Backup', sub: 'Backup data daily at midnight', value: autoBackup, onChange: setAutoBackup },
-            { label: 'M-Pesa Integration', sub: 'Accept M-Pesa payments', value: mpesaEnabled, onChange: setMpesaEnabled },
+            { label: 'Auto-print Receipt', sub: 'Print receipt after every sale', value: receiptPrint, onChange: (value: boolean) => { setReceiptPrint(value); void saveSettings({ receiptPrint: value }) } },
+            { label: 'Low Stock Alerts', sub: 'Notify when stock is below reorder level', value: lowStockAlerts, onChange: (value: boolean) => { setLowStockAlerts(value); void saveSettings({ lowStockAlerts: value }) } },
+            { label: 'Daily Report Email', sub: 'Send end-of-day report to email', value: dailyReport, onChange: (value: boolean) => { setDailyReport(value); void saveSettings({ dailyReport: value }) } },
+            { label: 'Auto Cloud Backup', sub: 'Backup data daily at midnight', value: autoBackup, onChange: (value: boolean) => { setAutoBackup(value); void saveSettings({ autoBackup: value }) } },
+            { label: 'M-Pesa Integration', sub: 'Accept M-Pesa payments', value: mpesaEnabled, onChange: (value: boolean) => { setMpesaEnabled(value); void saveSettings({ mpesaEnabled: value }) } },
           ].map((item, i, arr) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: i < arr.length - 1 ? border : 'none', gap: 14 }}>
               <div style={{ flex: 1 }}>

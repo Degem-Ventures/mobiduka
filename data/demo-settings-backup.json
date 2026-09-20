@@ -1,0 +1,25 @@
+{
+  "source": "app/components/SettingsScreen.tsx",
+  "business": {
+    "name": "MobiDuka Store",
+    "location": "Nairobi CBD, Kenya",
+    "phone": "+254 712 345 678",
+    "taxPin": "A123456789B",
+    "currency": "KES"
+  },
+  "preferences": {
+    "receiptPrint": true,
+    "lowStockAlerts": true,
+    "dailyReport": false,
+    "autoBackup": true,
+    "mpesaEnabled": true
+  },
+  "currencyOptions": [
+    { "code": "KES", "label": "KES — Kenyan Shilling" },
+    { "code": "UGX", "label": "UGX — Ugandan Shilling" },
+    { "code": "TZS", "label": "TZS — Tanzanian Shilling" },
+    { "code": "USD", "label": "USD — US Dollar" },
+    { "code": "GBP", "label": "GBP — British Pound" },
+    { "code": "EUR", "label": "EUR — Euro" }
+  ]
+}
