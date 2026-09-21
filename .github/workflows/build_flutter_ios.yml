@@ -115,7 +115,7 @@ jobs:
         run: |
           cd flutter_app
           for attempt in 1 2 3; do
-            if flutter build ios --no-codesign --debug; then
+            if flutter build ios --simulator --debug; then
               exit 0
             fi
             echo "Flutter iOS build failed (attempt ${attempt}/3); retrying CocoaPods resolution..."
@@ -130,4 +130,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mobiduka-flutter-ios-debug
-          path: flutter_app/build/ios/iphoneos/Runner.app
+          path: flutter_app/build/ios/iphonesimulator/Runner.app

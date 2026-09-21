@@ -26,13 +26,13 @@ class RemoteNotification {
 
   factory RemoteNotification.fromJson(Map<String, dynamic> json) {
     return RemoteNotification(
-      id: String(json['id'] ?? ''),
-      type: String(json['type'] ?? 'info'),
-      title: String(json['title'] ?? 'Notification'),
-      body: String(json['body'] ?? ''),
-      createdAt: DateTime.tryParse(String(json['createdAt'] ?? '')) ?? DateTime.now(),
+      id: json['id']?.toString() ?? '',
+      type: json['type']?.toString() ?? 'info',
+      title: json['title']?.toString() ?? 'Notification',
+      body: json['body']?.toString() ?? '',
+      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
       read: json['read'] == true,
-      icon: String(json['icon'] ?? '📦'),
+      icon: json['icon']?.toString() ?? '📦',
     );
   }
 }
@@ -44,7 +44,7 @@ class NotificationService {
 
   Future<List<RemoteNotification>> fetch(AuthSession session) async {
     final response = await _client.get(
-      Uri.parse('${ApiConfig.apiBase}/notifications?businessId=${Uri.encodeQueryComponent(session.user.businessId)}'),
+      Uri.parse('${ApiConfig.apiBase}/notifications?businessId=${Uri.encodeQueryComponent(session.user['businessId']?.toString() ?? '')}'),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
     final payload = _decode(response);
