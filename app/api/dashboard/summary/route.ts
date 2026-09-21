@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     const today = dateKey(new Date(), timeZone);
     const periodStart = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000);
 
-    const [sales, expenses, products, customers, cashSessions, scans] = await Promise.all([
+    const [sales, expenses, products, customers, cashSessions, scans, scanCountEvents] = await Promise.all([
       prisma.sale.findMany({
         where: { businessId, createdAt: { gte: periodStart }, saleStatus: "COMPLETED" },
         include: {
@@ -66,6 +66,10 @@ export async function GET(request: NextRequest) {
         select: { id: true, barcode: true, name: true, status: true, emoji: true, createdAt: true },
         orderBy: { createdAt: "desc" },
         take: 20,
+      }),
+      prisma.scanEvent.findMany({
+        where: { businessId, createdAt: { gte: periodStart } },
+        select: { status: true, createdAt: true },
       }),
     ]);
 
@@ -108,7 +112,8 @@ export async function GET(request: NextRequest) {
     const cashPayments = paymentBreakdown.get("CASH")?.amount ?? 0;
     const cashExpenses = todayExpenses.filter((expense) => !expense.recordedBy || cashSessions.some((session) => session.cashierId === expense.recordedBy)).reduce((sum, expense) => sum + expense.amount, 0);
     const currentTill = cashSessions.reduce((sum, session) => sum + session.openingBalance, 0) + cashPayments - cashExpenses;
-    const scanCounts = scans.reduce((counts, scan) => {
+    const todaysScanCountEvents = scanCountEvents.filter((scan) => dateKey(scan.createdAt, timeZone) === today);
+    const scanCounts = todaysScanCountEvents.reduce((counts, scan) => {
       counts[scan.status] = (counts[scan.status] ?? 0) + 1;
       return counts;
     }, {} as Record<string, number>);
@@ -134,7 +139,7 @@ export async function GET(request: NextRequest) {
       },
       paymentBreakdown: Object.fromEntries([...paymentBreakdown].map(([method, value]) => [method, { amount: money(value.amount), transactions: value.transactions }])),
       topProducts: [...productTotals.values()].sort((a, b) => b.units - a.units).slice(0, 5).map((product) => ({ ...product, revenue: money(product.revenue) })),
-      recentTransactions: sales.slice(0, 10).map((sale) => ({ id: sale.id, time: sale.createdAt, customer: sale.customer?.name ?? "Walk-in", amount: money(sale.total), items: sale.items.reduce((sum, item) => sum + item.quantity, 0), method: sale.payments[0]?.paymentMethod.name ?? "Unknown" })),
+      recentTransactions: sales.slice(0, 5).map((sale) => ({ id: sale.id, time: sale.createdAt, customer: sale.customer?.name ?? "Walk-in", amount: money(sale.total), items: sale.items.reduce((sum, item) => sum + item.quantity, 0), method: sale.payments[0]?.paymentMethod.name ?? "Unknown" })),
       lowStockItems,
       cashSessions,
       scanActivity: { counts: scanCounts, recent: scans },

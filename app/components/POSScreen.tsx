@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import WebSmartScan from './WebSmartScan'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
 type ProductItem = { id: string; name: string; price: number; category: string; stock: number; emoji: string; barcode?: string | null }
@@ -11,9 +10,10 @@ type ReceiptInfo = { saleNumber: string; createdAt: string; cashierName: string;
 
 interface Props {
   onNavigate: (screen: string) => void
+  initialCartItem?: Omit<CartItem, 'qty'>
 }
 
-export default function POSScreen({ onNavigate }: Props) {
+export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [products, setProducts] = useState<ProductItem[]>([])
   const [categoryRows, setCategoryRows] = useState<Array<{ id: string; name: string; emoji: string | null }>>([])
   const [creditCustomers, setCreditCustomers] = useState<CreditCustomer[]>([])
@@ -30,7 +30,6 @@ export default function POSScreen({ onNavigate }: Props) {
   const [showQuickAdd, setShowQuickAdd] = useState(false)
   const [quickName, setQuickName] = useState('')
   const [quickPhone, setQuickPhone] = useState('')
-  const [isWebScannerOpen, setIsWebScannerOpen] = useState(false)
   const [activeOperators, setActiveOperators] = useState<ActiveOperator[]>([])
   const [selectedOperatorId, setSelectedOperatorId] = useState('')
   const [isCompletingSale, setIsCompletingSale] = useState(false)
@@ -70,6 +69,16 @@ export default function POSScreen({ onNavigate }: Props) {
   }, [session?.user.businessId])
 
   useEffect(() => {
+    if (!initialCartItem) return
+    setCart(previous => {
+      const existing = previous.find(item => item.id === initialCartItem.id)
+      if (existing) return previous.map(item => item.id === initialCartItem.id ? { ...item, qty: item.qty + 1 } : item)
+      return [...previous, { ...initialCartItem, qty: 1 }]
+    })
+    setView('cart')
+  }, [initialCartItem])
+
+  useEffect(() => {
     if (!session) return
     apiFetch<{ sessions: Array<{ closedAt: string | null; cashier: { id: string; fullName: string; role: { name: string } | null } | null; shift: { name: string } | null; shiftType: string }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`)
       .then(response => {
@@ -97,20 +106,6 @@ export default function POSScreen({ onNavigate }: Props) {
     })
   }
 
-  const attachCustomerToSale = (customerId: string) => {
-    const customer = creditCustomers.find(candidate => String(candidate.id) === customerId)
-    if (!customer) return
-    setSelectedCreditor({ id: customer.id, name: customer.name, phone: customer.phone })
-    setPaymentMethod('credit')
-    setView('payment')
-  }
-
-  const handleBarcodeProductLookup = (scannedCode: string) => {
-    const product = products.find(candidate => candidate.barcode === scannedCode || String(candidate.id) === scannedCode || candidate.name.toLowerCase() === scannedCode.toLowerCase())
-    setSearch(scannedCode)
-    if (product) addToCart(product)
-  }
-
   const addCustomer = async () => {
     if (!session || !quickName.trim() || !quickPhone.trim()) return
     try {
@@ -126,16 +121,6 @@ export default function POSScreen({ onNavigate }: Props) {
       setQuickPhone('')
     } catch (reason) {
       setDataError(reason instanceof Error ? reason.message : 'Unable to add customer.')
-    }
-  }
-
-  const handleWebScanSuccess = (scannedCode: string) => {
-    setIsWebScannerOpen(false)
-    if (scannedCode.startsWith('MOBIDUKA:USER:') || scannedCode.startsWith('CUST_')) {
-      const customerId = scannedCode.replace('MOBIDUKA:USER:', '').replace('CUST_', '')
-      attachCustomerToSale(customerId)
-    } else {
-      handleBarcodeProductLookup(scannedCode)
     }
   }
 
@@ -496,7 +481,7 @@ export default function POSScreen({ onNavigate }: Props) {
                 borderRadius: 12, color: 'white', fontSize: 14, fontFamily: 'inherit', outline: 'none'
               }} />
           </div>
-          <button className="btn" type="button" onClick={() => setIsWebScannerOpen(true)} aria-label="Open webcam scanner" title="Open webcam scanner" style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.12)', border: '1.5px solid rgba(255,255,255,0.2)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', fontSize: 19 }}>
+          <button className="btn" type="button" onClick={() => onNavigate('scan')} aria-label="Open SmartScan" title="Open SmartScan" style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.12)', border: '1.5px solid rgba(255,255,255,0.2)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', fontSize: 19 }}>
             📷
           </button>
           <button className="btn" onClick={() => setView('cart')} style={{
@@ -568,13 +553,6 @@ export default function POSScreen({ onNavigate }: Props) {
         </div>
       )}
 
-      {isWebScannerOpen && (
-        <WebSmartScan
-          businessId={currentBusinessId}
-          onScanSuccess={handleWebScanSuccess}
-          onClose={() => setIsWebScannerOpen(false)}
-        />
-      )}
     </div>
   )
 }
