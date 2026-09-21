@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
-import { sendPushNotification } from "@/lib/firebase-admin";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function GET(request: Request) {
   try {
@@ -246,19 +246,13 @@ export async function POST(request: Request) {
         },
       });
 
-      await sendPushNotification(
-        `business_shifts_${resolvedBusinessId}`,
-        "🏧 Shift Account Closure Summary",
-        `Opening: KSh ${Number(activeSession.openingBalance).toFixed(2)}. Cash sales: KSh ${totalCashSales.toFixed(2)}. Cash expenses: KSh ${totalCashExpenses.toFixed(2)}. Expected: KSh ${expectedCashBalance.toFixed(2)}. Counted: KSh ${actualCashCount.toFixed(2)}. Variance: KSh ${variance.toFixed(2)}.`,
-        {
-          businessId: resolvedBusinessId,
-          sessionId: closedSession.id,
-          openingBalance: Number(activeSession.openingBalance).toFixed(2),
-          totalCashSales: totalCashSales.toFixed(2),
-          totalCashExpenses: totalCashExpenses.toFixed(2),
-          variance: variance.toFixed(2),
-        },
-      );
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: variance === 0 ? "success" : "warning",
+        title: variance === 0 ? "Shift Closed" : "Cash Variance Detected",
+        body: `Shift closed with counted cash of KSh ${actualCashCount.toLocaleString("en-KE")}. Variance: KSh ${variance.toLocaleString("en-KE")}.`,
+        eventKey: `cash-session-closed:${closedSession.id}`,
+      });
 
       return NextResponse.json(
         {

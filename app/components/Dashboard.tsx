@@ -78,9 +78,14 @@ export default function Dashboard({ onNavigate }: Props) {
   useEffect(() => {
     const session = getClientSession()
     if (!session) return
-    apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(response => setUnreadNotifications(response.unreadCount))
-      .catch(() => setUnreadNotifications(0))
+    const refreshUnreadCount = () => {
+      apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
+        .then(response => setUnreadNotifications(response.unreadCount))
+        .catch(() => setUnreadNotifications(0))
+    }
+    refreshUnreadCount()
+    window.addEventListener('mobiduka-notification', refreshUnreadCount)
+    return () => window.removeEventListener('mobiduka-notification', refreshUnreadCount)
   }, [])
 
   useEffect(() => {

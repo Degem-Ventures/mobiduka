@@ -70,6 +70,7 @@ class NotificationReceiverService {
     try {
       await _messaging!.subscribeToTopic('business_shifts_$businessId');
       await _messaging!.subscribeToTopic('business_expenses_$businessId');
+      await _messaging!.subscribeToTopic('business_notifications_$businessId');
       _subscribedBusinessId = businessId;
     } on Object catch (error) {
       debugPrint('Firebase topic subscription failed: $error');
@@ -81,6 +82,7 @@ class NotificationReceiverService {
     try {
       await _messaging!.unsubscribeFromTopic('business_shifts_$businessId');
       await _messaging!.unsubscribeFromTopic('business_expenses_$businessId');
+      await _messaging!.unsubscribeFromTopic('business_notifications_$businessId');
       if (_subscribedBusinessId == businessId) _subscribedBusinessId = null;
     } on Object catch (error) {
       debugPrint('Firebase topic unsubscribe failed: $error');

@@ -18,6 +18,7 @@ import 'services/auth_service.dart';
 import 'services/employee_repository.dart';
 import 'services/reports_service.dart';
 import 'services/notification_receiver.dart';
+import 'services/notification_service.dart';
 import 'services/roster_sync_worker.dart';
 import 'services/cache_optimizer_service.dart';
 import 'services/mpesa_service.dart';
@@ -8414,6 +8415,7 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
 
 class NotificationEntry {
   const NotificationEntry({
+    this.id = '',
     required this.type,
     required this.title,
     required this.body,
@@ -8423,6 +8425,7 @@ class NotificationEntry {
     required this.icon,
   });
 
+  final String id;
   final String type;
   final String title;
   final String body;
@@ -8441,7 +8444,7 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  final List<NotificationEntry> _items = const [
+  List<NotificationEntry> _items = [
     NotificationEntry(
       type: 'critical',
       title: 'Critical Stock Alert',
@@ -8535,6 +8538,56 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   ];
 
   String _filter = 'all';
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotifications();
+  }
+
+  Future<void> _loadNotifications() async {
+    try {
+      final session = await AuthService().readSession();
+      if (session == null) throw Exception('Please sign in to load notifications.');
+      final remoteItems = await NotificationService().fetch(session);
+      if (!mounted) return;
+      setState(() {
+        _items = remoteItems.map(_toEntry).toList();
+        _loading = false;
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _items = [];
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  NotificationEntry _toEntry(RemoteNotification item) => NotificationEntry(
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        body: item.body,
+        time: _formatTime(item.createdAt),
+        date: _formatDate(item.createdAt),
+        read: item.read,
+        icon: item.icon,
+      );
+
+  String _formatDate(DateTime value) {
+    final now = DateTime.now();
+    if (value.year == now.year && value.month == now.month && value.day == now.day) return 'Today';
+    final yesterday = now.subtract(const Duration(days: 1));
+    if (value.year == yesterday.year && value.month == yesterday.month && value.day == yesterday.day) return 'Yesterday';
+    return 'Earlier';
+  }
+
+  String _formatTime(DateTime value) => '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
 
   int get unreadCount => _items.where((item) => !item.read).length;
 
@@ -8542,7 +8595,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   List<NotificationEntry> _sectionItems(String date) => _items.where((item) => item.date == date && _isVisible(item)).toList();
 
-  void _markAllRead() {
+  Future<void> _markAllRead() async {
+    final session = await AuthService().readSession();
+    if (session != null) {
+      try {
+        await NotificationService().markRead(session, all: true);
+      } on Object catch (error) {
+        if (mounted) setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+    }
     setState(() {
       for (var i = 0; i < _items.length; i++) {
         _items[i] = NotificationEntry(
@@ -8558,7 +8620,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
   }
 
-  void _markRead(String title) {
+  Future<void> _markRead(String title) async {
+    final matchingItems = _items.where((candidate) => candidate.title == title).toList();
+    final item = matchingItems.isEmpty ? null : matchingItems.first;
+    final session = await AuthService().readSession();
+    if (session != null && item != null && item.id.isNotEmpty) {
+      try {
+        await NotificationService().markRead(session, id: item.id);
+      } on Object catch (error) {
+        if (mounted) setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+    }
     setState(() {
       for (var i = 0; i < _items.length; i++) {
         if (_items[i].title == title) {
@@ -8661,6 +8734,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 18),
               children: [
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 48),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 24, 8, 12),
+                    child: Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),
+                  ),
                 if (today.isNotEmpty) _section('Today', today),
                 if (yesterday.isNotEmpty) _section('Yesterday', yesterday),
                 if (earlier.isNotEmpty) _section('Earlier', earlier),

@@ -41,6 +41,7 @@ model Business {
   auditLogs         AuditLog[]
   syncQueues        SyncQueue[]
   notifications     Notification[]
+  notificationSubscriptions NotificationSubscription[]
   scanEvents        ScanEvent[]
   shiftTypes        ShiftType[]
   settings          BusinessSettings?
@@ -51,6 +52,7 @@ model BusinessSettings {
   businessId     String   @unique
   receiptPrint   Boolean  @default(true)
   lowStockAlerts Boolean  @default(true)
+  salesNotifications Boolean @default(true)
   dailyReport    Boolean  @default(false)
   autoBackup     Boolean  @default(true)
   mpesaEnabled   Boolean  @default(true)
@@ -110,6 +112,7 @@ model User {
   cashSessions  CashSession[]
   auditLogs     AuditLog[]
   notifications Notification[]
+  notificationSubscriptions NotificationSubscription[]
 }
 
 model ShiftType {
@@ -477,9 +480,28 @@ model Notification {
   message    String
   type       String?
   isRead     Boolean  @default(false)
+  eventKey   String?
   createdAt  DateTime @default(now())
   deletedAt  DateTime?
 
   business Business @relation(fields: [businessId], references: [id])
   user     User?    @relation(fields: [userId], references: [id])
+
+  @@index([businessId, isRead, createdAt(sort: Desc)])
+  @@unique([businessId, eventKey])
+}
+
+model NotificationSubscription {
+  id         String   @id @default(uuid())
+  businessId String
+  userId     String?
+  token      String   @unique
+  platform   String   @default("web")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, platform])
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function GET(request: Request) {
   try {
@@ -57,6 +58,14 @@ export async function POST(request: Request) {
         emoji,
         parentCategoryId: body.parentCategoryId ? String(body.parentCategoryId) : null,
       },
+    });
+
+    await createSystemNotification({
+      businessId,
+      type: "info",
+      title: "New Product Category Added",
+      body: `${category.name} has been added to the product categories.`,
+      eventKey: `category-created:${category.id}`,
     });
 
     return NextResponse.json(category, { status: 201 });

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
-import { sendPushNotification } from "@/lib/firebase-admin";
+import { createSystemNotification } from "@/lib/notifications";
 
 function normalizeCategory(value: string) {
   const known: Record<string, string> = {
@@ -94,17 +94,13 @@ export async function POST(request: Request) {
 
     const alertThreshold = Number.parseFloat(process.env.EXPENSE_ALERT_THRESHOLD_KES ?? "5000");
     if (parsedAmount >= (Number.isFinite(alertThreshold) ? alertThreshold : 5000)) {
-      await sendPushNotification(
-        `business_expenses_${businessId}`,
-        "⚠️ Large Store Outflow Logged",
-        `${String(category).trim()}: KSh ${parsedAmount.toFixed(2)}. ${normalizedDescription}`,
-        {
-          businessId: resolvedBusinessId,
-          expenseId: expense.id,
-          amount: parsedAmount.toFixed(2),
-          category: String(category).trim(),
-        },
-      );
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "warning",
+        title: "Large Store Outflow Logged",
+        body: `${String(category).trim()}: KSh ${parsedAmount.toLocaleString("en-KE")}. ${normalizedDescription}`,
+        eventKey: `large-expense:${expense.id}`,
+      });
     }
 
     return NextResponse.json({ success: true, expenseId: expense.id }, { status: 201 });

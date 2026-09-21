@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function GET(request: Request) {
   try {
@@ -110,6 +111,16 @@ export async function POST(request: Request) {
 
       return { customer, creditAccount };
     });
+
+    if (!id) {
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "success",
+        title: "New Customer Registered",
+        body: `${result.customer.name} has been added as a new customer.${creditLimit > 0 ? ` Credit limit: KSh ${creditLimit.toLocaleString("en-KE")}.` : ""}`,
+        eventKey: `customer-created:${result.customer.id}`,
+      });
+    }
 
     return NextResponse.json(
       { success: true, customerId: result.customer.id, message: "Customer profile registered successfully." },

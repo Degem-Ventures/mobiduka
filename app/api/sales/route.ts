@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function POST(request: Request) {
   try {
@@ -188,6 +189,51 @@ export async function POST(request: Request) {
 
       return sale;
     });
+
+    await createSystemNotification({
+      businessId: resolvedBusinessId,
+      type: "success",
+      title: "Sale Completed",
+      body: `Sale ${completedSale.saleNumber} was completed for KSh ${saleTotal.toLocaleString("en-KE")}.`,
+      eventKey: `sale:${completedSale.id}`,
+      preference: "salesNotifications",
+    });
+
+    const soldProductIds = [...new Set(normalizedItems.map((item) => item.productId))];
+    const soldProducts = await prisma.product.findMany({
+      where: { id: { in: soldProductIds }, businessId: resolvedBusinessId },
+      select: { id: true, name: true, minimumStock: true, inventory: { select: { quantity: true } } },
+    });
+    await Promise.all(soldProducts.flatMap((product) => {
+      const quantity = product.inventory?.quantity ?? 0;
+      if (product.minimumStock === null || quantity > product.minimumStock) return [];
+      return [createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "critical",
+        title: "Critical Stock Alert",
+        body: `${product.name} has only ${quantity} units remaining. Reorder level is ${product.minimumStock} units.`,
+        eventKey: `low-stock:${product.id}:critical`,
+        preference: "lowStockAlerts",
+      })];
+    }));
+
+    const dayStart = new Date(completedSale.createdAt);
+    dayStart.setHours(0, 0, 0, 0);
+    const dailySales = await prisma.sale.aggregate({
+      where: { businessId: resolvedBusinessId, createdAt: { gte: dayStart }, saleStatus: "COMPLETED" },
+      _sum: { total: true },
+    });
+    const dailyTarget = Number(process.env.DAILY_SALES_TARGET_KES ?? "70000");
+    const dailyTotal = Number(dailySales._sum.total ?? 0);
+    if (Number.isFinite(dailyTarget) && dailyTotal >= dailyTarget) {
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "success",
+        title: "Daily Sales Target Achieved",
+        body: `Today's sales of KSh ${dailyTotal.toLocaleString("en-KE")} exceeded the daily target of KSh ${dailyTarget.toLocaleString("en-KE")}.`,
+        eventKey: `daily-sales-target:${dayStart.toISOString().slice(0, 10)}`,
+      });
+    }
 
     return NextResponse.json(
       {

@@ -23,6 +23,7 @@ const settingsSelect = {
     select: {
       receiptPrint: true,
       lowStockAlerts: true,
+      salesNotifications: true,
       dailyReport: true,
       autoBackup: true,
       mpesaEnabled: true,
@@ -43,6 +44,7 @@ function responseFor(business: {
   settings: {
     receiptPrint: boolean;
     lowStockAlerts: boolean;
+    salesNotifications: boolean;
     dailyReport: boolean;
     autoBackup: boolean;
     mpesaEnabled: boolean;
@@ -63,6 +65,7 @@ function responseFor(business: {
     preferences: business.settings ?? {
       receiptPrint: true,
       lowStockAlerts: true,
+      salesNotifications: true,
       dailyReport: false,
       autoBackup: true,
       mpesaEnabled: true,
@@ -103,6 +106,7 @@ export async function PATCH(request: Request) {
       taxPin?: string | null;
       receiptPrint?: boolean;
       lowStockAlerts?: boolean;
+      salesNotifications?: boolean;
       dailyReport?: boolean;
       autoBackup?: boolean;
       mpesaEnabled?: boolean;
@@ -124,7 +128,7 @@ export async function PATCH(request: Request) {
     };
     if (Object.keys(businessData).length > 0) await prisma.business.update({ where: { id: businessId }, data: businessData });
 
-    const preferenceKeys = ["receiptPrint", "lowStockAlerts", "dailyReport", "autoBackup", "mpesaEnabled"] as const;
+    const preferenceKeys = ["receiptPrint", "lowStockAlerts", "salesNotifications", "dailyReport", "autoBackup", "mpesaEnabled"] as const;
     const preferences = Object.fromEntries(preferenceKeys.filter(key => body[key] !== undefined).map(key => [key, body[key]]));
     const settingsData = {
       ...preferences,

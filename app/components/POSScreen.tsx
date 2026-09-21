@@ -23,6 +23,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [cart, setCart] = useState<CartItem[]>([])
   const [view, setView] = useState<'pos' | 'cart' | 'payment' | 'receipt'>('pos')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'credit'>('cash')
+  const [mpesaPhone, setMpesaPhone] = useState('254')
+  const [mpesaStatus, setMpesaStatus] = useState('')
   const [discount, setDiscount] = useState(0)
   // Credit customer picker state
   const [selectedCreditor, setSelectedCreditor] = useState<{ id: string; name: string; phone: string } | null>(null)
@@ -136,7 +138,52 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const completeSale = async () => {
     if (!session || !selectedOperatorId || cart.length === 0 || isCompletingSale) return
     setIsCompletingSale(true)
+    setMpesaStatus('')
     try {
+      let mpesaReceipt: string | undefined
+      if (paymentMethod === 'mpesa') {
+        const enteredPhone = mpesaPhone.replace(/\s+/g, '').replace(/^\+/, '')
+        const normalizedPhone = enteredPhone.startsWith('0')
+          ? `254${enteredPhone.slice(1)}`
+          : enteredPhone.startsWith('254')
+            ? enteredPhone
+            : `254${enteredPhone}`
+        if (!/^254(?:7|1)\d{8}$/.test(normalizedPhone)) throw new Error('Enter a valid Kenyan phone number, for example 254712345678.')
+        setMpesaPhone(normalizedPhone)
+        const confirmed = window.confirm(
+          `Send an M-Pesa payment prompt?\n\nAmount: KSh ${total.toLocaleString()}\nCustomer phone: ${normalizedPhone}\n\nThe customer must enter their M-Pesa PIN before the sale is completed.`,
+        )
+        if (!confirmed) return
+        setMpesaStatus('Sending STK prompt to the customer phone…')
+        const push = await apiFetch<{ success: boolean; checkoutRequestId?: string; darajaResult?: { CheckoutRequestID?: string }; error?: string }>('/api/payments/stk-push', {
+          method: 'POST',
+          body: JSON.stringify({
+            phoneNumber: normalizedPhone,
+            amount: total,
+            businessId: currentBusinessId,
+            accountReference: 'MobiDuka POS',
+          }),
+        })
+        const checkoutRequestId = push.checkoutRequestId ?? push.darajaResult?.CheckoutRequestID
+        if (!push.success || !checkoutRequestId) throw new Error(push.error ?? 'Unable to start the M-Pesa payment.')
+
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          setMpesaStatus('Waiting for the customer to enter their M-Pesa PIN…')
+          await new Promise(resolve => window.setTimeout(resolve, 3000))
+          const status = await apiFetch<{ status: string; receipt?: string; message?: string }>('/api/payments/stk-query', {
+            method: 'POST',
+            body: JSON.stringify({ checkoutRequestId }),
+          })
+          if (status.status === 'SUCCESS') {
+            mpesaReceipt = status.receipt
+            setMpesaStatus('M-Pesa payment verified. Completing sale…')
+            break
+          }
+          if (status.status === 'FAILED' || status.status === 'CANCELLED') throw new Error(status.message ?? 'M-Pesa payment was not completed.')
+          if (attempt === 19) throw new Error('M-Pesa verification timed out. Check the customer phone before retrying.')
+        }
+      }
+
       const response = await apiFetch<{ saleNumber: string; createdAt: string; cashier: { name: string }; business: { name: string; branch: string | null } }>('/api/sales', {
         method: 'POST',
         body: JSON.stringify({
@@ -145,14 +192,19 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           invoiceNo: `POS-${Date.now()}`,
           totalAmount: total,
           paymentMode: paymentMethod === 'mpesa' ? 'MPESA' : paymentMethod === 'credit' ? 'CREDIT' : 'CASH',
+          mpesaRef: mpesaReceipt,
           customerId: paymentMethod === 'credit' ? selectedCreditor?.id : null,
           items: cart.map(item => ({ productId: item.id, quantity: item.qty, unitPrice: item.price, total: item.price * item.qty })),
         }),
       })
+      window.dispatchEvent(new Event('mobiduka-notification'))
       setReceiptInfo({ saleNumber: response.saleNumber, createdAt: response.createdAt, cashierName: response.cashier.name, businessName: response.business.name, businessBranch: response.business.branch })
       setView('receipt')
     } catch (reason) {
-      setDataError(reason instanceof Error ? reason.message : 'Unable to complete sale.')
+      const message = reason instanceof Error ? reason.message : 'Unable to complete sale.'
+      setDataError(message)
+      setMpesaStatus('')
+      window.setTimeout(() => setDataError(current => current === message ? '' : current), 6000)
     } finally {
       setIsCompletingSale(false)
     }
@@ -258,6 +310,11 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
+          {dataError && (
+            <div style={{ marginBottom: 14, padding: '12px 14px', borderRadius: 10, background: '#FFF5F5', border: '1px solid #FFCDD2', color: '#B71C1C', fontSize: 13, lineHeight: 1.4 }}>
+              {dataError}
+            </div>
+          )}
           <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Select Payment Method</div>
           {[
             { key: 'cash', label: 'Cash', sub: 'Physical cash payment', icon: '💵', color: '#123A8F' },
@@ -356,6 +413,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             </div>
           )}
 
+          {paymentMethod === 'mpesa' && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Customer M-Pesa Phone</div>
+              <input className="input" type="tel" inputMode="tel" placeholder="2547XXXXXXXX" value={mpesaPhone} onChange={event => setMpesaPhone(event.target.value)} />
+              <div style={{ fontSize: 11, color: c.muted, marginTop: 6 }}>The customer will receive an STK prompt and must enter their PIN.</div>
+            </div>
+          )}
+
           <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>Discount</div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -384,7 +449,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           )}
 
           {(() => {
-            const canComplete = !!selectedOperatorId && (paymentMethod !== 'credit' || !!selectedCreditor)
+            const canComplete = !!selectedOperatorId && (paymentMethod !== 'credit' || !!selectedCreditor) && (paymentMethod !== 'mpesa' || mpesaPhone.replace(/\s+/g, '').length >= 10)
             return (
               <button className="btn" onClick={() => { if (canComplete) void completeSale() }} disabled={!canComplete || isCompletingSale} style={{
                 width: '100%', marginTop: 28, padding: '18px',
@@ -398,7 +463,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                   ? 'Select an active shift operator'
                   : paymentMethod === 'credit' && !selectedCreditor
                   ? 'Select a customer to proceed'
-                  : isCompletingSale ? 'Recording Sale…' : `Complete Sale · KSh ${total.toLocaleString()}`}
+                  : isCompletingSale ? (mpesaStatus || 'Processing payment…') : `Complete Sale · KSh ${total.toLocaleString()}`}
               </button>
             )
           })()}

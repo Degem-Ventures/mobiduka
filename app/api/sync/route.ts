@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 interface SyncRecord {
   id: string;
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
 
     const effectiveDeviceId = resolvedDeviceId?.id ?? deviceId ?? null;
     const processedIds: string[] = [];
+    const syncedSales: Array<{ id: string; saleNumber: string; total: number }> = [];
 
     await prisma.$transaction(async (tx) => {
       const sortedRecords = [...records].sort(
@@ -127,6 +129,13 @@ export async function POST(request: Request) {
                       },
                     });
                   }
+                }
+                if (createdSale.saleStatus === "COMPLETED") {
+                  syncedSales.push({
+                    id: createdSale.id,
+                    saleNumber: createdSale.saleNumber ?? createdSale.id,
+                    total: Number(createdSale.total),
+                  });
                 }
               }
             }
@@ -303,6 +312,15 @@ export async function POST(request: Request) {
         },
       });
     });
+
+    await Promise.all(syncedSales.map((sale) => createSystemNotification({
+      businessId: resolvedBusinessId,
+      type: "success",
+      title: "Sale Completed",
+      body: `Sale ${sale.saleNumber} was completed for KSh ${sale.total.toLocaleString("en-KE")}.`,
+      eventKey: `sale:${sale.id}`,
+      preference: "salesNotifications",
+    })));
 
     return NextResponse.json(
       {
