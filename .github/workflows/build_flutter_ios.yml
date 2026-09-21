@@ -111,11 +111,11 @@ jobs:
           flutter pub get
           grep -A6 '^  mobile_scanner:' pubspec.lock
 
-      - name: Build Flutter iOS app without signing
+      - name: Build Flutter iOS device app without signing
         run: |
           cd flutter_app
           for attempt in 1 2 3; do
-            if flutter build ios --simulator --debug; then
+            if flutter build ios --release --no-codesign; then
               exit 0
             fi
             echo "Flutter iOS build failed (attempt ${attempt}/3); retrying CocoaPods resolution..."
@@ -126,8 +126,8 @@ jobs:
           echo "Flutter iOS build failed after 3 attempts."
           exit 1
 
-      - name: Upload iOS Simulator Build Artifact
+      - name: Upload unsigned iOS device app
         uses: actions/upload-artifact@v4
         with:
           name: mobiduka-flutter-ios-debug
-          path: flutter_app/build/ios/iphonesimulator/Runner.app
+          path: flutter_app/build/ios/iphoneos/Runner.app
