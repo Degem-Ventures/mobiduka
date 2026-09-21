@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"] as const;
 const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
@@ -151,6 +152,16 @@ export async function POST(request: Request) {
 
       return tx.user.create({ data });
     });
+
+    if (!id) {
+      await createSystemNotification({
+        businessId,
+        type: "success",
+        title: "Employee Added",
+        body: `${employee.fullName} has been added to the team as ${role}.`,
+        eventKey: `employee-created:${employee.id}`,
+      });
+    }
 
     return NextResponse.json({ success: true, employeeId: employee.id }, { status: 201 });
   } catch (error) {

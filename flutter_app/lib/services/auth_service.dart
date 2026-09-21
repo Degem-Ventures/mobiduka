@@ -130,6 +130,19 @@ class AuthService {
 
   Future<String?> readToken() => _storage.read(key: _tokenKey);
 
+  Future<AuthSession?> readSession() async {
+    final token = await readToken();
+    final encodedUser = await _storage.read(key: _userKey);
+    if (token == null || encodedUser == null) return null;
+    try {
+      final user = jsonDecode(encodedUser);
+      if (user is! Map<String, dynamic>) return null;
+      return AuthSession(token: token, user: user);
+    } on Object {
+      return null;
+    }
+  }
+
   Future<String> getActiveUserRole() async {
     final encodedUser = await _storage.read(key: _userKey);
     if (encodedUser == null) return 'CASHIER';

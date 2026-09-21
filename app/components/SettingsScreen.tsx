@@ -18,7 +18,7 @@ const CURRENCIES = [
 
 type SettingsResponse = {
   business: { name: string; branch: string | null; country: string | null; phone: string | null; taxPin: string | null; currency: string }
-  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; dailyReport: boolean; autoBackup: boolean; mpesaEnabled: boolean; themeMode: ThemeMode; paymentConfig: unknown }
+  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; salesNotifications: boolean; dailyReport: boolean; autoBackup: boolean; mpesaEnabled: boolean; themeMode: ThemeMode; paymentConfig: unknown }
   currencyOptions: Array<{ code: string; label: string }>
 }
 
@@ -27,6 +27,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
 
   const [receiptPrint, setReceiptPrint] = useState(true)
   const [lowStockAlerts, setLowStockAlerts] = useState(true)
+  const [salesNotifications, setSalesNotifications] = useState(true)
   const [dailyReport, setDailyReport] = useState(false)
   const [autoBackup, setAutoBackup] = useState(true)
   const [mpesaEnabled, setMpesaEnabled] = useState(true)
@@ -58,6 +59,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
     setCurrencyOptions(response.currencyOptions)
     setReceiptPrint(response.preferences.receiptPrint)
     setLowStockAlerts(response.preferences.lowStockAlerts)
+    setSalesNotifications(response.preferences.salesNotifications)
     setDailyReport(response.preferences.dailyReport)
     setAutoBackup(response.preferences.autoBackup)
     setMpesaEnabled(response.preferences.mpesaEnabled)
@@ -222,6 +224,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
           {[
             { label: 'Auto-print Receipt', sub: 'Print receipt after every sale', value: receiptPrint, onChange: (value: boolean) => { setReceiptPrint(value); void saveSettings({ receiptPrint: value }) } },
             { label: 'Low Stock Alerts', sub: 'Notify when stock is below reorder level', value: lowStockAlerts, onChange: (value: boolean) => { setLowStockAlerts(value); void saveSettings({ lowStockAlerts: value }) } },
+            { label: 'Sales Completed Alerts', sub: 'Notify after each completed sale', value: salesNotifications, onChange: (value: boolean) => { setSalesNotifications(value); void saveSettings({ salesNotifications: value }) } },
             { label: 'Daily Report Email', sub: 'Send end-of-day report to email', value: dailyReport, onChange: (value: boolean) => { setDailyReport(value); void saveSettings({ dailyReport: value }) } },
             { label: 'Auto Cloud Backup', sub: 'Backup data daily at midnight', value: autoBackup, onChange: (value: boolean) => { setAutoBackup(value); void saveSettings({ autoBackup: value }) } },
             { label: 'M-Pesa Integration', sub: 'Accept M-Pesa payments', value: mpesaEnabled, onChange: (value: boolean) => { setMpesaEnabled(value); void saveSettings({ mpesaEnabled: value }) } },

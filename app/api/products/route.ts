@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function GET(request: Request) {
   try {
@@ -58,6 +59,14 @@ export async function POST(request: Request) {
           },
         },
       },
+    });
+
+    await createSystemNotification({
+      businessId,
+      type: "info",
+      title: "New Product Added",
+      body: `${product.name} has been added to the product catalogue.`,
+      eventKey: `product-created:${product.id}`,
     });
 
     return NextResponse.json(product, { status: 201 });

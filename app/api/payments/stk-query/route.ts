@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
+import { createSystemNotification } from "@/lib/notifications";
 
 const tokenUrl = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
 const queryUrl = "https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query";
@@ -78,13 +79,32 @@ export async function POST(request: Request) {
         where: { checkoutRequestId },
         data: { status: "FAILED", resultCode: 1032, resultDescription: "User cancelled the request." },
       });
+      await createSystemNotification({
+        businessId: transaction.businessId,
+        type: "warning",
+        title: "M-Pesa Payment Cancelled",
+        body: `The M-Pesa payment of KSh ${Number(transaction.amount).toLocaleString("en-KE")} was cancelled by the customer. No sale was completed.`,
+        eventKey: `mpesa-payment-failed:${transaction.id}`,
+      });
       return NextResponse.json({ source: "live_query", status: "CANCELLED", message: "User cancelled the request." });
     }
     if (result.ResponseCode === "0" && !result.ResultCode) {
       return NextResponse.json({ source: "live_query", status: "PENDING", message: "Awaiting user input on handset." });
     }
 
-    return NextResponse.json({ source: "live_query", status: "FAILED", message: result.ResultDesc || "Transaction failed." });
+    const message = result.ResultDesc || "Transaction failed.";
+    await prisma.mpesaTransaction.update({
+      where: { checkoutRequestId },
+      data: { status: "FAILED", resultCode: resultCode ? Number(resultCode) : null, resultDescription: message },
+    });
+    await createSystemNotification({
+      businessId: transaction.businessId,
+      type: "critical",
+      title: "M-Pesa Payment Failed",
+      body: `The M-Pesa payment of KSh ${Number(transaction.amount).toLocaleString("en-KE")} failed: ${message} No sale was completed.`,
+      eventKey: `mpesa-payment-failed:${transaction.id}`,
+    });
+    return NextResponse.json({ source: "live_query", status: "FAILED", message });
   } catch (error) {
     return NextResponse.json(
       { error: "STK status query failed.", details: error instanceof Error ? error.message : "Unknown error" },

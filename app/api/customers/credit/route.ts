@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 const toPositiveAmount = (value: unknown) => {
   const amount = typeof value === "number" ? value : Number(value);
@@ -68,6 +69,14 @@ export async function POST(request: Request) {
         return { entry, balance: account.balance };
       });
 
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "warning",
+        title: "Customer Credit Updated",
+        body: `A credit charge of KSh ${parsedAmount.toLocaleString("en-KE")} was recorded. Outstanding balance: KSh ${Number(result.balance).toLocaleString("en-KE")}.`,
+        eventKey: `credit-charge:${result.entry.id}`,
+      });
+
       return NextResponse.json(
         {
           success: true,
@@ -130,6 +139,14 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
+
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "success",
+        title: "Credit Payment Recorded",
+        body: `A payment of KSh ${parsedAmount.toLocaleString("en-KE")} was recorded. Outstanding balance: KSh ${Number(result.balance).toLocaleString("en-KE")}.`,
+        eventKey: `credit-payment:${result.entry.id}`,
+      });
 
       return NextResponse.json({
         success: true,

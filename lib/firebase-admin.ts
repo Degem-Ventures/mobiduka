@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { prisma } from "./prisma";
 
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
@@ -13,6 +14,10 @@ async function getFirebaseAccessToken(): Promise<string> {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
   if (!clientEmail || !privateKey) return "";
+  if (!clientEmail.endsWith(".gserviceaccount.com")) {
+    console.warn("Firebase credentials rejected: FIREBASE_CLIENT_EMAIL is not a Google service-account email.");
+    return "";
+  }
 
   const issuedAt = Math.floor(Date.now() / 1000);
   const assertionHeader = base64Url({ alg: "RS256", typ: "JWT" });
@@ -37,10 +42,23 @@ async function getFirebaseAccessToken(): Promise<string> {
     }),
     signal: AbortSignal.timeout(5000),
   });
-  if (!response.ok) return "";
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error(`Firebase OAuth token request failed with HTTP ${response.status}: ${errorBody.slice(0, 300)}`);
+    return "";
+  }
 
   const data = (await response.json()) as { access_token?: string };
   return data.access_token ?? "";
+}
+
+export async function verifyFirebaseCredentials(): Promise<boolean> {
+  try {
+    return Boolean(await getFirebaseAccessToken());
+  } catch (error) {
+    console.error("Firebase credential verification failed:", error instanceof Error ? error.message : error);
+    return false;
+  }
 }
 
 export async function sendPushNotification(
@@ -83,7 +101,52 @@ export async function sendPushNotification(
     if (!response.ok) {
       console.error("Firebase push dispatch failed with status", response.status);
     }
+
+    const businessId = topic.match(/^business_[^_]+_(.+)$/)?.[1];
+    if (businessId) {
+      const subscriptions = await prisma.notificationSubscription.findMany({
+        where: { businessId, platform: "web" },
+        select: { token: true },
+      });
+      await sendPushNotificationToTokens(
+        subscriptions.map((subscription) => subscription.token),
+        title,
+        body,
+        dataPayload,
+      );
+    }
   } catch (error) {
     console.error("Firebase push dispatch failed:", error instanceof Error ? error.message : error);
   }
+}
+
+export async function sendPushNotificationToTokens(
+  tokens: string[],
+  title: string,
+  body: string,
+  dataPayload: Record<string, string> = {},
+): Promise<void> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!projectId || tokens.length === 0) return;
+  const accessToken = await getFirebaseAccessToken();
+  if (!accessToken) return;
+
+  await Promise.all(tokens.map(async (token) => {
+    try {
+      const response = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ message: {
+          token,
+          notification: { title, body },
+          data: dataPayload,
+          webpush: { fcmOptions: { link: "/" } },
+        } }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) console.error("Firebase web push failed with status", response.status);
+    } catch (error) {
+      console.error("Firebase web push failed:", error instanceof Error ? error.message : error);
+    }
+  }));
 }

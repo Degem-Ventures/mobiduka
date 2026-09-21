@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function POST(request: Request) {
   try {
@@ -23,7 +24,13 @@ export async function POST(request: Request) {
 
     const quantityDelta = Number(adjustmentQuantity);
 
-    await prisma.$transaction(async (tx) => {
+    const adjustment = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findFirst({
+        where: { id: productId, businessId: resolvedBusinessId, deletedAt: null },
+        select: { id: true, name: true },
+      });
+      if (!product) throw new Error("Product does not belong to this business.");
+
       const inventory = await tx.inventory.upsert({
         where: { productId },
         create: {
@@ -35,7 +42,7 @@ export async function POST(request: Request) {
         update: {},
       });
 
-      await tx.inventory.update({
+      const updatedInventory = await tx.inventory.update({
         where: { id: inventory.id },
         data: {
           quantity: {
@@ -66,6 +73,17 @@ export async function POST(request: Request) {
           notes: reason ?? "Inventory adjustment",
         },
       });
+
+      return { product, quantity: updatedInventory.quantity };
+    });
+
+    await createSystemNotification({
+      businessId: resolvedBusinessId,
+      type: quantityDelta >= 0 ? "info" : "warning",
+      title: quantityDelta >= 0 ? "Inventory Added" : "Inventory Reduced",
+      body: `${adjustment.product.name} inventory changed by ${quantityDelta >= 0 ? "+" : ""}${quantityDelta} units. Current stock: ${adjustment.quantity} units.`,
+      eventKey: `inventory-adjustment:${productId}:${Date.now()}`,
+      preference: quantityDelta < 0 ? "lowStockAlerts" : undefined,
     });
 
     return NextResponse.json({

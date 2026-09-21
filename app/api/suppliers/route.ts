@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 const supplierSelect = {
   id: true,
@@ -60,6 +61,13 @@ export async function POST(request: Request) {
         notes: normalizeOptional(body.notes),
       },
       select: supplierSelect,
+    });
+    await createSystemNotification({
+      businessId,
+      type: "info",
+      title: "New Supplier Added",
+      body: `${supplier.name} has been added to the supplier directory.`,
+      eventKey: `supplier-created:${supplier.id}`,
     });
     return NextResponse.json(supplier, { status: 201 });
   } catch (error) {

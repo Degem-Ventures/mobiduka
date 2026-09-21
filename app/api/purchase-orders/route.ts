@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { createSystemNotification } from "@/lib/notifications";
 
 export async function GET(request: Request) {
   try {
@@ -88,6 +89,14 @@ export async function POST(request: Request) {
         return order;
       });
 
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "info",
+        title: "Purchase Order Created",
+        body: `PO-${newOrder.orderNo} has been created with ${items.length} items for KSh ${Number(newOrder.totalCost).toLocaleString("en-KE")}.`,
+        eventKey: `purchase-order-created:${newOrder.id}`,
+      });
+
       return NextResponse.json(
         { success: true, orderId: newOrder.id, status: "REQUESTED" },
         { status: 201 },
@@ -104,7 +113,7 @@ export async function POST(request: Request) {
 
       const existingOrder = await prisma.purchaseOrder.findUnique({
         where: { id: requestedOrderId },
-        include: { items: true },
+        include: { items: true, supplier: { select: { name: true } } },
       });
 
       if (!existingOrder || existingOrder.businessId !== resolvedBusinessId || existingOrder.status === "RECEIVED") {
@@ -141,6 +150,14 @@ export async function POST(request: Request) {
             },
           });
         }
+      });
+
+      await createSystemNotification({
+        businessId: resolvedBusinessId,
+        type: "info",
+        title: "New Purchase Order Received",
+        body: `PO-${existingOrder.orderNo} from ${existingOrder.supplier?.name ?? "supplier"} has been marked as delivered. ${existingOrder.items.length} items received.`,
+        eventKey: `purchase-order-received:${existingOrder.id}`,
       });
 
       return NextResponse.json({
