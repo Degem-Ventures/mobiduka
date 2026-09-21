@@ -17,6 +17,7 @@
     "format": "oxfmt",
     "postinstall": "prisma generate",
     "seed:demo": "node --import tsx prisma/seed-demo.ts --force-seed-demo",
+    "seed:lifecare": "node --import tsx prisma/seed-lifecare.ts --force-seed-lifecare",
     "cap:sync": "pnpm run build && cap sync android",
     "cap:sync:ios": "pnpm run build && cap sync ios",
     "cap:open": "cap open android",

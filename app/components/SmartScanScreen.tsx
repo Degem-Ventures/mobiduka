@@ -1,14 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
+import { Html5Qrcode } from 'html5-qrcode'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
 type ScannedProduct = { name: string; barcode: string; category: string | null; price: number; stock: number; supplier: { name: string } | null; emoji: string; status: string; id: string }
 type ScanLog = { name: string; barcode: string; action: string; time: string; emoji: string }
-type ScanResponse = { found: boolean; product: ScannedProduct | null; status: string }
+type ScanResponse = { found?: boolean; product: ScannedProduct | null; status: string }
+type CartItemSeed = { id: string; name: string; price: number; emoji: string }
 
-interface Props { onNavigate: (s: string) => void }
+interface Props { onNavigate: (s: string, options?: { barcode?: string; productId?: string; cartItem?: CartItemSeed }) => void }
 
-type Mode = 'idle' | 'scanning' | 'result' | 'unknown' | 'manual'
+type Mode = 'idle' | 'camera' | 'scanning' | 'result' | 'unknown' | 'manual'
 
 export default function SmartScanScreen({ onNavigate }: Props) {
   const [mode, setMode]       = useState<Mode>('idle')
@@ -16,11 +18,16 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   const [product, setProduct] = useState<ScannedProduct | null>(null)
   const [scanProgress, setScanProgress] = useState(0)
   const [manualInput, setManualInput]   = useState('')
+  const [cameraError, setCameraError]   = useState('')
   const [flash, setFlash]               = useState(false)
   const [addedToCart, setAddedToCart]   = useState(false)
   const [scanLog, setScanLog]           = useState<ScanLog[]>([])
+  const [scanCounts, setScanCounts]     = useState<Record<string, number>>({})
   const [error, setError]               = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const scannerRef = useRef<Html5Qrcode | null>(null)
+  const handledCameraScanRef = useRef(false)
+  const viewfinderId = `smartscan-viewfinder-${useId().replace(/:/g, '')}`
   const c = useColors()
 
   useEffect(() => {
@@ -29,14 +36,17 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       setError('Please sign in to use SmartScan.')
       return
     }
-    apiFetch<{ scanActivity: { recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(response => setScanLog(response.scanActivity.recent.map(scan => ({
-        name: scan.name,
-        barcode: scan.barcode,
-        action: scan.status === 'UNKNOWN' ? 'Not found' : scan.status === 'MANUAL' ? 'Manual lookup' : 'Price checked',
-        time: new Date(scan.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-        emoji: scan.emoji ?? '📦',
-      }))))
+    apiFetch<{ scanActivity: { counts: Record<string, number>; recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(response => {
+        setScanCounts(response.scanActivity.counts)
+        setScanLog(response.scanActivity.recent.map(scan => ({
+          name: scan.name,
+          barcode: scan.barcode,
+          action: scan.status === 'UNKNOWN' ? 'Not found' : scan.status === 'MANUAL' ? 'Manual lookup' : 'Price checked',
+          time: new Date(scan.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+          emoji: scan.emoji ?? '📦',
+        })))
+      })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load scan activity.'))
   }, [])
 
@@ -48,14 +58,16 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       body: JSON.stringify({ businessId: session.user.businessId, barcode: code, statusOverride, action: 'LOOKUP' }),
     })
     setScanned(code)
+    const found = response.found === true || response.status === 'FOUND' || response.product !== null
     setProduct(response.product)
-    setMode(response.found ? 'result' : 'unknown')
+    setMode(found ? 'result' : 'unknown')
     setScanLog(previous => [{
       name: response.product?.name ?? 'Unknown Product', barcode: code,
-      action: response.found ? (statusOverride === 'MANUAL' ? 'Manual lookup' : 'Price checked') : 'Not found',
+      action: found ? (statusOverride === 'MANUAL' ? 'Manual lookup' : 'Price checked') : 'Not found',
       time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
       emoji: response.product ? '📦' : '❓',
     }, ...previous.filter(item => item.barcode !== code).slice(0, 9)])
+    setScanCounts(previous => ({ ...previous, [found ? (statusOverride === 'MANUAL' ? 'MANUAL' : 'FOUND') : 'UNKNOWN']: (previous[found ? (statusOverride === 'MANUAL' ? 'MANUAL' : 'FOUND') : 'UNKNOWN'] ?? 0) + 1 }))
   }
 
   // Animate scanning progress, then resolve the barcode against the database.
@@ -78,6 +90,49 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     }, 80)
   }
 
+  const stopCamera = async () => {
+    const scanner = scannerRef.current
+    scannerRef.current = null
+    if (!scanner) return
+    try {
+      if (scanner.getState() === 2) await scanner.stop()
+    } catch {
+      // The browser may stop the camera while the component is closing.
+    }
+    try { scanner.clear() } catch { /* The viewfinder may already be gone. */ }
+  }
+
+  const startCamera = () => {
+    setCameraError('')
+    handledCameraScanRef.current = false
+    setMode('camera')
+  }
+
+  useEffect(() => {
+    if (mode !== 'camera') return
+    const scanner = new Html5Qrcode(viewfinderId)
+    scannerRef.current = scanner
+    let disposed = false
+
+    void scanner.start(
+      { facingMode: 'environment' },
+      { fps: 15, qrbox: { width: 250, height: 180 }, aspectRatio: 1.5 },
+      decodedText => {
+        if (disposed || handledCameraScanRef.current) return
+        handledCameraScanRef.current = true
+        void stopCamera().finally(() => startScan(decodedText))
+      },
+      () => undefined,
+    ).catch((reason: unknown) => {
+      if (!disposed) setCameraError(reason instanceof Error ? reason.message : 'Unable to access the camera.')
+    })
+
+    return () => {
+      disposed = true
+      void stopCamera()
+    }
+  }, [mode, viewfinderId])
+
   const handleManual = () => {
     const code = manualInput.trim()
     if (!code) return
@@ -92,6 +147,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     try {
       await apiFetch('/api/scans', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, barcode: product.barcode, action: 'ADD_TO_CART' }) })
       setAddedToCart(true)
+      onNavigate('pos', { cartItem: { id: product.id, name: product.name, price: product.price, emoji: product.emoji } })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to add item to cart.')
     }
@@ -153,6 +209,17 @@ export default function SmartScanScreen({ onNavigate }: Props) {
           {/* flash overlay */}
           {flash && <div style={{ position: 'absolute', inset: 0, background: 'white', opacity: 0.3, zIndex: 10 }} />}
 
+          {mode === 'camera' && (
+            <div style={{ position: 'absolute', inset: 0, background: '#060E1F', padding: 12 }}>
+              <div id={viewfinderId} style={{ width: '100%', height: '100%', overflow: 'hidden', borderRadius: 12 }} />
+              <div style={{ position: 'absolute', top: 22, left: 22, right: 22, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ background: 'rgba(13,27,61,0.78)', borderRadius: 8, padding: '6px 10px', color: 'white', fontSize: 11, fontWeight: 700 }}>Allow camera access</div>
+                <button className="btn" onClick={() => { void stopCamera(); setMode('idle') }} style={{ background: 'rgba(255,255,255,0.16)', border: 'none', borderRadius: 8, padding: '6px 10px', color: 'white', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+              </div>
+              {cameraError && <div style={{ position: 'absolute', bottom: 22, left: 22, right: 22, background: 'rgba(255,235,238,0.95)', color: '#C62828', borderRadius: 8, padding: '8px 10px', fontSize: 11 }}>{cameraError}</div>}
+            </div>
+          )}
+
           {mode === 'idle' && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
               {/* Scan frame */}
@@ -163,7 +230,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                 {/* Scan line animation */}
                 <div style={{ position: 'absolute', left: 4, right: 4, height: 2, background: 'linear-gradient(90deg, transparent, #D4AF37, transparent)', animation: 'scanline 2s ease-in-out infinite', top: '50%' }} />
               </div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, textAlign: 'center' }}>Tap to simulate a barcode scan</div>
+              <button className="btn" onClick={startCamera} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.72)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Scan a barcode or QR code with camera</button>
             </div>
           )}
 
@@ -202,7 +269,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
 
           {/* Scan button */}
           {(mode === 'idle' || mode === 'result' || mode === 'unknown') && (
-            <button className="btn" onClick={() => mode === 'idle' ? startScan() : reset()}
+            <button className="btn" onClick={() => mode === 'idle' ? startCamera() : reset()}
               style={{ position: 'absolute', bottom: 12, right: 12, background: mode === 'idle' ? 'linear-gradient(135deg, #D4AF37, #F0D060)' : 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: mode === 'idle' ? '#0D1B3D' : 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
               {mode === 'idle' ? '📷 Scan' : '↺ Reset'}
             </button>
@@ -274,7 +341,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                   <span style={{ fontSize: 18 }}>📦</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: '#2E7D32' }}>Restock</span>
                 </button>
-                <button className="btn" onClick={() => onNavigate('inventory')} style={{ padding: '11px 6px', background: c.iconBg, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <button className="btn" onClick={() => onNavigate('inventory', { productId: product.id })} style={{ padding: '11px 6px', background: c.iconBg, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                   <span style={{ fontSize: 18 }}>👁️</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: '#123A8F' }}>View Details</span>
                 </button>
@@ -301,7 +368,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 12, color: c.muted, fontFamily: 'monospace', background: c.cardAlt, borderRadius: 8, padding: '6px 12px', marginBottom: 16, display: 'inline-block' }}>{scanned}</div>
               <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>This barcode isn't in your inventory yet.</div>
               <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn" onClick={() => onNavigate('inventory')} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Add Product</button>
+                <button className="btn" onClick={() => onNavigate('inventory', { barcode: scanned })} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Add Product</button>
                 <button className="btn" onClick={reset} style={{ flex: 1, padding: '12px', background: c.cardAlt, border: c.divider, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Dismiss</button>
               </div>
             </div>
@@ -316,9 +383,9 @@ export default function SmartScanScreen({ onNavigate }: Props) {
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 10 }}>Today's Scan Activity</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
               {[
-                { icon: '📊', count: 47, label: 'Barcode Scans', color: '#123A8F' },
-                { icon: '🔍', count: 3,  label: 'Unknown',       color: '#D32F2F' },
-                { icon: '✏️', count: 12, label: 'Manual Entry',  color: '#F9A825' },
+                { icon: '📊', count: Object.values(scanCounts).reduce((total, count) => total + count, 0), label: 'Barcode Scans', color: '#123A8F' },
+                { icon: '🔍', count: scanCounts.UNKNOWN ?? 0, label: 'Unknown', color: '#D32F2F' },
+                { icon: '✏️', count: scanCounts.MANUAL ?? 0, label: 'Manual Entry', color: '#F9A825' },
               ].map((s, i) => (
                 <div key={i} className="card" style={{ padding: '12px 8px', textAlign: 'center' }}>
                   <div style={{ fontSize: 22, marginBottom: 4 }}>{s.icon}</div>

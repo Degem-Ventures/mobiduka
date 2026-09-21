@@ -8,10 +8,12 @@ type CategoryItem = { id: string; name: string; emoji: string | null }
 const emojis = ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦', '🥤', '🍫', '🧃']
 
 interface Props {
-  onNavigate: (s: string) => void
+  onNavigate: (s: string, options?: { barcode?: string }) => void
+  initialBarcode?: string
+  initialProductId?: string
 }
 
-export default function InventoryScreen({ onNavigate }: Props) {
+export default function InventoryScreen({ onNavigate, initialBarcode, initialProductId }: Props) {
   const [products, setProducts] = useState<ProductItem[]>([])
   const [categories, setCategories] = useState<CategoryItem[]>([])
   const [dataError, setDataError] = useState('')
@@ -23,7 +25,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [editProduct, setEditProduct] = useState<ProductItem | null>(null)
   const [newCat, setNewCat] = useState({ name: '', emoji: '📦' })
-  const [productForm, setProductForm] = useState({ name: '', categoryId: '', cost: '', price: '', stock: '', reorder: '', emoji: '📦' })
+  const [productForm, setProductForm] = useState({ name: '', categoryId: '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' })
   const c = useColors()
   const session = getClientSession()
 
@@ -63,6 +65,19 @@ export default function InventoryScreen({ onNavigate }: Props) {
     }).catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load inventory.'))
   }, [session?.user.businessId])
 
+  useEffect(() => {
+    if (!initialBarcode) return
+    setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: initialBarcode, emoji: '📦' })
+    setEditProduct(null)
+    setShowAddProduct(true)
+  }, [initialBarcode, categories])
+
+  useEffect(() => {
+    if (!initialProductId || showAddProduct || selected) return
+    const product = products.find(item => item.id === initialProductId)
+    if (product) setSelected(product)
+  }, [initialProductId, products, selected, showAddProduct])
+
   const filtered = products.filter(p => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
     const matchFilter = filter === 'all' || p.status === filter || (filter === 'low' && (p.status === 'low' || p.status === 'critical'))
@@ -75,7 +90,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
       <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
-            <button className="btn" onClick={() => setSelected(null)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <button className="btn" onClick={() => { setSelected(null); onNavigate('inventory') }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Product Details</div>
@@ -119,7 +134,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
 
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => {
-              setProductForm({ name: selected.name, categoryId: selected.categoryId ?? '', cost: String(selected.cost), price: String(selected.price), stock: String(selected.stock), reorder: String(selected.reorder), emoji: selected.emoji })
+              setProductForm({ name: selected.name, categoryId: selected.categoryId ?? '', cost: String(selected.cost), price: String(selected.price), stock: String(selected.stock), reorder: String(selected.reorder), barcode: selected.barcode ?? '', emoji: selected.emoji })
               setEditProduct(selected)
               setSelected(null)
               setShowAddProduct(true)
@@ -151,6 +166,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
           sellingPrice: Number(p.price),
           stock: Number(p.stock),
           minimumStock: Number(p.reorder),
+          barcode: p.barcode.trim() || null,
           emoji: p.emoji,
         }),
       })
@@ -256,6 +272,10 @@ export default function InventoryScreen({ onNavigate }: Props) {
               <input className="input" placeholder="e.g. Unga Jogoo 2kg" value={productForm.name} onChange={e => setProductForm(f => ({ ...f, name: e.target.value }))} />
             </div>
             <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Barcode</label>
+              <input className="input" inputMode="numeric" placeholder="Scan or enter barcode" value={productForm.barcode} onChange={e => setProductForm(f => ({ ...f, barcode: e.target.value }))} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <select className="input" style={{ flex: 1, appearance: 'none' }} value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
@@ -309,7 +329,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
           <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Inventory</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={() => setShowAddCategory(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>+ Category</button>
-            <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
               <span style={{ fontSize: 16, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Product</span>
             </button>
@@ -375,7 +395,7 @@ export default function InventoryScreen({ onNavigate }: Props) {
 
       {/* FAB */}
       <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{
+        <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{
           width: 52, height: 52, borderRadius: '50%',
           background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
           border: 'none', fontSize: 24, color: '#0D1B3D',

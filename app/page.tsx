@@ -159,6 +159,9 @@ function AppInner() {
   const [isHydratingSession, setIsHydratingSession] = useState(true);
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
+  const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>();
+  const [inventoryProductId, setInventoryProductId] = useState<string | undefined>();
+  const [posCartItem, setPosCartItem] = useState<{ id: string; name: string; price: number; emoji: string } | undefined>();
 
   useEffect(() => {
     const session = getClientSession();
@@ -237,8 +240,11 @@ function AppInner() {
     setScreen("login");
   };
 
-  const handleNavigate = (s: string) => {
+  const handleNavigate = (s: string, options?: { barcode?: string; productId?: string; cartItem?: { id: string; name: string; price: number; emoji: string } }) => {
     const nextScreen = s as Screen;
+    setInventoryBarcode(nextScreen === "inventory" ? options?.barcode : undefined);
+    setInventoryProductId(nextScreen === "inventory" ? options?.productId : undefined);
+    setPosCartItem(nextScreen === "pos" ? options?.cartItem : undefined);
     setScreen(nextScreen);
     if (nextScreen !== "login") saveLastScreen(nextScreen);
   };
@@ -252,9 +258,9 @@ function AppInner() {
       case "dashboard":
         return <Dashboard onNavigate={handleNavigate} />;
       case "pos":
-        return <POSScreen onNavigate={handleNavigate} />;
+        return <POSScreen onNavigate={handleNavigate} initialCartItem={posCartItem} />;
       case "inventory":
-        return <InventoryScreen onNavigate={handleNavigate} />;
+        return <InventoryScreen onNavigate={handleNavigate} initialBarcode={inventoryBarcode} initialProductId={inventoryProductId} />;
       case "reports":
         return <ReportsScreen onNavigate={handleNavigate} />;
       case "customers":

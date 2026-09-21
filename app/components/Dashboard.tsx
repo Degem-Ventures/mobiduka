@@ -57,6 +57,7 @@ const relativeTimeLabel = (timestamp: string, timeZone: string) => {
 
 export default function Dashboard({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [scanPulse, setScanPulse] = useState(false)
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState('')
@@ -132,9 +133,17 @@ export default function Dashboard({ onNavigate }: Props) {
   const timeZone = data?.metadata.timezone ?? 'Africa/Nairobi'
   const recentTransactions = [...(data?.recentTransactions ?? [])]
     .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime())
+    .slice(0, 5)
     .map(transaction => ({ ...transaction, amountLabel: money(transaction.amount), timeLabel: relativeTimeLabel(transaction.time, timeZone) }))
+  const seenScanBarcodes = new Set<string>()
   const recentScans = [...(data?.scanActivity.recent ?? [])]
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .filter(scan => {
+      if (seenScanBarcodes.has(scan.barcode)) return false
+      seenScanBarcodes.add(scan.barcode)
+      return true
+    })
+    .slice(0, 10)
     .map(scan => ({ ...scan, timeLabel: relativeTimeLabel(scan.createdAt, timeZone) }))
 
   return (
@@ -146,8 +155,8 @@ export default function Dashboard({ onNavigate }: Props) {
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: 500, marginBottom: 2 }}>
               {data?.metadata.date ?? 'Loading dashboard…'}
             </div>
-            <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>{data?.metadata.name ?? 'MobiDuka Store'}</div>
-            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>Live data</div>
+            <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>Welcome, {session?.user.name ?? 'there'}</div>
+            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{data?.metadata.name ?? 'MobiDuka Store'} · Live data</div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => onNavigate('notifications')} aria-label="Open notifications" style={{
@@ -209,7 +218,7 @@ export default function Dashboard({ onNavigate }: Props) {
             {[
               { label: 'New Sale', icon: '🛒', color: '#123A8F', screen: 'pos' },
               { label: 'Add Stock', icon: '📦', color: '#2E7D32', screen: 'inventory' },
-              { label: 'Add Expense', icon: '💸', color: '#D32F2F', screen: 'more' },
+              { label: 'Add Expense', icon: '💸', color: '#D32F2F', screen: 'expenses' },
               { label: 'View Report', icon: '📊', color: '#D4AF37', screen: 'reports' },
             ].map((a, i) => (
               <button key={i} className="btn" onClick={() => onNavigate(a.screen)} style={{
@@ -330,7 +339,7 @@ export default function Dashboard({ onNavigate }: Props) {
           <div style={{ padding: '10px 16px 4px' }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>Recent Scans</div>
             {recentScans.map((s, i) => (
-              <button key={i} className="btn" onClick={() => onNavigate('scan')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: i < recentScans.length - 1 ? c.divider : 'none', background: 'none', border: 'none', borderBottomWidth: i < recentScans.length - 1 ? 1 : 0, borderBottomColor: c.border, borderBottomStyle: 'solid', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <button key={i} className="btn" onClick={() => onNavigate('scan')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: i < recentScans.length - 1 ? `1px solid ${c.border}` : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
                 <div style={{ width: 32, height: 32, borderRadius: 9, background: s.status === 'UNKNOWN' ? c.errorBg : c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>{s.emoji ?? '📦'}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: s.status === 'UNKNOWN' ? '#C62828' : c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
@@ -358,7 +367,7 @@ export default function Dashboard({ onNavigate }: Props) {
               color: 'white', cursor: 'pointer', fontFamily: 'inherit'
             }}>View</button>
           </div>
-          {(data?.lowStockItems ?? []).slice(0, 3).map((item, i) => (
+          {(data?.lowStockItems ?? []).slice(0, 10).map((item, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i > 0 ? `1px solid ${c.isDark ? 'rgba(249,168,37,0.15)' : 'rgba(0,0,0,0.06)'}` : 'none' }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#F9A825', flexShrink: 0 }} />
               <div style={{ fontSize: 12, color: c.isDark ? '#FFD54F' : '#5D4037', flex: 1 }}>{item.name}</div>
