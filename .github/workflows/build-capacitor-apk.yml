@@ -74,7 +74,9 @@ jobs:
         run: pnpm run cap:sync
 
       - name: Build debug APK
-        run: gradle -p android assembleDebug
+        run: |
+          cd android
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
