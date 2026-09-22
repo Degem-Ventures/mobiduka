@@ -56,20 +56,20 @@ Future<void> main() async {
 
   // Render the first screen before optional telemetry initialization.
   runApp(const MobiDukaApp());
-  unawaited(SentryFlutter.init(
-    (options) {
-      const dsn = String.fromEnvironment('SENTRY_DSN');
-      if (dsn.isNotEmpty) {
-        options.dsn = dsn;
+  const sentryDsn = String.fromEnvironment('SENTRY_DSN');
+  if (sentryDsn.isNotEmpty) {
+    unawaited(SentryFlutter.init(
+      (options) {
+        options.dsn = sentryDsn;
         options.environment = const String.fromEnvironment(
           'SENTRY_ENVIRONMENT',
           defaultValue: 'production',
         );
         options.tracesSampleRate = 0.1;
         options.reportPackages = true;
-      }
-    },
-  ));
+      },
+    ));
+  }
 }
 
 String? _lastFlutterError;
