@@ -27,12 +27,23 @@ dependencies:
   bluetooth_print_plus: ^2.4.6
   pdf: ^3.11.3
   printing: ^5.13.4
+  flutter_svg: ^2.3.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.2
+  flutter_launcher_icons: ^0.14.4
   sqflite_common_ffi: ^2.3.3
+
+flutter_launcher_icons:
+  android: true
+  image_path: assets/mobiduka_icon.png
+  adaptive_icon_background: '#0D1B3D'
+  adaptive_icon_foreground: assets/mobiduka_icon.png
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/mobiduka_icon.svg

@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { getToken, isSupported, onMessage } from "firebase/messaging";
 import { getFirebaseMessaging } from "@/lib/firebase-web";
 import { apiFetch, getClientSession } from "@/lib/client-api";
 
 export default function WebPushRegistration() {
+  // The server has no Notification API. Keep the first client render empty as
+  // well, then decide whether to show the prompt after hydration completes.
+  const [isHydrated, setIsHydrated] = useState(false);
+
   const enable = async () => {
     const permission = await Notification.requestPermission();
     if (permission === "granted") window.location.reload();
   };
 
   useEffect(() => {
+    setIsHydrated(true);
     let unsubscribe: (() => void) | undefined;
     void (async () => {
       if (!(await isSupported()) || !("Notification" in window) || Notification.permission !== "granted") return;
@@ -28,7 +33,7 @@ export default function WebPushRegistration() {
     return () => unsubscribe?.();
   }, []);
 
-  if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+  if (isHydrated && "Notification" in window && Notification.permission === "default") {
     return <button type="button" onClick={() => void enable()} style={{ position: "fixed", right: 16, bottom: 16, zIndex: 1000, border: 0, borderRadius: 8, padding: "10px 14px", background: "#123A8F", color: "white", cursor: "pointer" }}>Enable browser alerts</button>;
   }
   return null;

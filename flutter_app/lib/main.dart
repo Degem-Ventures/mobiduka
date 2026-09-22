@@ -5,7 +5,10 @@ import 'dart:ui' as ui;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:bluetooth_print_plus/bluetooth_print_plus.dart' show BluetoothDevice;
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:bluetooth_print_plus/bluetooth_print_plus.dart'
+    show BluetoothDevice;
 import 'package:pdf/pdf.dart' as pdf;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -21,14 +24,18 @@ import 'services/notification_receiver.dart';
 import 'services/notification_service.dart';
 import 'services/roster_sync_worker.dart';
 import 'services/cache_optimizer_service.dart';
+import 'services/dashboard_service.dart';
 import 'services/mpesa_service.dart';
 import 'services/product_repository.dart';
+import 'services/product_catalog_service.dart';
+import 'services/inventory_api_service.dart';
 import 'services/purchase_order_service.dart';
 import 'services/printer_service.dart';
 import 'services/receipt_pdf_downloader.dart';
 import 'services/sms_watcher_service.dart';
 import 'services/sync_service.dart';
 import 'widgets/barcode_scanner_view.dart';
+import 'widgets/smart_scan_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,14 +45,18 @@ Future<void> main() async {
   };
   ui.PlatformDispatcher.instance.onError = (error, stack) {
     FlutterError.reportError(
-      FlutterErrorDetails(exception: error, stack: stack, library: 'MobiDuka startup'),
+      FlutterErrorDetails(
+          exception: error, stack: stack, library: 'MobiDuka startup'),
     );
     return true;
   };
   ErrorWidget.builder = (details) => StartupErrorScreen(
         message: details.exception.toString(),
       );
-  await SentryFlutter.init(
+
+  // Render the first screen before optional telemetry initialization.
+  runApp(const MobiDukaApp());
+  unawaited(SentryFlutter.init(
     (options) {
       const dsn = String.fromEnvironment('SENTRY_DSN');
       if (dsn.isNotEmpty) {
@@ -58,8 +69,7 @@ Future<void> main() async {
         options.reportPackages = true;
       }
     },
-    appRunner: () => runApp(const MobiDukaApp()),
-  );
+  ));
 }
 
 String? _lastFlutterError;
@@ -96,32 +106,28 @@ final List<Product> defaultProducts = <Product>[
   const Product('Unga Jogoo 2kg', 'Flour', 160, 200, 45, 20, '🌾'),
   const Product('Cooking Oil 1L', 'Oils', 150, 190, 32, 15, '🫙'),
   const Product('Sugar 1kg', 'Sugar', 100, 140, 28, 30, '🍬', status: 'low'),
-  const Product('Blue Band 500g', 'Spreads', 110, 150, 18, 20, '🧈', status: 'low'),
+  const Product('Blue Band 500g', 'Spreads', 110, 150, 18, 20, '🧈',
+      status: 'low'),
   const Product('Milk 500ml', 'Dairy', 75, 100, 60, 40, '🥛'),
-  const Product('Royco 75g', 'Spices', 30, 45, 5, 20, '🌶️', status: 'critical'),
-  const Product('Panadol 500mg', 'Pharma', 20, 30, 3, 50, '💊', status: 'critical'),
+  const Product('Royco 75g', 'Spices', 30, 45, 5, 20, '🌶️',
+      status: 'critical'),
+  const Product('Panadol 500mg', 'Pharma', 20, 30, 3, 50, '💊',
+      status: 'critical'),
   const Product('Omo 400g', 'Detergent', 130, 180, 8, 15, '🧺', status: 'low'),
   const Product('Colgate 100ml', 'Personal', 60, 85, 22, 20, '🪥'),
   const Product('Bread White', 'Bakery', 40, 55, 15, 20, '🍞', status: 'low'),
   const Product('Eggs (tray)', 'Dairy', 380, 480, 12, 10, '🥚'),
-  const Product('Nescafé 100g', 'Beverages', 240, 320, 9, 12, '☕', status: 'low'),
+  const Product('Nescafé 100g', 'Beverages', 240, 320, 9, 12, '☕',
+      status: 'low'),
 ];
 
-List<Product> products = List<Product>.from(defaultProducts);
+// Products are loaded from the authenticated backend catalogue. The bundled
+// examples remain available only as development fixtures, not POS data.
+List<Product> products = <Product>[];
 
-const inventoryCategories = <String>[
-  'Flour',
-  'Oils',
-  'Sugar',
-  'Spreads',
-  'Dairy',
-  'Spices',
-  'Pharma',
-  'Detergent',
-  'Personal',
-  'Bakery',
-  'Beverages',
-];
+final inventoryCategories = <String>[];
+final inventoryCategoryIds = <String, String>{};
+final inventoryCategoryEmojis = <String, String>{};
 
 class MobiDukaApp extends StatefulWidget {
   const MobiDukaApp({super.key});
@@ -133,9 +139,11 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   final CashService _cashService = CashService();
   final AuthService _authService = AuthService();
   final GlobalKey<_POSScreenState> _posScreenKey = GlobalKey<_POSScreenState>();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   NotificationReceiverService? _notificationService;
   int tab = 0;
   bool loggedIn = false;
+  bool showingSmartScan = false;
   bool isDarkMode = false;
   String activeRole = 'CASHIER';
   String? detail;
@@ -166,32 +174,59 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   }
 
   Future<void> _loadCatalog() async {
-    if (kIsWeb) {
+    try {
+      final remoteProducts = await ProductCatalogService().load();
       if (!mounted) return;
       setState(() {
-        products = List<Product>.from(defaultProducts);
+        products = remoteProducts;
+        for (final product in remoteProducts) {
+          if (product.category != 'Uncategorized' &&
+              !inventoryCategories.contains(product.category)) {
+            inventoryCategories.add(product.category);
+          }
+        }
       });
+      final categories = await InventoryApiService().loadCategories();
+      if (mounted) {
+        setState(() {
+          inventoryCategories
+            ..clear()
+            ..addAll(categories.map((category) => category.name));
+          inventoryCategoryIds
+            ..clear()
+            ..addEntries(categories
+                .map((category) => MapEntry(category.name, category.id)));
+          inventoryCategoryEmojis
+            ..clear()
+            ..addEntries(categories.map(
+                (category) => MapEntry(category.name, category.emoji ?? '📦')));
+        });
+      }
+      if (!kIsWeb) {
+        await ProductRepository.instance.syncLocalCatalog(remoteProducts);
+      }
       return;
+    } on Object {
+      // Use the last server-backed cache if the device is offline. Never seed
+      // POS with demo items when the real catalogue cannot be reached.
     }
 
-    try {
-      final cachedProducts = await ProductRepository.instance.loadProducts();
-      if (cachedProducts.isNotEmpty) {
-        if (!mounted) return;
-        setState(() {
-          products = List<Product>.from(cachedProducts);
-        });
-        return;
+    if (!kIsWeb) {
+      try {
+        final cachedProducts = await ProductRepository.instance.loadProducts();
+        if (cachedProducts.isNotEmpty) {
+          if (!mounted) return;
+          setState(() {
+            products = List<Product>.from(cachedProducts);
+          });
+          return;
+        }
+      } on Object {
+        // A cache is optional; the empty state below is intentional.
       }
-
-      await ProductRepository.instance.saveProducts(defaultProducts);
-    } on Object {
-      // Keep the bundled catalog available if local storage is unavailable.
     }
     if (!mounted) return;
-    setState(() {
-      products = List<Product>.from(defaultProducts);
-    });
+    setState(() => products = <Product>[]);
   }
 
   Future<void> _handleLoginAttempt() async {
@@ -202,6 +237,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       detail = null;
       activeSessionId = null;
     });
+    unawaited(_loadCatalog());
 
     final role = await _authService.getActiveUserRole();
     if (!mounted) return;
@@ -281,79 +317,97 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-        builder: (sheetContext) => SizedBox(
-          height: MediaQuery.of(context).size.height * 0.9,
-          child: _CloseShiftSheet(
-            sessionId: activeSession['id'] as String,
-            onBeforeFinalized: _deactivateNotifications,
-            onFinalized: () {
-              setState(() {
-                loggedIn = false;
-                detail = null;
-                tab = 0;
-                activeSessionId = null;
-              });
-              Navigator.of(context).pop();
-            },
-          ),
-        ),
-    );
-  }
-
-  bool _canOpen(String value) {
-    if (activeRole == 'OWNER' || activeRole == 'ADMIN') return true;
-    if (activeRole == 'CASHIER') return value == 'Expense Tracking' || value == 'Credit Book';
-    if (activeRole == 'SUPERVISOR') {
-      return value != 'Reports & Analytics' && value != 'Settings' && value != 'Backup & Cloud Sync';
-    }
-    if (activeRole == 'ACCOUNTANT') {
-      return value == 'Reports & Analytics' || value == 'Credit Book' || value == 'Expense Tracking' || value == 'User Profile';
-    }
-    return false;
-  }
-
-  void open(String value) {
-    if (!_canOpen(value)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This area is restricted to store managers.')));
-      return;
-    }
-    setState(() => detail = value);
-  }
-
-  Future<void> _openUniversalScanner() async {
-    if (!loggedIn || detail != null) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => BarcodeScannerView(
-          onProductScanned: (product) {
-            _addScannedProductToPos(product);
-          },
-          onCustomerQrScanned: (account) {
-            _attachScannedCustomerToPos(account);
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.9,
+        child: _CloseShiftSheet(
+          sessionId: activeSession['id'] as String,
+          onBeforeFinalized: _deactivateNotifications,
+          onFinalized: () {
+            setState(() {
+              loggedIn = false;
+              detail = null;
+              tab = 0;
+              activeSessionId = null;
+            });
+            Navigator.of(context).pop();
           },
         ),
       ),
     );
   }
 
+  bool _canOpen(String value) {
+    if (activeRole == 'OWNER' || activeRole == 'ADMIN') return true;
+    if (activeRole == 'CASHIER')
+      return value == 'Expense Tracking' || value == 'Credit Book';
+    if (activeRole == 'SUPERVISOR') {
+      return value != 'Reports & Analytics' &&
+          value != 'Settings' &&
+          value != 'Backup & Cloud Sync';
+    }
+    if (activeRole == 'ACCOUNTANT') {
+      return value == 'Reports & Analytics' ||
+          value == 'Credit Book' ||
+          value == 'Expense Tracking' ||
+          value == 'User Profile';
+    }
+    return false;
+  }
+
+  void open(String value) {
+    if (!_canOpen(value)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('This area is restricted to store managers.')));
+      return;
+    }
+    setState(() => detail = value);
+  }
+
+  void _openUniversalScanner() {
+    if (!loggedIn || detail != null) return;
+    _showSmartScan();
+  }
+
+  void _showSmartScan() {
+    setState(() {
+      detail = null;
+      showingSmartScan = true;
+    });
+  }
+
+  void _handleDashboardQuickAction(String destination) {
+    switch (destination) {
+      case 'pos':
+        setState(() {
+          detail = null;
+          tab = 1;
+        });
+      case 'inventory':
+        setState(() {
+          detail = null;
+          tab = 2;
+        });
+      case 'expenses':
+        open('Expense Tracking');
+      case 'reports':
+        open('Reports & Analytics');
+    }
+  }
+
+  void _closeSmartScan() => setState(() => showingSmartScan = false);
+
   void _addScannedProductToPos(Product product) {
     const posTab = 1;
     if (tab != posTab) {
       setState(() => tab = posTab);
-      WidgetsBinding.instance.addPostFrameCallback((_) => _posScreenKey.currentState?.addToCart(product));
-      return;
     }
-    _posScreenKey.currentState?.addToCart(product);
-  }
 
-  void _attachScannedCustomerToPos(CreditAccount account) {
-    const posTab = 1;
-    if (tab != posTab) {
-      setState(() => tab = posTab);
-      WidgetsBinding.instance.addPostFrameCallback((_) => _posScreenKey.currentState?.attachCreditAccount(account));
-      return;
-    }
-    _posScreenKey.currentState?.attachCreditAccount(account);
+    // SmartScan may currently be replacing the POS widget.  Deferring until
+    // the next frame ensures the POS state is mounted before updating its
+    // cart, whether the user opened SmartScan from Home or from POS itself.
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _posScreenKey.currentState?.addToCartAndOpenCart(product),
+    );
   }
 
   Widget _navButton(int index, IconData icon, String label) {
@@ -367,7 +421,11 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
           children: [
             Icon(icon, color: selected ? gold : Colors.white70, size: 22),
             const SizedBox(height: 2),
-            Text(label, style: TextStyle(color: selected ? gold : Colors.white70, fontSize: 10, fontWeight: FontWeight.w700)),
+            Text(label,
+                style: TextStyle(
+                    color: selected ? gold : Colors.white70,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700)),
           ],
         ),
       ),
@@ -378,14 +436,14 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     switch (activeRole) {
       case 'CASHIER':
         return [
-          Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+          Expanded(child: _navButton(1, Icons.shopping_bag_rounded, 'POS')),
           const SizedBox(width: 72),
           Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
         ];
       case 'SUPERVISOR':
         return [
           Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
-          Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+          Expanded(child: _navButton(1, Icons.shopping_bag_rounded, 'POS')),
           const SizedBox(width: 72),
           Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
           Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
@@ -400,7 +458,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       default:
         return [
           Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
-          Expanded(child: _navButton(1, Icons.shopping_basket, 'POS')),
+          Expanded(child: _navButton(1, Icons.shopping_bag_rounded, 'POS')),
           const SizedBox(width: 72),
           Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
           Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
@@ -413,6 +471,11 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     final Widget body;
     if (!loggedIn) {
       body = LoginScreen(onLogin: _handleLoginAttempt);
+    } else if (showingSmartScan) {
+      body = SmartScanScreen(
+        onProductScanned: _addScannedProductToPos,
+        onClose: _closeSmartScan,
+      );
     } else if (detail != null) {
       body = DetailScreen(
         title: detail!,
@@ -433,7 +496,12 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     } else {
       switch (tab.clamp(0, 3).toInt()) {
         case 0:
-          body = const DashboardScreen();
+          body = DashboardScreen(
+            onProductScanned: _addScannedProductToPos,
+            onOpenSmartScan: _showSmartScan,
+            onQuickAction: _handleDashboardQuickAction,
+            onOpenNotifications: () => open('Notifications'),
+          );
         case 1:
           body = POSScreen(key: _posScreenKey);
         case 2:
@@ -450,6 +518,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     }
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       builder: (context, child) => child ?? const StartupErrorScreen(),
       themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
@@ -461,66 +530,88 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       darkTheme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(seedColor: navy, brightness: Brightness.dark),
+        colorScheme:
+            ColorScheme.fromSeed(seedColor: navy, brightness: Brightness.dark),
         scaffoldBackgroundColor: const Color(0xFF101522),
         cardColor: const Color(0xFF192235),
       ),
       home: Scaffold(
         body: DecoratedBox(
-          decoration: const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+          decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy])),
           child: Center(
             child: Container(
               width: 393,
               height: 852,
               margin: const EdgeInsets.all(18),
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: const Color(0xFF0A0A0A), borderRadius: BorderRadius.circular(54), boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 30, offset: Offset(0, 20))]),
+              decoration: BoxDecoration(
+                  color: const Color(0xFF0A0A0A),
+                  borderRadius: BorderRadius.circular(54),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Colors.black54,
+                        blurRadius: 30,
+                        offset: Offset(0, 20))
+                  ]),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(44),
                 child: Stack(children: [
                   Scaffold(
-                  backgroundColor: Colors.transparent,
-                  body: body,
-                  bottomNavigationBar: loggedIn && detail == null
-                      ? BottomAppBar(
-                          shape: const CircularNotchedRectangle(),
-                          notchMargin: 7,
-                          color: const Color(0xFF0A0A0A),
-                          child: SizedBox(
-                            height: 64,
-                            child: Row(children: _navigationButtons()),
-                          ),
-                        )
-                      : null,
-                  floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-                  floatingActionButton: loggedIn && detail == null
-                      ? Container(
-                          width: 68,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: gold, width: 2.5),
-                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
-                          ),
-                          child: FloatingActionButton(
-                            onPressed: _openUniversalScanner,
-                            backgroundColor: navy,
-                            foregroundColor: Colors.white,
-                            tooltip: 'Scan barcode or QR code',
-                            shape: const CircleBorder(),
-                            child: const Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.qr_code_scanner, size: 24),
-                                SizedBox(height: 2),
-                                Text('SCAN', style: TextStyle(color: gold, fontSize: 9, fontWeight: FontWeight.w900)),
-                              ],
-                            ),
-                          ),
-                        )
-                      : null,
-                ),
-                // Keep the device-style top speaker detail above the app shell.
+                    backgroundColor: Colors.transparent,
+                    body: body,
+                    bottomNavigationBar:
+                        loggedIn && detail == null && !showingSmartScan
+                            ? BottomAppBar(
+                                shape: const CircularNotchedRectangle(),
+                                notchMargin: 7,
+                                color: const Color(0xFF0A0A0A),
+                                child: SizedBox(
+                                  height: 64,
+                                  child: Row(children: _navigationButtons()),
+                                ),
+                              )
+                            : null,
+                    floatingActionButtonLocation:
+                        FloatingActionButtonLocation.centerDocked,
+                    floatingActionButton:
+                        loggedIn && detail == null && !showingSmartScan
+                            ? Container(
+                                width: 68,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: gold, width: 2.5),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                        color: Colors.black26,
+                                        blurRadius: 10,
+                                        offset: Offset(0, 5))
+                                  ],
+                                ),
+                                child: FloatingActionButton(
+                                  onPressed: _openUniversalScanner,
+                                  backgroundColor: navy,
+                                  foregroundColor: Colors.white,
+                                  tooltip: 'Scan barcode or QR code',
+                                  shape: const CircleBorder(),
+                                  child: const Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.qr_code_scanner, size: 24),
+                                      SizedBox(height: 2),
+                                      Text('SCAN',
+                                          style: TextStyle(
+                                              color: gold,
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w900)),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : null,
+                  ),
+                  // Keep the device-style top speaker detail above the app shell.
                   Positioned(
                     top: 0,
                     left: 0,
@@ -531,7 +622,8 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                         height: 34,
                         decoration: const BoxDecoration(
                           color: Color(0xFF0A0A0A),
-                          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+                          borderRadius: BorderRadius.vertical(
+                              bottom: Radius.circular(20)),
                         ),
                       ),
                     ),
@@ -567,7 +659,8 @@ class _CashShiftGateSheet extends StatefulWidget {
 }
 
 class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
-  final TextEditingController _openingCashController = TextEditingController(text: '2500');
+  final TextEditingController _openingCashController =
+      TextEditingController(text: '2500');
   final CashService _cashService = CashService();
   bool _submitting = false;
 
@@ -576,7 +669,8 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
     setState(() {
       final value = _openingCashController.text;
       _openingCashController.text = value == '0' ? digit : '$value$digit';
-      _openingCashController.selection = TextSelection.collapsed(offset: _openingCashController.text.length);
+      _openingCashController.selection =
+          TextSelection.collapsed(offset: _openingCashController.text.length);
     });
   }
 
@@ -589,7 +683,8 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
       } else {
         _openingCashController.text = value.substring(0, value.length - 1);
       }
-      _openingCashController.selection = TextSelection.collapsed(offset: _openingCashController.text.length);
+      _openingCashController.selection =
+          TextSelection.collapsed(offset: _openingCashController.text.length);
     });
   }
 
@@ -639,7 +734,8 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       decoration: const BoxDecoration(
         color: Color(0xFFF5F7FA),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -651,14 +747,20 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Cash Shift Ignition', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
+              const Text('Cash Shift Ignition',
+                  style: TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
               const SizedBox(height: 8),
-              const Text('Set the starting drawer float before you unlock the sales dashboard.', style: TextStyle(color: muted, fontSize: 13)),
+              const Text(
+                  'Set the starting drawer float before you unlock the sales dashboard.',
+                  style: TextStyle(color: muted, fontSize: 13)),
               const SizedBox(height: 20),
               TextField(
                 controller: _openingCashController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(
+                    fontSize: 22, fontWeight: FontWeight.w800, color: ink),
                 decoration: InputDecoration(
                   labelText: 'Opening Cash (KES)',
                   filled: true,
@@ -680,7 +782,9 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
                   ...['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map(
                     (digit) => OutlinedButton(
                       onPressed: () => _appendDigit(digit),
-                      child: Text(digit, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                      child: Text(digit,
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
                     ),
                   ),
                   OutlinedButton.icon(
@@ -699,9 +803,13 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
                     backgroundColor: const Color(0xFF2E7D32),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                   ),
-                  child: Text(_submitting ? 'Opening Shift...' : 'Open Shift Drawer', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                  child: Text(
+                      _submitting ? 'Opening Shift...' : 'Open Shift Drawer',
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
               ),
             ],
@@ -713,7 +821,10 @@ class _CashShiftGateSheetState extends State<_CashShiftGateSheet> {
 }
 
 class _CloseShiftSheet extends StatefulWidget {
-  const _CloseShiftSheet({required this.sessionId, required this.onBeforeFinalized, required this.onFinalized});
+  const _CloseShiftSheet(
+      {required this.sessionId,
+      required this.onBeforeFinalized,
+      required this.onFinalized});
   final String sessionId;
   final Future<void> Function() onBeforeFinalized;
   final VoidCallback onFinalized;
@@ -723,7 +834,8 @@ class _CloseShiftSheet extends StatefulWidget {
 }
 
 class _CloseShiftSheetState extends State<_CloseShiftSheet> {
-  final TextEditingController _closingCashController = TextEditingController(text: '0');
+  final TextEditingController _closingCashController =
+      TextEditingController(text: '0');
   final TextEditingController _notesController = TextEditingController();
   final CashService _cashService = CashService();
   bool _submitting = false;
@@ -761,18 +873,23 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
             children: [
               Text('Opening Float: KSh ${summary['openingCash']}'),
               const SizedBox(height: 8),
-              Text('Offline Cash Sales Completed: KSh ${summary['totalCashSales']}'),
+              Text(
+                  'Offline Cash Sales Completed: KSh ${summary['totalCashSales']}'),
               const SizedBox(height: 8),
-              Text('Cash Expenses Disbursed: KSh ${summary['totalCashExpenses'] ?? 0}'),
+              Text(
+                  'Cash Expenses Disbursed: KSh ${summary['totalCashExpenses'] ?? 0}'),
               const SizedBox(height: 8),
-              Text('Expected Drawer Balance: KSh ${summary['expectedBalance']}'),
+              Text(
+                  'Expected Drawer Balance: KSh ${summary['expectedBalance']}'),
               const SizedBox(height: 8),
               Text('Physical Counted Total: KSh ${summary['actualCounted']}'),
               const SizedBox(height: 8),
               Text(
                 'Variance: KSh ${summary['variance']}',
                 style: TextStyle(
-                  color: (summary['variance'] as num) < 0 ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+                  color: (summary['variance'] as num) < 0
+                      ? const Color(0xFFD32F2F)
+                      : const Color(0xFF2E7D32),
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -808,7 +925,8 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
     }
   }
 
-  Future<void> _finalizeCloseout(BuildContext dialogContext, Map<String, dynamic> summary) async {
+  Future<void> _finalizeCloseout(
+      BuildContext dialogContext, Map<String, dynamic> summary) async {
     try {
       await SyncService().queueChange(
         id: 'sync-finalize-${widget.sessionId}',
@@ -850,7 +968,8 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       decoration: const BoxDecoration(
         color: Color(0xFFF5F7FA),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -862,14 +981,20 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Close Shift Session', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
+              const Text('Close Shift Session',
+                  style: TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
               const SizedBox(height: 8),
-              const Text('Record the actual counted cash and finalize your drawer reconciliation.', style: TextStyle(color: muted, fontSize: 13)),
+              const Text(
+                  'Record the actual counted cash and finalize your drawer reconciliation.',
+                  style: TextStyle(color: muted, fontSize: 13)),
               const SizedBox(height: 20),
               TextField(
                 controller: _closingCashController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: ink),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.w800, color: ink),
                 decoration: InputDecoration(
                   labelText: 'Counted Cash Amount (KES)',
                   filled: true,
@@ -903,9 +1028,12 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
                     backgroundColor: navy,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
                   ),
-                  child: Text(_submitting ? 'Closing Shift...' : 'Close Shift', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                  child: Text(_submitting ? 'Closing Shift...' : 'Close Shift',
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
               ),
             ],
@@ -931,7 +1059,9 @@ class StartupErrorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final error = message ?? _lastFlutterError ?? 'The app failed while rendering its first screen.';
+    final error = message ??
+        _lastFlutterError ??
+        'The app failed while rendering its first screen.';
     return Material(
       color: ink,
       child: SafeArea(
@@ -946,7 +1076,10 @@ class StartupErrorScreen extends StatelessWidget {
                 const Text(
                   'MobiDuka could not start',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -970,9 +1103,20 @@ class _LoginScreenState extends State<LoginScreen> {
   String pin = '';
   bool isAuthenticating = false;
   bool loginSucceeded = false;
+  bool showPassword = false;
   String? loginError;
-  final TextEditingController emailController = TextEditingController(text: 'admin@mobiduka.co.ke');
-  final TextEditingController passwordController = TextEditingController();
+  final TextEditingController emailController =
+      TextEditingController(text: 'naomi@lifecarecanteen.co.ke');
+  final TextEditingController passwordController =
+      TextEditingController(text: 'Lifecare@2026');
+  final TextEditingController recoveryEmailController = TextEditingController();
+  final TextEditingController recoveryOtpController = TextEditingController();
+  final TextEditingController recoveryPasswordController =
+      TextEditingController();
+  final TextEditingController recoveryConfirmController =
+      TextEditingController();
+  String recoveryRole = 'Admin';
+  String? recoveryError;
 
   BorderSide _inputBorder({required bool isPasswordField}) {
     if (loginSucceeded) {
@@ -1114,15 +1258,367 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _startPasswordRecovery() {
+    recoveryEmailController.text = emailController.text.trim();
+    recoveryOtpController.clear();
+    recoveryPasswordController.clear();
+    recoveryConfirmController.clear();
+    setState(() {
+      recoveryError = null;
+      step = 'fp-email';
+    });
+  }
+
+  void _sendRecoveryCode() {
+    if (recoveryEmailController.text.trim().isEmpty) {
+      setState(() => recoveryError = 'Please enter your registered email.');
+      return;
+    }
+    setState(() {
+      recoveryError = null;
+      step = 'fp-otp';
+    });
+  }
+
+  void _verifyRecoveryCode() {
+    if (recoveryOtpController.text.trim().length != 6) {
+      setState(() => recoveryError = 'Enter the 6-digit code to continue.');
+      return;
+    }
+    setState(() {
+      recoveryError = null;
+      step = 'fp-reset';
+    });
+  }
+
+  void _saveRecoveredPassword() {
+    final password = recoveryPasswordController.text;
+    if (password.length < 6) {
+      setState(() => recoveryError = 'Password must be at least 6 characters.');
+      return;
+    }
+    if (password != recoveryConfirmController.text) {
+      setState(() => recoveryError = 'Passwords do not match.');
+      return;
+    }
+    setState(() {
+      recoveryError = null;
+      step = 'fp-done';
+    });
+  }
+
+  Widget _recoveryHeader(String title, String subtitle, VoidCallback onBack) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 52, 20, 24),
+      decoration:
+          const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: onBack,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.white.withValues(alpha: 0.12),
+              foregroundColor: Colors.white,
+              fixedSize: const Size(36, 36),
+            ),
+            icon: const Icon(Icons.arrow_back, size: 18),
+          ),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  style:
+                      const TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _recoveryFieldLabel(String label) => Text(
+        label,
+        style: const TextStyle(
+            fontSize: 13, fontWeight: FontWeight.w600, color: muted),
+      );
+
+  InputDecoration _recoveryInputDecoration({String? hintText}) =>
+      InputDecoration(
+        hintText: hintText,
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFFE8ECF4))),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFFE8ECF4))),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: navy)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+      );
+
+  Widget _recoveryError() {
+    final error = recoveryError;
+    if (error == null) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFEBEE),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFFFCDD2))),
+      child: Text(error,
+          style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13)),
+    );
+  }
+
+  Widget _recoveryButton(String label, VoidCallback? onPressed) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: onPressed == null ? const Color(0xFFE3EAF8) : navy,
+          foregroundColor:
+              onPressed == null ? const Color(0xFFB0BAD3) : Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        child: Text(label,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  Widget _buildRecoveryScreen() {
+    if (step == 'fp-done') {
+      return Container(
+        color: const Color(0xFFF5F7FA),
+        child: Column(
+          children: [
+            _recoveryHeader(
+                'Password Reset', '', () => setState(() => step = 'login')),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('🔓', style: TextStyle(fontSize: 64)),
+                    const SizedBox(height: 20),
+                    const Text('Password Updated!',
+                        style: TextStyle(
+                            color: ink,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 8),
+                    const Text(
+                        'Your new password has been saved.\nYou can now sign in.',
+                        textAlign: TextAlign.center,
+                        style:
+                            TextStyle(color: muted, fontSize: 14, height: 1.6)),
+                    const SizedBox(height: 32),
+                    _recoveryButton('Back to Sign In',
+                        () => setState(() => step = 'login')),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (step == 'fp-reset') {
+      return Container(
+        color: const Color(0xFFF5F7FA),
+        child: Column(
+          children: [
+            _recoveryHeader('Set New Password', 'Step 3 of 3',
+                () => setState(() => step = 'fp-otp')),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                children: [
+                  _recoveryFieldLabel('New Password'),
+                  const SizedBox(height: 6),
+                  TextField(
+                      controller: recoveryPasswordController,
+                      obscureText: true,
+                      onChanged: (_) => setState(() => recoveryError = null),
+                      decoration: _recoveryInputDecoration(
+                          hintText: 'Min. 6 characters')),
+                  const SizedBox(height: 16),
+                  _recoveryFieldLabel('Confirm New Password'),
+                  const SizedBox(height: 6),
+                  TextField(
+                      controller: recoveryConfirmController,
+                      obscureText: true,
+                      onChanged: (_) => setState(() => recoveryError = null),
+                      decoration: _recoveryInputDecoration(
+                          hintText: 'Repeat password')),
+                  const SizedBox(height: 16),
+                  _recoveryError(),
+                  _recoveryButton('Save New Password', _saveRecoveredPassword),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (step == 'fp-otp') {
+      final ready = recoveryOtpController.text.length == 6;
+      return Container(
+        color: const Color(0xFFF5F7FA),
+        child: Column(
+          children: [
+            _recoveryHeader('Enter OTP', 'Step 2 of 3',
+                () => setState(() => step = 'fp-email')),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                children: [
+                  const Text('📲',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 40)),
+                  const SizedBox(height: 12),
+                  const Text('Check your phone',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: ink,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  Text(
+                      'A 6-digit code was sent to the number linked to ${recoveryEmailController.text}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: muted, fontSize: 13, height: 1.6)),
+                  const SizedBox(height: 28),
+                  _recoveryFieldLabel('6-Digit Code'),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: recoveryOtpController,
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                    textAlign: TextAlign.center,
+                    onChanged: (_) => setState(() => recoveryError = null),
+                    style: const TextStyle(
+                        fontSize: 28,
+                        letterSpacing: 12,
+                        fontWeight: FontWeight.w800),
+                    decoration:
+                        _recoveryInputDecoration(hintText: '• • • • • •')
+                            .copyWith(counterText: ''),
+                  ),
+                  const SizedBox(height: 8),
+                  _recoveryError(),
+                  _recoveryButton(
+                      'Verify Code →', ready ? _verifyRecoveryCode : null),
+                  const SizedBox(height: 12),
+                  TextButton(
+                      onPressed: () {},
+                      child: const Text('Resend code',
+                          style: TextStyle(
+                              color: navy,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600))),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final hasEmail = recoveryEmailController.text.trim().isNotEmpty;
+    return Container(
+      color: const Color(0xFFF5F7FA),
+      child: Column(
+        children: [
+          _recoveryHeader('Forgot Password', 'Step 1 of 3',
+              () => setState(() => step = 'login')),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+              children: [
+                const Text('Reset your password',
+                    style: TextStyle(
+                        color: ink, fontSize: 15, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                const Text(
+                    'Enter your registered email. A one-time code will be sent to your linked phone number.',
+                    style: TextStyle(color: muted, fontSize: 13, height: 1.6)),
+                const SizedBox(height: 20),
+                _recoveryFieldLabel('Email Address'),
+                const SizedBox(height: 6),
+                TextField(
+                    controller: recoveryEmailController,
+                    keyboardType: TextInputType.emailAddress,
+                    onChanged: (_) => setState(() => recoveryError = null),
+                    decoration:
+                        _recoveryInputDecoration(hintText: 'your@email.com')),
+                const SizedBox(height: 16),
+                _recoveryFieldLabel('Account Role'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children:
+                      ['Admin', 'Manager', 'Cashier', 'Supervisor'].map((role) {
+                    final selected = recoveryRole == role;
+                    return ChoiceChip(
+                        label: Text(role),
+                        selected: selected,
+                        onSelected: (_) => setState(() => recoveryRole = role),
+                        selectedColor: const Color(0xFFE3EAF8),
+                        labelStyle: TextStyle(
+                            color: selected ? navy : muted,
+                            fontWeight: FontWeight.w600));
+                  }).toList(),
+                ),
+                const SizedBox(height: 24),
+                _recoveryError(),
+                _recoveryButton(
+                    'Send Reset Code →', hasEmail ? _sendRecoveryCode : null),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     emailController.dispose();
     passwordController.dispose();
+    recoveryEmailController.dispose();
+    recoveryOtpController.dispose();
+    recoveryPasswordController.dispose();
+    recoveryConfirmController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (step.startsWith('fp-')) return _buildRecoveryScreen();
+
     if (step == 'pin') {
       return Container(
         width: double.infinity,
@@ -1186,19 +1682,28 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 18),
                         Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
                           decoration: BoxDecoration(
-                            color: loginSucceeded ? const Color(0x332E7D32) : const Color(0x33D32F2F),
+                            color: loginSucceeded
+                                ? const Color(0x332E7D32)
+                                : const Color(0x33D32F2F),
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: loginSucceeded ? const Color(0xFF66BB6A) : const Color(0xFFEF9A9A),
+                              color: loginSucceeded
+                                  ? const Color(0xFF66BB6A)
+                                  : const Color(0xFFEF9A9A),
                             ),
                           ),
                           child: Row(
                             children: [
                               Icon(
-                                loginSucceeded ? Icons.check_circle_outline : Icons.error_outline,
-                                color: loginSucceeded ? const Color(0xFFA5D6A7) : const Color(0xFFFFCDD2),
+                                loginSucceeded
+                                    ? Icons.check_circle_outline
+                                    : Icons.error_outline,
+                                color: loginSucceeded
+                                    ? const Color(0xFFA5D6A7)
+                                    : const Color(0xFFFFCDD2),
                                 size: 18,
                               ),
                               const SizedBox(width: 8),
@@ -1206,7 +1711,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                 child: Text(
                                   'PIN accepted. Redirecting...',
                                   style: TextStyle(
-                                    color: loginSucceeded ? const Color(0xFFA5D6A7) : const Color(0xFFFFCDD2),
+                                    color: loginSucceeded
+                                        ? const Color(0xFFA5D6A7)
+                                        : const Color(0xFFFFCDD2),
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -1219,20 +1726,27 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 48),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
-                        children: List.generate(4, (index) => Container(
-                          width: 16,
-                          height: 16,
-                          margin: EdgeInsets.only(right: index == 3 ? 0 : 20),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            backgroundBlendMode: BlendMode.srcOver,
-                            color: index < pin.length ? gold : const Color(0x33FFFFFF),
-                            border: Border.all(
-                              color: index < pin.length ? gold : const Color(0x4DFFFFFF),
-                              width: 2,
-                            ),
-                          ),
-                        )),
+                        children: List.generate(
+                            4,
+                            (index) => Container(
+                                  width: 16,
+                                  height: 16,
+                                  margin: EdgeInsets.only(
+                                      right: index == 3 ? 0 : 20),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    backgroundBlendMode: BlendMode.srcOver,
+                                    color: index < pin.length
+                                        ? gold
+                                        : const Color(0x33FFFFFF),
+                                    border: Border.all(
+                                      color: index < pin.length
+                                          ? gold
+                                          : const Color(0x4DFFFFFF),
+                                      width: 2,
+                                    ),
+                                  ),
+                                )),
                       ),
                       const SizedBox(height: 48),
                       SizedBox(
@@ -1244,21 +1758,41 @@ class _LoginScreenState extends State<LoginScreen> {
                           crossAxisSpacing: 16,
                           childAspectRatio: 1.8,
                           children: [
-                            ...['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((key) {
+                            ...[
+                              '1',
+                              '2',
+                              '3',
+                              '4',
+                              '5',
+                              '6',
+                              '7',
+                              '8',
+                              '9',
+                              '',
+                              '0',
+                              '⌫'
+                            ].map((key) {
                               if (key.isEmpty) return const SizedBox();
                               final isDelete = key == '⌫';
                               return Material(
-                                color: isDelete ? Colors.transparent : const Color(0x1AFFFFFF),
+                                color: isDelete
+                                    ? Colors.transparent
+                                    : const Color(0x1AFFFFFF),
                                 borderRadius: BorderRadius.circular(16),
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(16),
-                                  onTap: isAuthenticating ? null : () => isDelete ? _handlePinDelete() : _handlePinPress(key),
+                                  onTap: isAuthenticating
+                                      ? null
+                                      : () => isDelete
+                                          ? _handlePinDelete()
+                                          : _handlePinPress(key),
                                   child: Center(
                                     child: isAuthenticating && key == '0'
                                         ? const SizedBox(
                                             width: 22,
                                             height: 22,
-                                            child: CircularProgressIndicator(strokeWidth: 2, color: gold),
+                                            child: CircularProgressIndicator(
+                                                strokeWidth: 2, color: gold),
                                           )
                                         : Text(
                                             key,
@@ -1321,7 +1855,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   end: Alignment.bottomRight,
                   colors: [ink, navy],
                 ),
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+                borderRadius:
+                    BorderRadius.vertical(bottom: Radius.circular(32)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1343,7 +1878,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: SizedBox(
                             width: 24,
                             height: 24,
-                            child: CustomPaint(painter: _StorefrontLogoPainter()),
+                            child: SvgPicture.asset(
+                              'assets/mobiduka_icon.svg',
+                              fit: BoxFit.contain,
+                            ),
                           ),
                         ),
                       ),
@@ -1351,16 +1889,29 @@ class _LoginScreenState extends State<LoginScreen> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: const [
-                          Text('MobiDuka POS', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-                          Text('Business Management', style: TextStyle(color: Color(0xCCF0D060), fontSize: 12, fontWeight: FontWeight.w500)),
+                          Text('MobiDuka POS',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800)),
+                          Text('Business Management',
+                              style: TextStyle(
+                                  color: Color(0xCCF0D060),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500)),
                         ],
                       ),
                     ],
                   ),
                   const SizedBox(height: 24),
-                  const Text('Welcome back', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
+                  const Text('Welcome back',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
-                  const Text('Sign in to your account', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 13)),
+                  const Text('Sign in to your account',
+                      style: TextStyle(color: Color(0x99FFFFFF), fontSize: 13)),
                 ],
               ),
             ),
@@ -1373,7 +1924,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       alignment: Alignment.centerLeft,
                       child: Text(
                         'Email Address',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF6B7A99)),
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6B7A99)),
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -1381,26 +1935,39 @@ class _LoginScreenState extends State<LoginScreen> {
                       Container(
                         width: double.infinity,
                         margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
-                          color: loginSucceeded ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE),
+                          color: loginSucceeded
+                              ? const Color(0xFFE8F5E9)
+                              : const Color(0xFFFFEBEE),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
-                            color: loginSucceeded ? const Color(0xFF66BB6A) : const Color(0xFFEF9A9A),
+                            color: loginSucceeded
+                                ? const Color(0xFF66BB6A)
+                                : const Color(0xFFEF9A9A),
                           ),
                         ),
                         child: Row(
                           children: [
                             Icon(
-                              loginSucceeded ? Icons.check_circle_outline : Icons.error_outline,
-                              color: loginSucceeded ? const Color(0xFF1B5E20) : const Color(0xFFB71C1C),
+                              loginSucceeded
+                                  ? Icons.check_circle_outline
+                                  : Icons.error_outline,
+                              color: loginSucceeded
+                                  ? const Color(0xFF1B5E20)
+                                  : const Color(0xFFB71C1C),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                loginSucceeded ? 'Signed in successfully. Redirecting...' : loginError ?? '',
+                                loginSucceeded
+                                    ? 'Signed in successfully. Redirecting...'
+                                    : loginError ?? '',
                                 style: TextStyle(
-                                  color: loginSucceeded ? const Color(0xFF1B5E20) : const Color(0xFFB71C1C),
+                                  color: loginSucceeded
+                                      ? const Color(0xFF1B5E20)
+                                      : const Color(0xFFB71C1C),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -1412,7 +1979,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     TextField(
                       controller: emailController,
                       keyboardType: TextInputType.emailAddress,
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF0D1B3D)),
+                      style: const TextStyle(
+                          fontSize: 14, color: Color(0xFF0D1B3D)),
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white,
@@ -1432,7 +2000,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ? const BorderSide(color: Color(0xFFD32F2F))
                                   : const BorderSide(color: navy),
                         ),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 16),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -1440,14 +2009,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       alignment: Alignment.centerLeft,
                       child: Text(
                         'Password',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF6B7A99)),
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6B7A99)),
                       ),
                     ),
                     const SizedBox(height: 6),
                     TextField(
                       controller: passwordController,
-                      obscureText: true,
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF0D1B3D)),
+                      obscureText: !showPassword,
+                      style: const TextStyle(
+                          fontSize: 14, color: Color(0xFF0D1B3D)),
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white,
@@ -1467,17 +2040,32 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ? const BorderSide(color: Color(0xFFD32F2F))
                                   : const BorderSide(color: navy),
                         ),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                        suffixIcon: IconButton(
+                          onPressed: () =>
+                              setState(() => showPassword = !showPassword),
+                          tooltip:
+                              showPassword ? 'Hide password' : 'Show password',
+                          icon: Icon(
+                              showPassword
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                              color: muted),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 16),
                       ),
                     ),
                     const SizedBox(height: 18),
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: () {},
+                        onPressed: _startPasswordRecovery,
                         child: const Text(
                           'Forgot Password?',
-                          style: TextStyle(color: navy, fontSize: 13, fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                              color: navy,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600),
                         ),
                       ),
                     ),
@@ -1485,7 +2073,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: isAuthenticating ? null : _authenticateWithPassword,
+                        onPressed:
+                            isAuthenticating ? null : _authenticateWithPassword,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF123A8F),
                           foregroundColor: Colors.white,
@@ -1500,11 +2089,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             ? const SizedBox(
                                 width: 22,
                                 height: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
                               )
                             : const Text(
                                 'Sign In',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                                style: TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.w700),
                               ),
                       ),
                     ),
@@ -1519,11 +2110,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: TextButton.styleFrom(
                           backgroundColor: const Color(0x0D123A8F),
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                         child: const Text(
                           'Use PIN Login instead',
-                          style: TextStyle(color: navy, fontSize: 14, fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                              color: navy,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600),
                         ),
                       ),
                     ),
@@ -1552,13 +2147,13 @@ class _LoginScreenState extends State<LoginScreen> {
       height: double.infinity,
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [ink, navy],
+          begin: Alignment(-0.8, -1),
+          end: Alignment(0.8, 1),
+          colors: [ink, navy, Color(0xFF1A4FBF)],
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(32, 0, 32, 40),
+        padding: const EdgeInsets.fromLTRB(32, 0, 32, 48),
         child: Column(
           children: [
             Expanded(
@@ -1574,7 +2169,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         gradient: const LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: [Color(0xFFD4AF37), Color(0xFFF0D060), Color(0xFFC9A227)],
+                          colors: [
+                            Color(0xFFD4AF37),
+                            Color(0xFFF0D060),
+                            Color(0xFFC9A227)
+                          ],
                         ),
                         boxShadow: const [
                           BoxShadow(
@@ -1588,7 +2187,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: SizedBox(
                           width: 56,
                           height: 56,
-                          child: CustomPaint(painter: _StorefrontLogoPainter()),
+                          child: SvgPicture.asset(
+                            'assets/mobiduka_icon.svg',
+                            fit: BoxFit.contain,
+                          ),
                         ),
                       ),
                     ),
@@ -1604,7 +2206,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 4),
                     const Text(
-                      'Point of Sale',
+                      'POINT OF SALE',
                       style: TextStyle(
                         color: Color(0xFFE7C75B),
                         fontSize: 14,
@@ -1622,18 +2224,23 @@ class _LoginScreenState extends State<LoginScreen> {
                         height: 1.6,
                       ),
                     ),
-                    const SizedBox(height: 44),
+                    const SizedBox(height: 60),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(3, (index) => Container(
-                        margin: EdgeInsets.only(right: index == 2 ? 0 : 8),
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: index == 0 ? gold : const Color(0x4DFFFFFF),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      )),
+                      children: List.generate(
+                          3,
+                          (index) => Container(
+                                margin:
+                                    EdgeInsets.only(right: index == 2 ? 0 : 8),
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: index == 0
+                                      ? gold
+                                      : const Color(0x4DFFFFFF),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                              )),
                     ),
                   ],
                 ),
@@ -1642,9 +2249,10 @@ class _LoginScreenState extends State<LoginScreen> {
             SizedBox(
               width: double.infinity,
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  SizedBox(
-                    width: 220,
+                  FractionallySizedBox(
+                    widthFactor: 0.8,
                     child: ElevatedButton(
                       onPressed: () => setState(() => step = 'login'),
                       style: ElevatedButton.styleFrom(
@@ -1665,9 +2273,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: 220,
+                  const SizedBox(height: 16),
+                  FractionallySizedBox(
+                    widthFactor: 0.8,
                     child: OutlinedButton(
                       onPressed: () => setState(() => step = 'pin'),
                       style: OutlinedButton.styleFrom(
@@ -1697,92 +2305,414 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-class _StorefrontLogoPainter extends CustomPainter {
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({
+    super.key,
+    required this.onProductScanned,
+    required this.onOpenSmartScan,
+    required this.onQuickAction,
+    required this.onOpenNotifications,
+  });
+
+  final ValueChanged<Product> onProductScanned;
+  final VoidCallback onOpenSmartScan;
+  final ValueChanged<String> onQuickAction;
+  final VoidCallback onOpenNotifications;
+
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint();
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
 
-    final awning = Path()
-      ..moveTo(size.width * (8 / 56), size.height * (22 / 56))
-      ..lineTo(size.width * (28 / 56), size.height * (10 / 56))
-      ..lineTo(size.width * (48 / 56), size.height * (22 / 56))
-      ..close();
+class _DashboardScreenState extends State<DashboardScreen> {
+  final DashboardService _dashboardService = DashboardService();
+  final AuthService _authService = AuthService();
+  DashboardSnapshot _dashboard = DashboardSnapshot.empty;
+  bool _loading = true;
+  String? _error;
+  String _userName = 'there';
+  int _unreadNotifications = 0;
 
-    paint.color = const Color(0xFF0D1B3D).withValues(alpha: 0.9);
-    canvas.drawPath(awning, paint);
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboard();
+    _loadUnreadNotifications();
+  }
 
-    final base = RRect.fromRectAndRadius(
-      Rect.fromLTWH(size.width * (10 / 56), size.height * (22 / 56), size.width * (36 / 56), size.height * (22 / 56)),
-      const Radius.circular(3),
+  Future<void> _loadUnreadNotifications() async {
+    try {
+      final session = await _authService.readSession();
+      if (session == null) return;
+      final count = await NotificationService().unreadCount(session);
+      if (mounted) setState(() => _unreadNotifications = count);
+    } catch (_) {
+      // Leave the badge hidden when notifications are temporarily unavailable.
+    }
+  }
+
+  Future<void> _loadDashboard() async {
+    try {
+      final session = await _authService.readSession();
+      final dashboard = await _dashboardService.load();
+      if (!mounted) return;
+      setState(() {
+        _dashboard = dashboard;
+        _userName = session?.user['name']?.toString().trim().isNotEmpty == true
+            ? session!.user['name'].toString()
+            : 'there';
+        _loading = false;
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  num _number(Object? value) =>
+      value is num ? value : num.tryParse(value?.toString() ?? '') ?? 0;
+
+  String _money(Object? value) => 'KSh ${_number(value).toStringAsFixed(0)}';
+
+  String _friendlyTransactionTime(Object? value) {
+    final parsed = DateTime.tryParse(value?.toString() ?? '')?.toLocal();
+    if (parsed == null) return value?.toString() ?? '';
+    final time =
+        '${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final date = DateTime(parsed.year, parsed.month, parsed.day);
+    final days = today.difference(date).inDays;
+    if (days == 0) return time;
+    if (days == 1) return 'Yesterday · $time';
+    if (days < 7) return '$days days ago · $time';
+    return '${parsed.day}/${parsed.month}/${parsed.year} · $time';
+  }
+
+  Widget _scanMetric(String value, String label, Color color,
+      {bool isLast = false}) {
+    return Expanded(
+      child: Container(
+        decoration: BoxDecoration(
+          border: isLast
+              ? null
+              : const Border(right: BorderSide(color: Color(0xFFE8ECF3))),
+        ),
+        child: Column(
+          children: [
+            Text(value,
+                style: TextStyle(
+                    color: color, fontSize: 20, fontWeight: FontWeight.w800)),
+            Text(label,
+                style: const TextStyle(
+                    color: muted, fontSize: 10, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ),
     );
-    paint.color = const Color(0xFF0D1B3D).withValues(alpha: 0.8);
-    canvas.drawRRect(base, paint);
+  }
 
-    final leftPanel = RRect.fromRectAndRadius(
-      Rect.fromLTWH(size.width * (17 / 56), size.height * (28 / 56), size.width * (10 / 56), size.height * (16 / 56)),
-      const Radius.circular(2),
+  void _openSmartScan() {
+    widget.onOpenSmartScan();
+  }
+
+  Widget _smartScanCard(Map scanCounts, List<Map<String, dynamic>> scans) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x11000000), blurRadius: 8, offset: Offset(0, 2))
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _openSmartScan,
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                decoration: const BoxDecoration(
+                    gradient: LinearGradient(colors: [ink, navy])),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: gold.withValues(alpha: 0.20),
+                        borderRadius: BorderRadius.circular(11),
+                        border: Border.all(color: gold.withValues(alpha: 0.4)),
+                      ),
+                      child: const Icon(Icons.qr_code_scanner_rounded,
+                          color: gold, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Text('SmartScan™',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700)),
+                            SizedBox(width: 7),
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                  color: Color(0x40D4AF37),
+                                  borderRadius:
+                                      BorderRadius.all(Radius.circular(99))),
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 2),
+                                child: Text('QUICK ACTION',
+                                    style: TextStyle(
+                                        color: gold,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.5)),
+                              ),
+                            ),
+                          ]),
+                          SizedBox(height: 2),
+                          Text('Scan any product barcode instantly',
+                              style: TextStyle(
+                                  color: Color(0x99FFFFFF), fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    FilledButton(
+                      onPressed: _openSmartScan,
+                      style: FilledButton.styleFrom(
+                          backgroundColor: gold,
+                          foregroundColor: ink,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          minimumSize: const Size(0, 0)),
+                      child: const Text('Scan',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700)),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(children: [
+                  _scanMetric('${_number(scanCounts['FOUND']).toInt()}',
+                      'Barcodes', navy),
+                  _scanMetric('${_number(scanCounts['UNKNOWN']).toInt()}',
+                      'Unknown', const Color(0xFFD32F2F)),
+                  _scanMetric('${_number(scanCounts['MANUAL']).toInt()}',
+                      'Manual', muted,
+                      isLast: true),
+                ]),
+              ),
+              const Divider(height: 1, color: Color(0xFFE8ECF3)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('RECENT SCANS',
+                        style: TextStyle(
+                            color: muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    if (scans.isEmpty)
+                      const Padding(
+                          padding: EdgeInsets.only(bottom: 8),
+                          child: Text('No scans recorded yet.',
+                              style: TextStyle(color: muted, fontSize: 12))),
+                    ...scans.take(10).map((scan) {
+                      final isUnknown = scan['status']?.toString() == 'UNKNOWN';
+                      final name = scan['name']?.toString() ??
+                          (isUnknown ? 'Unknown Product' : 'Product');
+                      return InkWell(
+                        onTap: _openSmartScan,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          child: Row(children: [
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                  color: isUnknown
+                                      ? const Color(0xFFFFEBEE)
+                                      : const Color(0xFFE3EAF8),
+                                  borderRadius: BorderRadius.circular(9)),
+                              child: Center(
+                                  child: Text(
+                                      scan['emoji']?.toString() ??
+                                          (isUnknown ? '❓' : '📦'),
+                                      style: const TextStyle(fontSize: 15))),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                  Text(name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: isUnknown
+                                              ? const Color(0xFFC62828)
+                                              : ink,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600)),
+                                  Text(scan['barcode']?.toString() ?? '',
+                                      style: const TextStyle(
+                                          color: muted,
+                                          fontSize: 10,
+                                          fontFamily: 'monospace')),
+                                ])),
+                            const SizedBox(width: 8),
+                            Text(_friendlyTransactionTime(scan['createdAt']),
+                                style: const TextStyle(
+                                    color: Color(0xFF9AA6BA), fontSize: 10)),
+                          ]),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
-    paint.color = const Color(0xFFD4AF37).withValues(alpha: 0.9);
-    canvas.drawRRect(leftPanel, paint);
-
-    final phone = RRect.fromRectAndRadius(
-      Rect.fromLTWH(size.width * (30 / 56), size.height * (26 / 56), size.width * (16 / 56), size.height * (22 / 56)),
-      const Radius.circular(4),
-    );
-    paint.color = Colors.white.withValues(alpha: 0.95);
-    canvas.drawRRect(phone, paint);
-
-    final phoneScreen = RRect.fromRectAndRadius(
-      Rect.fromLTWH(size.width * (32 / 56), size.height * (30 / 56), size.width * (12 / 56), size.height * (14 / 56)),
-      const Radius.circular(2),
-    );
-    paint.color = const Color(0xFF123A8F).withValues(alpha: 0.8);
-    canvas.drawRRect(phoneScreen, paint);
-
-    paint.color = const Color(0xFF666666);
-    canvas.drawCircle(Offset(size.width * (38 / 56), size.height * (46 / 56)), size.width * (1.5 / 56), paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class DashboardScreen extends StatelessWidget {
-  const DashboardScreen();
-
-  @override
   Widget build(BuildContext context) {
+    final summary = _dashboard.summary;
+    final paymentBreakdown = _dashboard.paymentBreakdown['MPESA'];
+    final mpesa =
+        paymentBreakdown is Map ? paymentBreakdown : const <String, dynamic>{};
     final quickStats = [
-      {'label': 'Credit Out', 'value': 'KSh 12,300', 'sub': '8 customers', 'icon': '🔴'},
-      {'label': 'Stock Value', 'value': 'KSh 312,000', 'sub': '486 SKUs', 'icon': '📦'},
-      {'label': 'Low Stock', 'value': '12 items', 'sub': 'Need reorder', 'icon': '⚠️'},
-      {'label': 'Transactions', 'value': '156', 'sub': 'Today', 'icon': '🧾'},
+      {
+        'label': 'Credit Out',
+        'value': _money(summary['creditOut']),
+        'sub': '${_number(summary['creditCustomerCount']).toInt()} customers',
+        'icon': '🔴'
+      },
+      {
+        'label': 'Stock Value',
+        'value': _money(summary['inventoryValue']),
+        'sub': '${_number(summary['activeSkuCount']).toInt()} SKUs',
+        'icon': '📦'
+      },
+      {
+        'label': 'Low Stock',
+        'value': '${_number(summary['lowStockCount']).toInt()} items',
+        'sub': 'Need reorder',
+        'icon': '⚠️'
+      },
+      {
+        'label': 'Transactions',
+        'value': '${_number(summary['todayTransactionCount']).toInt()}',
+        'sub': 'Today',
+        'icon': '🧾'
+      },
     ];
 
     final stats = [
-      {'icon': '📈', 'value': 'KSh 84,250', 'label': "Today's Sales", 'sub': '+12% vs yesterday', 'bg': const LinearGradient(colors: [navy, Color(0xFF1A4FBF)])},
-      {'icon': '💰', 'value': 'KSh 22,100', 'label': "Today's Profit", 'sub': '26.2% margin', 'bg': const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF388E3C)])},
-      {'icon': '💵', 'value': 'KSh 45,800', 'label': 'Cash in Till', 'sub': 'Last count: 2h ago', 'bg': const LinearGradient(colors: [gold, Color(0xFFF0D060)])},
-      {'icon': '📱', 'value': 'KSh 38,450', 'label': 'M-Pesa Sales', 'sub': '47 transactions', 'bg': const LinearGradient(colors: [Color(0xFF005F2E), Color(0xFF00A651)])},
+      {
+        'icon': '📈',
+        'value': _money(summary['todayRevenue']),
+        'label': "Today's Sales",
+        'sub':
+            '${_number(summary['todayTransactionCount']).toInt()} transactions',
+        'bg': const LinearGradient(colors: [navy, Color(0xFF1A4FBF)])
+      },
+      {
+        'icon': '💰',
+        'value': _money(summary['todayProfit']),
+        'label': "Today's Net Profit",
+        'sub':
+            '${_number(summary['profitMarginPercentage']).toStringAsFixed(1)}% margin',
+        'bg':
+            const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF388E3C)])
+      },
+      {
+        'icon': '💵',
+        'value': _money(summary['cashInTill']),
+        'label': 'Cash in Till',
+        'sub': 'Open sessions',
+        'bg': const LinearGradient(colors: [gold, Color(0xFFF0D060)])
+      },
+      {
+        'icon': '📱',
+        'value': _money(mpesa['amount']),
+        'label': 'M-Pesa Sales',
+        'sub': '${_number(mpesa['transactions']).toInt()} transactions',
+        'bg':
+            const LinearGradient(colors: [Color(0xFF005F2E), Color(0xFF00A651)])
+      },
     ];
 
-    final topProducts = [
-      {'name': 'Unga Jogoo 2kg', 'sold': 42, 'revenue': 'KSh 8,400', 'change': '+8%'},
-      {'name': 'Cooking Oil 1L', 'sold': 38, 'revenue': 'KSh 7,220', 'change': '+15%'},
-      {'name': 'Sugar 1kg', 'sold': 35, 'revenue': 'KSh 4,900', 'change': '-3%'},
-      {'name': 'Blue Band 500g', 'sold': 29, 'revenue': 'KSh 4,350', 'change': '+5%'},
-      {'name': 'Milk 500ml', 'sold': 27, 'revenue': 'KSh 2,700', 'change': '+22%'},
-    ];
+    final topProducts = _dashboard.topProducts
+        .map((item) => {
+              'name': item['name']?.toString() ?? 'Product',
+              'sold': _number(item['units']).toInt(),
+              'revenue': _money(item['revenue']),
+              'change': 'Today',
+            })
+        .toList();
 
-    final recentTx = [
-      {'time': '14:32', 'customer': 'Walk-in', 'amount': 'KSh 1,250', 'method': 'Cash', 'items': 5, 'icon': '💵', 'color': const Color(0xFFE3EAF8)},
-      {'time': '14:18', 'customer': 'Jane Mwangi', 'amount': 'KSh 3,400', 'method': 'M-Pesa', 'items': 8, 'icon': '📱', 'color': const Color(0xFFE8F5E9)},
-      {'time': '13:55', 'customer': 'Walk-in', 'amount': 'KSh 650', 'method': 'Cash', 'items': 2, 'icon': '💵', 'color': const Color(0xFFE3EAF8)},
-      {'time': '13:41', 'customer': 'Peter Otieno', 'amount': 'KSh 5,200', 'method': 'Credit', 'items': 14, 'icon': '📝', 'color': const Color(0xFFFFEBEE)},
-    ];
+    final recentTx = _dashboard.recentTransactions.map((item) {
+      final method = item['method']?.toString() ?? 'Unknown';
+      return {
+        'time': _friendlyTransactionTime(item['time']),
+        'customer': item['customer']?.toString() ?? 'Walk-in',
+        'amount': _money(item['amount']),
+        'method': method,
+        'items': _number(item['items']).toInt(),
+        'icon': method == 'M-Pesa'
+            ? '📱'
+            : method == 'Credit'
+                ? '📝'
+                : '💵',
+        'color': method == 'M-Pesa'
+            ? const Color(0xFFE8F5E9)
+            : method == 'Credit'
+                ? const Color(0xFFFFEBEE)
+                : const Color(0xFFE3EAF8),
+      };
+    }).toList();
 
-    return ListView(
-      padding: EdgeInsets.zero,
+    final scanActivity = _dashboard.scanActivity;
+    final scanCounts = scanActivity['counts'] is Map
+        ? scanActivity['counts'] as Map
+        : const <dynamic, dynamic>{};
+    final recentScans = (scanActivity['recent'] as List? ?? const [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList()
+      ..sort((left, right) {
+        final leftTime =
+            DateTime.tryParse(left['createdAt']?.toString() ?? '') ??
+                DateTime(0);
+        final rightTime =
+            DateTime.tryParse(right['createdAt']?.toString() ?? '') ??
+                DateTime(0);
+        return rightTime.compareTo(leftTime);
+      });
+
+    return Column(
       children: [
         Container(
           padding: const EdgeInsets.fromLTRB(20, 52, 20, 20),
@@ -1798,43 +2728,74 @@ class DashboardScreen extends StatelessWidget {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text('Tue, 8 July 2026 · 14:45', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12, fontWeight: FontWeight.w500)),
+                      children: [
+                        Text('${_dashboard.metadata['date'] ?? ''}',
+                            style: TextStyle(
+                                color: Color(0x99FFFFFF),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500)),
                         SizedBox(height: 2),
-                        Text('MobiDuka Store', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                        Text('Welcome, $_userName',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800)),
                         SizedBox(height: 2),
-                        Text('Nairobi CBD · Shift: Morning', style: TextStyle(color: Color(0xFFE7C75B), fontSize: 12, fontWeight: FontWeight.w500)),
+                        Text(
+                            '${_dashboard.metadata['name'] ?? 'MobiDuka Store'} · Live data',
+                            style: TextStyle(
+                                color: Color(0xFFE7C75B),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500)),
                       ],
                     ),
                   ),
                   Row(
                     children: [
-                      Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: const [
-                            Icon(Icons.notifications_none_rounded, color: Colors.white, size: 18),
-                            Positioned(
-                              top: 7,
-                              right: 8,
-                              child: SizedBox(
-                                width: 8,
-                                height: 8,
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: Color(0xFFD32F2F),
-                                    shape: BoxShape.circle,
+                      InkWell(
+                        onTap: widget.onOpenNotifications,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Ink(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            alignment: Alignment.center,
+                            children: [
+                              const Icon(Icons.notifications_none_rounded,
+                                  color: Colors.white, size: 18),
+                              if (_unreadNotifications > 0)
+                                Positioned(
+                                  top: -5,
+                                  right: -5,
+                                  child: Container(
+                                    constraints:
+                                        const BoxConstraints(minWidth: 18),
+                                    height: 18,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4),
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFD32F2F),
+                                      borderRadius: BorderRadius.circular(99),
+                                    ),
+                                    child: Text(
+                                      _unreadNotifications > 99
+                                          ? '99+'
+                                          : '$_unreadNotifications',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w800),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -1845,7 +2806,8 @@ class DashboardScreen extends StatelessWidget {
                           color: Colors.white.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(Icons.more_horiz, color: Colors.white, size: 18),
+                        child: const Icon(Icons.more_horiz,
+                            color: Colors.white, size: 18),
                       ),
                     ],
                   ),
@@ -1853,7 +2815,7 @@ class DashboardScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               SizedBox(
-                height: 74,
+                height: 82,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: quickStats.length,
@@ -1867,16 +2829,38 @@ class DashboardScreen extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 1),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.12),
+                            width: 1),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('${item['icon']} ${item['label']}', style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                          Text(
+                            '${item['icon']} ${item['label']}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Color(0x99FFFFFF), fontSize: 11),
+                          ),
                           const SizedBox(height: 4),
-                          Text(item['value'] as String, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                          Text(
+                            item['value'] as String,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700),
+                          ),
                           const SizedBox(height: 2),
-                          Text(item['sub'] as String, style: const TextStyle(color: Color(0x66FFFFFF), fontSize: 10)),
+                          Text(
+                            item['sub'] as String,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Color(0x66FFFFFF), fontSize: 10),
+                          ),
                         ],
                       ),
                     );
@@ -1886,326 +2870,771 @@ class DashboardScreen extends StatelessWidget {
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-          child: Column(
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
             children: [
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: 1.5,
-                children: stats.map((item) {
-                  final bg = item['bg'] as LinearGradient;
-                  return Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      gradient: bg,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          right: -8,
-                          top: -8,
-                          child: Container(
-                            width: 56,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white.withValues(alpha: 0.08),
-                            ),
-                          ),
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(item['icon'] as String, style: const TextStyle(fontSize: 22)),
-                            const Spacer(),
-                            Text(item['value'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-                            const SizedBox(height: 2),
-                            Text(item['label'] as String, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 10)),
-                            const SizedBox(height: 2),
-                            Text(item['sub'] as String, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: const [BoxShadow(color: Color(0x11000000), blurRadius: 8, offset: Offset(0, 2))],
-                ),
+              Padding(
+                padding: EdgeInsets.zero,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Quick Actions', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink)),
-                    const SizedBox(height: 14),
+                    if (_loading) const LinearProgressIndicator(color: gold),
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(_error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                color: Color(0xFFD32F2F), fontSize: 12)),
+                      ),
                     GridView.count(
-                      crossAxisCount: 4,
+                      crossAxisCount: 2,
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 10,
-                      crossAxisSpacing: 10,
-                      childAspectRatio: 0.84,
-                      children: [
-                        {'label': 'New Sale', 'icon': '🛒', 'color': navy, 'screen': 'pos'},
-                        {'label': 'Add Stock', 'icon': '📦', 'color': const Color(0xFF2E7D32), 'screen': 'inventory'},
-                        {'label': 'Add Expense', 'icon': '💸', 'color': const Color(0xFFD32F2F), 'screen': 'more'},
-                        {'label': 'View Report', 'icon': '📊', 'color': gold, 'screen': 'reports'},
-                      ].map((item) {
-                        final color = item['color'] as Color;
-                        return Column(
-                          children: [
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: color.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(12),
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: 1.42,
+                      children: stats.map((item) {
+                        final bg = item['bg'] as LinearGradient;
+                        return Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            gradient: bg,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                right: -8,
+                                top: -8,
+                                child: Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.white.withValues(alpha: 0.08),
+                                  ),
+                                ),
                               ),
-                              child: Center(child: Text(item['icon'] as String, style: const TextStyle(fontSize: 20))),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              item['label'] as String,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color, height: 1.2),
-                            ),
-                          ],
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(item['icon'] as String,
+                                      style: const TextStyle(fontSize: 22)),
+                                  const Spacer(),
+                                  Text(item['value'] as String,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 15)),
+                                  const SizedBox(height: 2),
+                                  Text(item['label'] as String,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Color(0xCCFFFFFF),
+                                          fontSize: 10)),
+                                  const SizedBox(height: 2),
+                                  Text(item['sub'] as String,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600)),
+                                ],
+                              ),
+                            ],
+                          ),
                         );
                       }).toList(),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: const [BoxShadow(color: Color(0x11000000), blurRadius: 8, offset: Offset(0, 2))],
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        const Expanded(child: Text('Top Selling Today', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink))),
-                        TextButton(
-                          onPressed: () {},
-                          child: const Text('See all', style: TextStyle(color: navy, fontSize: 12, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 16),
+                    if (false)
+                      Container(
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x11000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 2))
+                          ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    ...topProducts.asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final p = entry.value;
-                      final isLast = i == topProducts.length - 1;
-                      return Padding(
-                        padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
-                        child: Row(
+                        child: Column(
                           children: [
                             Container(
-                              width: 32,
-                              height: 32,
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 14, 16, 14),
                               decoration: const BoxDecoration(
-                                gradient: LinearGradient(colors: [navy, Color(0xFF1A4FBF)]),
-                                borderRadius: BorderRadius.all(Radius.circular(10)),
-                              ),
-                              child: Center(child: Text('${i + 1}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13))),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                                  gradient:
+                                      LinearGradient(colors: [ink, navy])),
+                              child: Row(
                                 children: [
-                                  Text(p['name'] as String, style: const TextStyle(color: ink, fontWeight: FontWeight.w600, fontSize: 13), overflow: TextOverflow.ellipsis),
-                                  const SizedBox(height: 2),
-                                  Text('${p['sold']} units sold', style: const TextStyle(color: muted, fontSize: 11)),
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: gold.withValues(alpha: 0.20),
+                                      borderRadius: BorderRadius.circular(11),
+                                      border: Border.all(
+                                          color: gold.withValues(alpha: 0.4)),
+                                    ),
+                                    child: const Icon(
+                                        Icons.qr_code_scanner_rounded,
+                                        color: gold,
+                                        size: 20),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text('SmartScan™',
+                                                style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 13,
+                                                    fontWeight:
+                                                        FontWeight.w700)),
+                                            SizedBox(width: 7),
+                                            DecoratedBox(
+                                              decoration: BoxDecoration(
+                                                  color: Color(0x40D4AF37),
+                                                  borderRadius:
+                                                      BorderRadius.all(
+                                                          Radius.circular(99))),
+                                              child: Padding(
+                                                padding: EdgeInsets.symmetric(
+                                                    horizontal: 8, vertical: 2),
+                                                child: Text('QUICK ACTION',
+                                                    style: TextStyle(
+                                                        color: gold,
+                                                        fontSize: 9,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        letterSpacing: 0.5)),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                            'Scan any product barcode instantly',
+                                            style: TextStyle(
+                                                color: Color(0x99FFFFFF),
+                                                fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  FilledButton(
+                                    onPressed: _openSmartScan,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: gold,
+                                      foregroundColor: ink,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 8),
+                                      minimumSize: const Size(0, 0),
+                                    ),
+                                    child: const Text('Scan',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700)),
+                                  ),
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(p['revenue'] as String, style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 12)),
-                                const SizedBox(height: 2),
-                                Text(
-                                  p['change'] as String,
-                                  style: TextStyle(
-                                    color: (p['change'] as String).startsWith('+') ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Row(
+                                children: [
+                                  _scanMetric(
+                                      '${_number(scanCounts['FOUND']).toInt()}',
+                                      'Barcodes',
+                                      navy),
+                                  _scanMetric(
+                                      '${_number(scanCounts['UNKNOWN']).toInt()}',
+                                      'Unknown',
+                                      const Color(0xFFD32F2F)),
+                                  _scanMetric(
+                                      '${_number(scanCounts['MANUAL']).toInt()}',
+                                      'Manual',
+                                      muted,
+                                      isLast: true),
+                                ],
+                              ),
+                            ),
+                            const Divider(height: 1, color: Color(0xFFE8ECF3)),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('RECENT SCANS',
+                                      style: TextStyle(
+                                          color: muted,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: 0.5)),
+                                  const SizedBox(height: 8),
+                                  if (recentScans.isEmpty)
+                                    const Padding(
+                                      padding: EdgeInsets.only(bottom: 8),
+                                      child: Text('No scans recorded yet.',
+                                          style: TextStyle(
+                                              color: muted, fontSize: 12)),
+                                    ),
+                                  ...recentScans
+                                      .take(10)
+                                      .toList()
+                                      .asMap()
+                                      .entries
+                                      .map((entry) {
+                                    final scan = entry.value;
+                                    final isUnknown =
+                                        scan['status']?.toString() == 'UNKNOWN';
+                                    final name = scan['name']?.toString() ??
+                                        (isUnknown
+                                            ? 'Unknown Product'
+                                            : 'Product');
+                                    return InkWell(
+                                      onTap: _openSmartScan,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 7),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              width: 32,
+                                              height: 32,
+                                              decoration: BoxDecoration(
+                                                  color: isUnknown
+                                                      ? const Color(0xFFFFEBEE)
+                                                      : const Color(0xFFE3EAF8),
+                                                  borderRadius:
+                                                      BorderRadius.circular(9)),
+                                              child: Center(
+                                                  child: Text(
+                                                      scan['emoji']
+                                                              ?.toString() ??
+                                                          (isUnknown
+                                                              ? '❓'
+                                                              : '📦'),
+                                                      style: const TextStyle(
+                                                          fontSize: 15))),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(name,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                          color: isUnknown
+                                                              ? const Color(
+                                                                  0xFFC62828)
+                                                              : ink,
+                                                          fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w600)),
+                                                  Text(
+                                                      scan['barcode']
+                                                              ?.toString() ??
+                                                          '',
+                                                      style: const TextStyle(
+                                                          color: muted,
+                                                          fontSize: 10,
+                                                          fontFamily:
+                                                              'monospace')),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                                _friendlyTransactionTime(
+                                                    scan['createdAt']),
+                                                style: const TextStyle(
+                                                    color: Color(0xFF9AA6BA),
+                                                    fontSize: 10)),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
                             ),
                           ],
                         ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: const [BoxShadow(color: Color(0x11000000), blurRadius: 8, offset: Offset(0, 2))],
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        const Expanded(child: Text('Recent Transactions', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink))),
-                        TextButton(
-                          onPressed: () {},
-                          child: const Text('View all', style: TextStyle(color: navy, fontSize: 12, fontWeight: FontWeight.w600)),
-                        ),
-                      ],
+                      ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x11000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Quick Actions',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: ink)),
+                          const SizedBox(height: 14),
+                          GridView.count(
+                            crossAxisCount: 4,
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            mainAxisSpacing: 10,
+                            crossAxisSpacing: 10,
+                            childAspectRatio: 0.72,
+                            children: [
+                              {
+                                'label': 'New Sale',
+                                'icon': '🛒',
+                                'color': navy,
+                                'screen': 'pos'
+                              },
+                              {
+                                'label': 'Add Stock',
+                                'icon': '📦',
+                                'color': const Color(0xFF2E7D32),
+                                'screen': 'inventory'
+                              },
+                              {
+                                'label': 'Add Expense',
+                                'icon': '💸',
+                                'color': const Color(0xFFD32F2F),
+                                'screen': 'expenses'
+                              },
+                              {
+                                'label': 'View Report',
+                                'icon': '📊',
+                                'color': gold,
+                                'screen': 'reports'
+                              },
+                            ].map((item) {
+                              final color = item['color'] as Color;
+                              return Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: () => widget
+                                      .onQuickAction(item['screen'] as String),
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: Ink(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: color.withValues(alpha: 0.08),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        Container(
+                                          width: 42,
+                                          height: 42,
+                                          decoration: BoxDecoration(
+                                            color:
+                                                color.withValues(alpha: 0.12),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Center(
+                                              child: Text(
+                                                  item['icon'] as String,
+                                                  style: const TextStyle(
+                                                      fontSize: 20))),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          item['label'] as String,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w600,
+                                              color: color,
+                                              height: 1.2),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    ...recentTx.asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final item = entry.value;
-                      final isLast = i == recentTx.length - 1;
-                      final method = item['method'] as String;
-                      final badgeColor = method == 'M-Pesa'
-                          ? const Color(0xFFE8F5E9)
-                          : method == 'Credit'
-                              ? const Color(0xFFFFEBEE)
-                              : const Color(0xFFE3EAF8);
-                      final badgeTextColor = method == 'M-Pesa'
-                          ? const Color(0xFF2E7D32)
-                          : method == 'Credit'
-                              ? const Color(0xFFD32F2F)
-                              : const Color(0xFF123A8F);
-
-                      return Padding(
-                        padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: item['color'] as Color,
-                                borderRadius: BorderRadius.circular(12),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x11000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Expanded(
+                                  child: Text('Top Selling Today',
+                                      style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: ink))),
+                              TextButton(
+                                onPressed: () {},
+                                child: const Text('See all',
+                                    style: TextStyle(
+                                        color: navy,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600)),
                               ),
-                              child: Center(child: Text(item['icon'] as String, style: const TextStyle(fontSize: 16))),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(item['customer'] as String, style: const TextStyle(color: ink, fontWeight: FontWeight.w600, fontSize: 13)),
-                                  const SizedBox(height: 2),
-                                  Text('${item['items']} items · ${item['time']}', style: const TextStyle(color: muted, fontSize: 11)),
-                                ],
-                              ),
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(item['amount'] as String, style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 13)),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: badgeColor,
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: Text(
-                                    method,
-                                    style: TextStyle(color: badgeTextColor, fontSize: 10, fontWeight: FontWeight.w700),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFFF8E1),
-                  borderRadius: BorderRadius.all(Radius.circular(16)),
-                  border: Border.fromBorderSide(BorderSide(color: Color(0xFFFFE082))),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        const Text('⚠️', style: TextStyle(fontSize: 20)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Text('12 Items Low on Stock', style: TextStyle(color: Color(0xFF5D4037), fontSize: 13, fontWeight: FontWeight.w700)),
-                              SizedBox(height: 2),
-                              Text('Action needed before end of day', style: TextStyle(color: Color(0xFF8D6E63), fontSize: 11)),
                             ],
                           ),
-                        ),
-                        TextButton(
-                          onPressed: () {},
-                          style: TextButton.styleFrom(
-                            backgroundColor: const Color(0xFFF9A825),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            minimumSize: const Size(0, 0),
-                          ),
-                          child: const Text('View', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    ...[
-                      {'label': 'Panadol 500mg', 'value': '3 left'},
-                      {'label': 'Royco 75g', 'value': '5 left'},
-                      {'label': 'Omo 400g', 'value': '8 left'},
-                    ].asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final item = entry.value;
-                      return Padding(
-                        padding: EdgeInsets.only(top: i > 0 ? 6 : 0),
-                        child: Row(
-                          children: [
-                            Container(width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFFF9A825), shape: BoxShape.circle)),
-                            const SizedBox(width: 8),
-                            Expanded(child: Text(item['label'] as String, style: const TextStyle(color: Color(0xFF5D4037), fontSize: 12))),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFEDB3),
-                                borderRadius: BorderRadius.circular(999),
+                          const SizedBox(height: 4),
+                          if (topProducts.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.fromLTRB(4, 16, 4, 4),
+                              child: Center(
+                                child: Text(
+                                  'No completed sales recorded today.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: muted, fontSize: 12),
+                                ),
                               ),
-                              child: Text(item['value'] as String, style: const TextStyle(color: Color(0xFF5D4037), fontSize: 10, fontWeight: FontWeight.w700)),
                             ),
-                          ],
-                        ),
-                      );
-                    }),
+                          ...topProducts.asMap().entries.map((entry) {
+                            final i = entry.key;
+                            final p = entry.value;
+                            final isLast = i == topProducts.length - 1;
+                            return Padding(
+                              padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 32,
+                                    height: 32,
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                          colors: [navy, Color(0xFF1A4FBF)]),
+                                      borderRadius:
+                                          BorderRadius.all(Radius.circular(10)),
+                                    ),
+                                    child: Center(
+                                        child: Text('${i + 1}',
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 13))),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(p['name'] as String,
+                                            maxLines: 1,
+                                            style: const TextStyle(
+                                                color: ink,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 13),
+                                            overflow: TextOverflow.ellipsis),
+                                        const SizedBox(height: 2),
+                                        Text('${p['sold']} units sold',
+                                            style: const TextStyle(
+                                                color: muted, fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    width: 74,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        Text(p['revenue'] as String,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                color: ink,
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 12)),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          p['change'] as String,
+                                          style: TextStyle(
+                                            color: (p['change'] as String)
+                                                    .startsWith('+')
+                                                ? const Color(0xFF2E7D32)
+                                                : const Color(0xFFD32F2F),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x11000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Expanded(
+                                  child: Text('Recent Transactions',
+                                      style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: ink))),
+                              TextButton(
+                                onPressed: () {},
+                                child: const Text('View all',
+                                    style: TextStyle(
+                                        color: navy,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          ...recentTx.asMap().entries.map((entry) {
+                            final i = entry.key;
+                            final item = entry.value;
+                            final isLast = i == recentTx.length - 1;
+                            final method = item['method'] as String;
+                            final badgeColor = method == 'M-Pesa'
+                                ? const Color(0xFFE8F5E9)
+                                : method == 'Credit'
+                                    ? const Color(0xFFFFEBEE)
+                                    : const Color(0xFFE3EAF8);
+                            final badgeTextColor = method == 'M-Pesa'
+                                ? const Color(0xFF2E7D32)
+                                : method == 'Credit'
+                                    ? const Color(0xFFD32F2F)
+                                    : const Color(0xFF123A8F);
+
+                            return Padding(
+                              padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: item['color'] as Color,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Center(
+                                        child: Text(item['icon'] as String,
+                                            style:
+                                                const TextStyle(fontSize: 16))),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(item['customer'] as String,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                color: ink,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 13)),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                            '${item['items']} items · ${item['time']}',
+                                            style: const TextStyle(
+                                                color: muted, fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 82,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        Text(item['amount'] as String,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                color: ink,
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 13)),
+                                        const SizedBox(height: 4),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: badgeColor,
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            method,
+                                            style: TextStyle(
+                                                color: badgeTextColor,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w700),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _smartScanCard(scanCounts, recentScans),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFFF8E1),
+                        borderRadius: BorderRadius.all(Radius.circular(16)),
+                        border: Border.fromBorderSide(
+                            BorderSide(color: Color(0xFFFFE082))),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Text('⚠️', style: TextStyle(fontSize: 20)),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                        '${_number(summary['lowStockCount']).toInt()} Items Low on Stock',
+                                        style: const TextStyle(
+                                            color: Color(0xFF5D4037),
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700)),
+                                    SizedBox(height: 2),
+                                    Text('Action needed before end of day',
+                                        style: TextStyle(
+                                            color: Color(0xFF8D6E63),
+                                            fontSize: 11)),
+                                  ],
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () {},
+                                style: TextButton.styleFrom(
+                                  backgroundColor: const Color(0xFFF9A825),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 8),
+                                  minimumSize: const Size(0, 0),
+                                ),
+                                child: const Text('View',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          ..._dashboard.lowStockItems
+                              .take(10)
+                              .toList()
+                              .asMap()
+                              .entries
+                              .map((entry) {
+                            final i = entry.key;
+                            final item = entry.value;
+                            return Padding(
+                              padding: EdgeInsets.only(top: i > 0 ? 6 : 0),
+                              child: Row(
+                                children: [
+                                  Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: const BoxDecoration(
+                                          color: Color(0xFFF9A825),
+                                          shape: BoxShape.circle)),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                      child: Text(
+                                          item['name']?.toString() ?? 'Product',
+                                          style: const TextStyle(
+                                              color: Color(0xFF5D4037),
+                                              fontSize: 12))),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFEDB3),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                        '${_number(item['quantity']).toInt()} left',
+                                        style: const TextStyle(
+                                            color: Color(0xFF5D4037),
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700)),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -2221,14 +3650,33 @@ class StatCard extends StatelessWidget {
   const StatCard(this.icon, this.value, this.label, this.subtitle);
   final String icon, value, label, subtitle;
   @override
-  Widget build(BuildContext context) => Card(color: navy, child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(icon, style: const TextStyle(fontSize: 20)), const Spacer(), Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)), Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)), Text(subtitle, style: const TextStyle(color: Colors.white, fontSize: 10))])));
+  Widget build(BuildContext context) => Card(
+      color: navy,
+      child: Padding(
+          padding: const EdgeInsets.all(12),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(icon, style: const TextStyle(fontSize: 20)),
+            const Spacer(),
+            Text(value,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w800)),
+            Text(label,
+                style: const TextStyle(color: Colors.white70, fontSize: 11)),
+            Text(subtitle,
+                style: const TextStyle(color: Colors.white, fontSize: 10))
+          ])));
 }
 
 class ActionIcon extends StatelessWidget {
   const ActionIcon(this.icon, this.label);
   final String icon, label;
   @override
-  Widget build(BuildContext context) => Column(children: [Text(icon, style: const TextStyle(fontSize: 25)), const SizedBox(height: 4), Text(label, style: const TextStyle(fontSize: 10))]);
+  Widget build(BuildContext context) => Column(children: [
+        Text(icon, style: const TextStyle(fontSize: 25)),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(fontSize: 10))
+      ]);
 }
 
 class Section extends StatelessWidget {
@@ -2236,7 +3684,18 @@ class Section extends StatelessWidget {
   final String title;
   final Widget child;
   @override
-  Widget build(BuildContext context) => Card(margin: const EdgeInsets.only(bottom: 12), child: Padding(padding: const EdgeInsets.fromLTRB(14, 12, 14, 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(color: ink, fontWeight: FontWeight.w800)), const SizedBox(height: 5), child])));
+  Widget build(BuildContext context) => Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title,
+                style:
+                    const TextStyle(color: ink, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 5),
+            child
+          ])));
 }
 
 class POSScreen extends StatefulWidget {
@@ -2254,7 +3713,8 @@ class _POSScreenState extends State<POSScreen> {
   final MpesaService _mpesaService = MpesaService();
   final SmsWatcherService _smsWatcherService = SmsWatcherService();
   final PrinterService _printerService = PrinterService();
-  final TextEditingController _mpesaPhoneController = TextEditingController(text: '254');
+  final TextEditingController _mpesaPhoneController =
+      TextEditingController(text: '254');
   List<BluetoothDevice> _pairedPrinters = const [];
   BluetoothDevice? _selectedPrinter;
   bool _isSearchingPrinters = false;
@@ -2276,19 +3736,16 @@ class _POSScreenState extends State<POSScreen> {
   String _completedPaymentMethod = 'cash';
   int discount = 0;
   String view = 'pos';
+  bool showProductTiles = true;
 
-  final List<String> categories = const [
-    'All',
-    'Flour',
-    'Oils',
-    'Sugar',
-    'Dairy',
-    'Pharma',
-    'Beverages',
-    'Spreads',
-    'Spices',
-    'Bakery',
-  ];
+  // Derive filters from the server-backed catalogue, like the web POS does.
+  List<String> get categories => <String>[
+        'All',
+        ...products
+            .map((product) => product.category)
+            .where((name) => name.isNotEmpty && name != 'Uncategorized')
+            .toSet(),
+      ];
 
   final Map<String, int> cart = {};
 
@@ -2317,17 +3774,8 @@ class _POSScreenState extends State<POSScreen> {
   Future<void> _openBarcodeScanner() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => BarcodeScannerView(
-          onProductScanned: (product) => addToCart(product),
-          onCustomerQrScanned: (account) {
-            setState(() {
-              _selectedCreditAccount = account;
-              paymentMethod = 'credit';
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Customer attached: ${account.customer}'), backgroundColor: const Color(0xFF2E7D32)),
-            );
-          },
+        builder: (_) => SmartScanScreen(
+          onProductScanned: addToCartAndOpenCart,
         ),
       ),
     );
@@ -2336,21 +3784,33 @@ class _POSScreenState extends State<POSScreen> {
   void _printReceiptInBackground() {
     final printer = _selectedPrinter;
     if (printer == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pair a Bluetooth printer before printing.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Pair a Bluetooth printer before printing.')));
       return;
     }
 
-    unawaited(_printerService.printReceipt(
+    unawaited(_printerService
+        .printReceipt(
       device: printer,
       storeName: 'MobiDuka Store',
-      invoiceNo: _completedSaleId ?? 'RCPT-${DateTime.now().millisecondsSinceEpoch % 100000}',
+      invoiceNo: _completedSaleId ??
+          'RCPT-${DateTime.now().millisecondsSinceEpoch % 100000}',
       totalAmount: _completedTotal.toDouble(),
-      paymentMode: _completedPaymentMethod == 'mpesa' ? 'MPESA (${_receiptToken ?? 'VERIFIED'})' : _completedPaymentMethod.toUpperCase(),
+      paymentMode: _completedPaymentMethod == 'mpesa'
+          ? 'MPESA (${_receiptToken ?? 'VERIFIED'})'
+          : _completedPaymentMethod.toUpperCase(),
       items: receiptItems,
-    ).then((_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Receipt sent to printer.')));
+    )
+        .then((_) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Receipt sent to printer.')));
     }).catchError((_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFFD32F2F), content: Text('Unable to print receipt.')));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFFD32F2F),
+            content: Text('Unable to print receipt.')));
     }));
   }
 
@@ -2380,21 +3840,37 @@ class _POSScreenState extends State<POSScreen> {
             children: [
               pw.Container(
                 width: double.infinity,
-                padding: const pw.EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                padding:
+                    const pw.EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                 color: green,
                 child: pw.Column(
                   children: [
-                    pw.Text('MobiDuka POS', style: pw.TextStyle(color: pdf.PdfColors.white, fontSize: 17, fontWeight: pw.FontWeight.bold)),
+                    pw.Text('MobiDuka POS',
+                        style: pw.TextStyle(
+                            color: pdf.PdfColors.white,
+                            fontSize: 17,
+                            fontWeight: pw.FontWeight.bold)),
                     pw.SizedBox(height: 3),
-                    pw.Text('SALE COMPLETE', style: pw.TextStyle(color: pdf.PdfColors.white, fontSize: 10)),
+                    pw.Text('SALE COMPLETE',
+                        style: pw.TextStyle(
+                            color: pdf.PdfColors.white, fontSize: 10)),
                   ],
                 ),
               ),
               pw.SizedBox(height: 10),
-              pw.Text('MobiDuka Store · Nairobi CBD', style: pw.TextStyle(color: mutedGrey, fontSize: 9, fontWeight: pw.FontWeight.bold)),
+              pw.Text('MobiDuka Store · Nairobi CBD',
+                  style: pw.TextStyle(
+                      color: mutedGrey,
+                      fontSize: 9,
+                      fontWeight: pw.FontWeight.bold)),
               pw.SizedBox(height: 3),
-              pw.Text('Receipt #$receiptNumber', style: pw.TextStyle(color: inkBlack, fontSize: 10, fontWeight: pw.FontWeight.bold)),
-              pw.Text(generatedAt, style: pw.TextStyle(color: mutedGrey, fontSize: 9)),
+              pw.Text('Receipt #$receiptNumber',
+                  style: pw.TextStyle(
+                      color: inkBlack,
+                      fontSize: 10,
+                      fontWeight: pw.FontWeight.bold)),
+              pw.Text(generatedAt,
+                  style: pw.TextStyle(color: mutedGrey, fontSize: 9)),
               pw.SizedBox(height: 8),
               pw.Divider(color: pdf.PdfColor.fromInt(0xFFE8ECF4)),
               pw.SizedBox(height: 5),
@@ -2404,34 +3880,57 @@ class _POSScreenState extends State<POSScreen> {
                   child: pw.Row(
                     mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                     children: [
-                      pw.Expanded(child: pw.Text('${item['name']} x ${item['qty']}', style: pw.TextStyle(color: inkBlack, fontSize: 9))),
-                      pw.Text('KSh ${(item['price'] as int) * (item['qty'] as int)}', style: pw.TextStyle(color: inkBlack, fontSize: 9)),
+                      pw.Expanded(
+                          child: pw.Text('${item['name']} x ${item['qty']}',
+                              style:
+                                  pw.TextStyle(color: inkBlack, fontSize: 9))),
+                      pw.Text(
+                          'KSh ${(item['price'] as int) * (item['qty'] as int)}',
+                          style: pw.TextStyle(color: inkBlack, fontSize: 9)),
                     ],
                   ),
                 ),
               ),
               pw.Divider(color: pdf.PdfColor.fromInt(0xFFE8ECF4)),
               pw.SizedBox(height: 5),
-              pw.Align(alignment: pw.Alignment.centerRight, child: pw.Text('Subtotal  KSh $receiptSubtotal', style: pw.TextStyle(color: mutedGrey, fontSize: 9))),
+              pw.Align(
+                  alignment: pw.Alignment.centerRight,
+                  child: pw.Text('Subtotal  KSh $receiptSubtotal',
+                      style: pw.TextStyle(color: mutedGrey, fontSize: 9))),
               if (receiptDiscountAmount > 0)
-                pw.Align(alignment: pw.Alignment.centerRight, child: pw.Text('Discount  -KSh $receiptDiscountAmount', style: pw.TextStyle(color: pdf.PdfColors.red, fontSize: 9))),
+                pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text('Discount  -KSh $receiptDiscountAmount',
+                        style: pw.TextStyle(
+                            color: pdf.PdfColors.red, fontSize: 9))),
               pw.SizedBox(height: 4),
               pw.Container(
                 width: double.infinity,
-                padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 6),
+                padding:
+                    const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 6),
                 color: pdf.PdfColor.fromInt(0xFFE8F5E9),
                 child: pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
-                    pw.Text('TOTAL', style: pw.TextStyle(color: inkBlack, fontSize: 11, fontWeight: pw.FontWeight.bold)),
-                    pw.Text('KSh $receiptTotal', style: pw.TextStyle(color: green, fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                    pw.Text('TOTAL',
+                        style: pw.TextStyle(
+                            color: inkBlack,
+                            fontSize: 11,
+                            fontWeight: pw.FontWeight.bold)),
+                    pw.Text('KSh $receiptTotal',
+                        style: pw.TextStyle(
+                            color: green,
+                            fontSize: 12,
+                            fontWeight: pw.FontWeight.bold)),
                   ],
                 ),
               ),
               pw.SizedBox(height: 8),
-              pw.Text('Payment: $paymentLabel', style: pw.TextStyle(color: mutedGrey, fontSize: 9)),
+              pw.Text('Payment: $paymentLabel',
+                  style: pw.TextStyle(color: mutedGrey, fontSize: 9)),
               pw.SizedBox(height: 12),
-              pw.Text('Thank you for shopping with us.', style: pw.TextStyle(color: mutedGrey, fontSize: 8)),
+              pw.Text('Thank you for shopping with us.',
+                  style: pw.TextStyle(color: mutedGrey, fontSize: 8)),
             ],
           ),
         ),
@@ -2446,7 +3945,9 @@ class _POSScreenState extends State<POSScreen> {
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Receipt PDF is ready to download or share.')),
+      const SnackBar(
+          backgroundColor: Color(0xFF2E7D32),
+          content: Text('Receipt PDF is ready to download or share.')),
     );
   }
 
@@ -2459,8 +3960,35 @@ class _POSScreenState extends State<POSScreen> {
 
   void addToCart(Product product) {
     setState(() {
+      _upsertProductForCart(product);
       cart[product.name] = (cart[product.name] ?? 0) + 1;
     });
+  }
+
+  void addToCartAndOpenCart(Product product) {
+    setState(() {
+      // A SmartScan lookup can return a product that has not been loaded into
+      // the local POS catalogue yet. Cart calculations and rendering resolve
+      // items from `products`, so make it available before showing Cart.
+      _upsertProductForCart(product);
+      cart[product.name] = (cart[product.name] ?? 0) + 1;
+      view = 'cart';
+    });
+  }
+
+  void _upsertProductForCart(Product product) {
+    final index = products.indexWhere((item) {
+      if (product.barcode != null && item.barcode == product.barcode) {
+        return true;
+      }
+      return item.name == product.name;
+    });
+
+    if (index == -1) {
+      products.add(product);
+    } else {
+      products[index] = product;
+    }
   }
 
   void attachCreditAccount(CreditAccount account) {
@@ -2469,7 +3997,9 @@ class _POSScreenState extends State<POSScreen> {
       paymentMethod = 'credit';
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Customer attached: ${account.customer}'), backgroundColor: const Color(0xFF2E7D32)),
+      SnackBar(
+          content: Text('Customer attached: ${account.customer}'),
+          backgroundColor: const Color(0xFF2E7D32)),
     );
   }
 
@@ -2485,17 +4015,19 @@ class _POSScreenState extends State<POSScreen> {
   }
 
   List<Product> get visibleProducts => products.where((product) {
-    final matchesSearch = product.name.toLowerCase().contains(search.toLowerCase());
-    final matchesCategory = category == 'All' || product.category == category;
-    return matchesSearch && matchesCategory;
-  }).toList();
+        final matchesSearch =
+            product.name.toLowerCase().contains(search.toLowerCase());
+        final matchesCategory =
+            category == 'All' || product.category == category;
+        return matchesSearch && matchesCategory;
+      }).toList();
 
   int get cartCount => cart.values.fold<int>(0, (sum, count) => sum + count);
 
   int get subtotal => cart.entries.fold<int>(0, (sum, entry) {
-    final product = products.firstWhere((item) => item.name == entry.key);
-    return sum + (product.price * entry.value);
-  });
+        final product = products.firstWhere((item) => item.name == entry.key);
+        return sum + (product.price * entry.value);
+      });
 
   int get discountAmount => (subtotal * discount / 100).round();
 
@@ -2511,7 +4043,8 @@ class _POSScreenState extends State<POSScreen> {
     return _showCreditCustomerSheet(accounts);
   }
 
-  Future<CreditAccount?> _showCreditCustomerSheet(List<CreditAccount> accounts) {
+  Future<CreditAccount?> _showCreditCustomerSheet(
+      List<CreditAccount> accounts) {
     final searchController = TextEditingController();
     return showModalBottomSheet<CreditAccount>(
       context: context,
@@ -2523,7 +4056,8 @@ class _POSScreenState extends State<POSScreen> {
         onSelected: (account) => Navigator.of(sheetContext).pop(account),
         onAddCustomer: () async {
           final account = await _onboardCreditCustomer(sheetContext);
-          if (account != null && sheetContext.mounted) Navigator.of(sheetContext).pop(account);
+          if (account != null && sheetContext.mounted)
+            Navigator.of(sheetContext).pop(account);
         },
       ),
     );
@@ -2536,28 +4070,51 @@ class _POSScreenState extends State<POSScreen> {
       isScrollControlled: true,
       showDragHandle: true,
       builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.of(sheetContext).viewInsets.bottom + 24),
+        padding: EdgeInsets.fromLTRB(
+            16, 8, 16, MediaQuery.of(sheetContext).viewInsets.bottom + 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Select Credit Customer', style: TextStyle(color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
+            const Text('Select Credit Customer',
+                style: TextStyle(
+                    color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
-            const Text('Enter the customer name for this web preview credit sale.', style: TextStyle(color: muted, fontSize: 12)),
+            const Text(
+                'Enter the customer name for this web preview credit sale.',
+                style: TextStyle(color: muted, fontSize: 12)),
             const SizedBox(height: 14),
-            TextField(controller: nameController, autofocus: true, decoration: const InputDecoration(labelText: 'Customer name', border: OutlineInputBorder())),
+            TextField(
+                controller: nameController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                    labelText: 'Customer name', border: OutlineInputBorder())),
             const SizedBox(height: 14),
-            SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.of(sheetContext).pop(nameController.text.trim()), child: const Text('Continue with Customer'))),
+            SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                    onPressed: () => Navigator.of(sheetContext)
+                        .pop(nameController.text.trim()),
+                    child: const Text('Continue with Customer'))),
           ],
         ),
       ),
     );
     nameController.dispose();
     if (name == null || name.trim().isEmpty) return null;
-    return CreditAccount(customerId: 'web-preview-credit-customer', customer: name.trim(), phone: '', balance: 0, lastTransactionAt: null, transactionCount: 0, initials: name.trim().substring(0, 1).toUpperCase(), colorValue: 0xFFF9A825);
+    return CreditAccount(
+        customerId: 'web-preview-credit-customer',
+        customer: name.trim(),
+        phone: '',
+        balance: 0,
+        lastTransactionAt: null,
+        transactionCount: 0,
+        initials: name.trim().substring(0, 1).toUpperCase(),
+        colorValue: 0xFFF9A825);
   }
 
-  Future<CreditAccount?> _onboardCreditCustomer(BuildContext sheetContext) async {
+  Future<CreditAccount?> _onboardCreditCustomer(
+      BuildContext sheetContext) async {
     final nameController = TextEditingController();
     final phoneController = TextEditingController();
     final result = await showDialog<List<String>>(
@@ -2565,20 +4122,39 @@ class _POSScreenState extends State<POSScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Add Credit Customer'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Customer name')),
-          TextField(controller: phoneController, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone number')),
+          TextField(
+              controller: nameController,
+              decoration: const InputDecoration(labelText: 'Customer name')),
+          TextField(
+              controller: phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone number')),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(dialogContext).pop([nameController.text.trim(), phoneController.text.trim()]), child: const Text('Add Customer')),
+          TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(
+                  [nameController.text.trim(), phoneController.text.trim()]),
+              child: const Text('Add Customer')),
         ],
       ),
     );
     nameController.dispose();
     phoneController.dispose();
     if (result == null || result.first.isEmpty) return null;
-    final customerId = await _customerService.onboardOfflineCustomer(businessId: 'demo-business', name: result.first, phone: result.last);
-    final account = CreditAccount(customerId: customerId, customer: result.first, phone: result.last, balance: 0, lastTransactionAt: null, transactionCount: 0, initials: result.first.substring(0, 1).toUpperCase(), colorValue: 0xFF123A8F);
+    final customerId = await _customerService.onboardOfflineCustomer(
+        businessId: 'demo-business', name: result.first, phone: result.last);
+    final account = CreditAccount(
+        customerId: customerId,
+        customer: result.first,
+        phone: result.last,
+        balance: 0,
+        lastTransactionAt: null,
+        transactionCount: 0,
+        initials: result.first.substring(0, 1).toUpperCase(),
+        colorValue: 0xFF123A8F);
     await _creditService.saveCreditAccount(account);
     return account;
   }
@@ -2592,7 +4168,8 @@ class _POSScreenState extends State<POSScreen> {
           initialCustomerId: customerId,
         ),
         transitionsBuilder: (_, animation, __, child) => SlideTransition(
-          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero).animate(animation),
+          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+              .animate(animation),
           child: child,
         ),
       ),
@@ -2628,19 +4205,33 @@ class _POSScreenState extends State<POSScreen> {
       if (finishedSources == 2) completer.complete(lastFailure!);
     }
 
-    _mpesaService.pollTransactionStatus(checkoutRequestId: checkoutRequestId).then(handleResult).catchError((error) {
-      handleResult({'status': 'FAILED', 'message': 'Online M-Pesa verification failed: $error'});
+    _mpesaService
+        .pollTransactionStatus(checkoutRequestId: checkoutRequestId)
+        .then(handleResult)
+        .catchError((error) {
+      handleResult({
+        'status': 'FAILED',
+        'message': 'Online M-Pesa verification failed: $error'
+      });
     });
-    _smsWatcherService.startSmsIncomingWatcher(
-      targetAmount: amount,
-      customerPhone: phone,
-      onPaymentVerified: (_) {},
-    ).then((code) => handleResult({
-      'status': code == null ? 'TIMEOUT' : 'SUCCESS',
-      'receipt': code,
-      'message': code == null ? 'Offline SMS verification timed out.' : 'Payment verified from M-Pesa SMS.',
-    })).catchError((error) {
-      handleResult({'status': 'FAILED', 'message': 'Offline SMS verification failed: $error'});
+    _smsWatcherService
+        .startSmsIncomingWatcher(
+          targetAmount: amount,
+          customerPhone: phone,
+          onPaymentVerified: (_) {},
+        )
+        .then((code) => handleResult({
+              'status': code == null ? 'TIMEOUT' : 'SUCCESS',
+              'receipt': code,
+              'message': code == null
+                  ? 'Offline SMS verification timed out.'
+                  : 'Payment verified from M-Pesa SMS.',
+            }))
+        .catchError((error) {
+      handleResult({
+        'status': 'FAILED',
+        'message': 'Offline SMS verification failed: $error'
+      });
     });
 
     return completer.future;
@@ -2663,7 +4254,8 @@ class _POSScreenState extends State<POSScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             backgroundColor: Color(0xFFD32F2F),
-            content: Text('Your session has no business account. Please sign in again.'),
+            content: Text(
+                'Your session has no business account. Please sign in again.'),
           ),
         );
         return;
@@ -2678,19 +4270,26 @@ class _POSScreenState extends State<POSScreen> {
       if (result['success'] != true) {
         setState(() => _mpesaRequestPending = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: const Color(0xFFD32F2F), content: Text(result['message'] as String? ?? 'M-Pesa request failed.')),
+          SnackBar(
+              backgroundColor: const Color(0xFFD32F2F),
+              content: Text(
+                  result['message'] as String? ?? 'M-Pesa request failed.')),
         );
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(backgroundColor: navy, content: Text('Awaiting Customer PIN Entry...')),
+        const SnackBar(
+            backgroundColor: navy,
+            content: Text('Awaiting Customer PIN Entry...')),
       );
 
       final checkoutRequestId = result['checkoutRequestId'] as String?;
       if (checkoutRequestId == null || checkoutRequestId.isEmpty) {
         setState(() => _mpesaRequestPending = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(backgroundColor: Color(0xFFD32F2F), content: Text('M-Pesa did not return a verification ID.')),
+          const SnackBar(
+              backgroundColor: Color(0xFFD32F2F),
+              content: Text('M-Pesa did not return a verification ID.')),
         );
         return;
       }
@@ -2725,8 +4324,10 @@ class _POSScreenState extends State<POSScreen> {
         await showDialog<void>(
           context: context,
           builder: (dialogContext) => AlertDialog(
-            title: const Text('Payment not confirmed', style: TextStyle(color: Color(0xFFD32F2F))),
-            content: Text(confirmation['message'] as String? ?? 'Neither M-Pesa confirmation source verified this payment.'),
+            title: const Text('Payment not confirmed',
+                style: TextStyle(color: Color(0xFFD32F2F))),
+            content: Text(confirmation['message'] as String? ??
+                'Neither M-Pesa confirmation source verified this payment.'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(),
@@ -2739,7 +4340,9 @@ class _POSScreenState extends State<POSScreen> {
       }
       _receiptToken = confirmation['receipt']?.toString() ?? 'MPESA_VERIFIED';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: const Color(0xFF2E7D32), content: Text('Payment verified · Receipt ${_receiptToken!}')),
+        SnackBar(
+            backgroundColor: const Color(0xFF2E7D32),
+            content: Text('Payment verified · Receipt ${_receiptToken!}')),
       );
     }
 
@@ -2768,7 +4371,9 @@ class _POSScreenState extends State<POSScreen> {
     if (salePaymentMethod == 'credit' && creditUpdatedAccount == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(backgroundColor: Color(0xFFD32F2F), content: Text('Unable to update the customer credit ledger.')),
+        const SnackBar(
+            backgroundColor: Color(0xFFD32F2F),
+            content: Text('Unable to update the customer credit ledger.')),
       );
       return;
     }
@@ -2878,14 +4483,14 @@ class _POSScreenState extends State<POSScreen> {
   }
 
   List<Map<String, dynamic>> get cartItems => cart.entries.map((entry) {
-    final product = products.firstWhere((item) => item.name == entry.key);
-    return {
-      'name': product.name,
-      'price': product.price,
-      'qty': entry.value,
-      'emoji': product.emoji,
-    };
-  }).toList();
+        final product = products.firstWhere((item) => item.name == entry.key);
+        return {
+          'name': product.name,
+          'price': product.price,
+          'qty': entry.value,
+          'emoji': product.emoji,
+        };
+      }).toList();
 
   List<Map<String, dynamic>> get receiptItems => _completedSaleItems;
 
@@ -2926,9 +4531,12 @@ class _POSScreenState extends State<POSScreen> {
         ),
         child: Column(
           children: [
-            Text(value, style: TextStyle(color: tint, fontSize: 18, fontWeight: FontWeight.w800)),
+            Text(value,
+                style: TextStyle(
+                    color: tint, fontSize: 18, fontWeight: FontWeight.w800)),
             const SizedBox(height: 3),
-            Text(label, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 10)),
+            Text(label,
+                style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 10)),
           ],
         ),
       ),
@@ -2957,7 +4565,132 @@ class _POSScreenState extends State<POSScreen> {
     );
   }
 
-  Widget _paymentOption(String key, String label, String subtitle, String icon, Color color, {VoidCallback? onTap}) {
+  Widget _productViewButton({
+    required IconData icon,
+    required bool selected,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 34,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? navy : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon,
+              size: 18,
+              color: selected ? Colors.white : const Color(0xFF61708B)),
+        ),
+      ),
+    );
+  }
+
+  Widget _productTile(Product product) {
+    final quantity = cart[product.name] ?? 0;
+    final lowStock = product.stock <= 5;
+
+    return InkWell(
+      onTap: () => addToCart(product),
+      borderRadius: BorderRadius.circular(16),
+      child: Ink(
+        // Matches the web tile's compact 10px rhythm while leaving room for
+        // the stock label.
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: quantity > 0 ? Border.all(color: navy, width: 2) : null,
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0F000000),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            if (lowStock)
+              const Positioned(
+                top: 0,
+                right: 0,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Color(0xFFF9A825),
+                    shape: BoxShape.circle,
+                  ),
+                  child: SizedBox(width: 8, height: 8),
+                ),
+              ),
+            if (quantity > 0)
+              Positioned(
+                top: 0,
+                left: 0,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: navy,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '×$quantity',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child:
+                      Text(product.emoji, style: const TextStyle(fontSize: 28)),
+                ),
+                const Spacer(),
+                Text(
+                  product.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: ink, fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 3),
+                Text('KSh ${product.price}',
+                    style: const TextStyle(
+                        color: navy,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(
+                  lowStock
+                      ? 'Low: ${product.stock}'
+                      : '${product.stock} in stock',
+                  style: TextStyle(
+                    color: lowStock ? const Color(0xFFF9A825) : muted,
+                    fontSize: 10,
+                    fontWeight: lowStock ? FontWeight.w700 : FontWeight.w400,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _paymentOption(
+      String key, String label, String subtitle, String icon, Color color,
+      {VoidCallback? onTap}) {
     final selected = paymentMethod == key;
     return GestureDetector(
       onTap: onTap ?? () => setState(() => paymentMethod = key),
@@ -2968,8 +4701,13 @@ class _POSScreenState extends State<POSScreen> {
         decoration: BoxDecoration(
           color: selected ? color.withValues(alpha: 0.10) : Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: selected ? color : const Color(0xFFE8ECF4), width: selected ? 2 : 1.2),
-          boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+          border: Border.all(
+              color: selected ? color : const Color(0xFFE8ECF4),
+              width: selected ? 2 : 1.2),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+          ],
         ),
         child: Row(
           children: [
@@ -2980,16 +4718,22 @@ class _POSScreenState extends State<POSScreen> {
                 color: color.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Center(child: Text(icon, style: const TextStyle(fontSize: 20))),
+              child: Center(
+                  child: Text(icon, style: const TextStyle(fontSize: 20))),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: const TextStyle(color: ink, fontSize: 15, fontWeight: FontWeight.w800)),
+                  Text(label,
+                      style: const TextStyle(
+                          color: ink,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800)),
                   const SizedBox(height: 3),
-                  Text(subtitle, style: const TextStyle(color: muted, fontSize: 11)),
+                  Text(subtitle,
+                      style: const TextStyle(color: muted, fontSize: 11)),
                 ],
               ),
             ),
@@ -3017,15 +4761,23 @@ class _POSScreenState extends State<POSScreen> {
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(16, 52, 16, 22),
               decoration: const BoxDecoration(
-                gradient: LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF388E3C)]),
+                gradient: LinearGradient(
+                    colors: [Color(0xFF2E7D32), Color(0xFF388E3C)]),
               ),
               child: Column(
                 children: [
                   const Text('✅', style: TextStyle(fontSize: 48)),
                   const SizedBox(height: 8),
-                  const Text('Sale Complete!', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                  const Text('Sale Complete!',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800)),
                   const SizedBox(height: 4),
-                  Text('Receipt #${_receiptNumber ?? _receiptToken ?? 'Pending'}', style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
+                  Text(
+                      'Receipt #${_receiptNumber ?? _receiptToken ?? 'Pending'}',
+                      style: const TextStyle(
+                          color: Color(0xCCFFFFFF), fontSize: 13)),
                 ],
               ),
             ),
@@ -3038,13 +4790,23 @@ class _POSScreenState extends State<POSScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       children: [
-                        const Text('MobiDuka Store · Nairobi CBD', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('MobiDuka Store · Nairobi CBD',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 6),
-                        Text(_formatReceiptDate(_completedAt), style: const TextStyle(color: muted, fontSize: 11)),
+                        Text(_formatReceiptDate(_completedAt),
+                            style: const TextStyle(color: muted, fontSize: 11)),
                         const SizedBox(height: 18),
                         const Divider(color: Color(0xFFE8ECF4), thickness: 1),
                         const SizedBox(height: 12),
@@ -3052,8 +4814,19 @@ class _POSScreenState extends State<POSScreen> {
                               padding: const EdgeInsets.only(bottom: 8),
                               child: Row(
                                 children: [
-                                  Expanded(child: Text('${item['name']} × ${item['qty']}', style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w600))),
-                                  Text('KSh ${(item['price'] as int) * (item['qty'] as int)}', style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                                  Expanded(
+                                      child: Text(
+                                          '${item['name']} × ${item['qty']}',
+                                          style: const TextStyle(
+                                              color: ink,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600))),
+                                  Text(
+                                      'KSh ${(item['price'] as int) * (item['qty'] as int)}',
+                                      style: const TextStyle(
+                                          color: ink,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700)),
                                 ],
                               ),
                             )),
@@ -3063,8 +4836,13 @@ class _POSScreenState extends State<POSScreen> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text('Subtotal', style: TextStyle(color: muted, fontSize: 13)),
-                            Text('KSh $receiptSubtotal', style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                            const Text('Subtotal',
+                                style: TextStyle(color: muted, fontSize: 13)),
+                            Text('KSh $receiptSubtotal',
+                                style: const TextStyle(
+                                    color: ink,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700)),
                           ],
                         ),
                         const SizedBox(height: 8),
@@ -3072,25 +4850,43 @@ class _POSScreenState extends State<POSScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('Discount ($_completedDiscount%)', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w700)),
-                              Text('-KSh $receiptDiscountAmount', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w700)),
+                              Text('Discount ($_completedDiscount%)',
+                                  style: const TextStyle(
+                                      color: Color(0xFFD32F2F),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700)),
+                              Text('-KSh $receiptDiscountAmount',
+                                  style: const TextStyle(
+                                      color: Color(0xFFD32F2F),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700)),
                             ],
                           ),
                         const SizedBox(height: 10),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text('TOTAL', style: TextStyle(color: ink, fontSize: 16, fontWeight: FontWeight.w800)),
-                            Text('KSh $receiptTotal', style: const TextStyle(color: navy, fontSize: 16, fontWeight: FontWeight.w800)),
+                            const Text('TOTAL',
+                                style: TextStyle(
+                                    color: ink,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800)),
+                            Text('KSh $receiptTotal',
+                                style: const TextStyle(
+                                    color: navy,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800)),
                           ],
                         ),
                         const SizedBox(height: 10),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text('Payment', style: TextStyle(color: muted, fontSize: 12)),
+                            const Text('Payment',
+                                style: TextStyle(color: muted, fontSize: 12)),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(999),
                                 color: _completedPaymentMethod == 'mpesa'
@@ -3118,7 +4914,8 @@ class _POSScreenState extends State<POSScreen> {
                             ),
                           ],
                         ),
-                        if (_lastReceiptSnapshot['paymentMethod'] == 'STORE CREDIT') ...[
+                        if (_lastReceiptSnapshot['paymentMethod'] ==
+                            'STORE CREDIT') ...[
                           const SizedBox(height: 14),
                           Container(
                             width: double.infinity,
@@ -3126,11 +4923,15 @@ class _POSScreenState extends State<POSScreen> {
                             decoration: BoxDecoration(
                               color: const Color(0xFFFFF8E1),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFFFFE082)),
+                              border:
+                                  Border.all(color: const Color(0xFFFFE082)),
                             ),
                             child: Text(
-                              'KSh $receiptTotal added to ${_lastReceiptSnapshot['customerName']}\'s ledger. Outstanding balance: KSh ${( _lastReceiptSnapshot['outstandingBalance'] as num).toStringAsFixed(0)}.',
-                              style: const TextStyle(color: Color(0xFF8D6E63), fontSize: 12, fontWeight: FontWeight.w700),
+                              'KSh $receiptTotal added to ${_lastReceiptSnapshot['customerName']}\'s ledger. Outstanding balance: KSh ${(_lastReceiptSnapshot['outstandingBalance'] as num).toStringAsFixed(0)}.',
+                              style: const TextStyle(
+                                  color: Color(0xFF8D6E63),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700),
                             ),
                           ),
                         ],
@@ -3144,13 +4945,17 @@ class _POSScreenState extends State<POSScreen> {
                         child: _isSearchingPrinters
                             ? const LinearProgressIndicator(color: navy)
                             : _pairedPrinters.isEmpty
-                              ? const Text('No paired printers found', style: TextStyle(color: muted, fontSize: 12))
-                              : const SizedBox.shrink(),
-                        ),
+                                ? const Text('No paired printers found',
+                                    style:
+                                        TextStyle(color: muted, fontSize: 12))
+                                : const SizedBox.shrink(),
+                      ),
                       IconButton(
                         tooltip: 'Refresh paired printers',
-                        onPressed: _isSearchingPrinters ? null : _loadPairedPrinters,
-                        icon: const Icon(Icons.refresh, color: Color(0xFF2E7D32)),
+                        onPressed:
+                            _isSearchingPrinters ? null : _loadPairedPrinters,
+                        icon:
+                            const Icon(Icons.refresh, color: Color(0xFF2E7D32)),
                       ),
                     ],
                   ),
@@ -3158,9 +4963,19 @@ class _POSScreenState extends State<POSScreen> {
                     const SizedBox(height: 8),
                     DropdownButtonFormField<BluetoothDevice>(
                       value: _selectedPrinter,
-                      decoration: const InputDecoration(labelText: 'Receipt printer', prefixIcon: Icon(Icons.print_outlined), border: OutlineInputBorder()),
-                      items: _pairedPrinters.map((printer) => DropdownMenuItem(value: printer, child: Text(printer.name.isEmpty ? 'Bluetooth printer' : printer.name))).toList(),
-                      onChanged: (printer) => setState(() => _selectedPrinter = printer),
+                      decoration: const InputDecoration(
+                          labelText: 'Receipt printer',
+                          prefixIcon: Icon(Icons.print_outlined),
+                          border: OutlineInputBorder()),
+                      items: _pairedPrinters
+                          .map((printer) => DropdownMenuItem(
+                              value: printer,
+                              child: Text(printer.name.isEmpty
+                                  ? 'Bluetooth printer'
+                                  : printer.name)))
+                          .toList(),
+                      onChanged: (printer) =>
+                          setState(() => _selectedPrinter = printer),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -3169,12 +4984,14 @@ class _POSScreenState extends State<POSScreen> {
                       Expanded(
                         child: TextButton.icon(
                           onPressed: _downloadReceiptPdf,
-                          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                          icon: const Icon(Icons.picture_as_pdf_outlined,
+                              size: 18),
                           label: const Text('Download PDF'),
                           style: TextButton.styleFrom(
                             backgroundColor: const Color(0xFFE8F5E9),
                             foregroundColor: const Color(0xFF2E7D32),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
@@ -3186,27 +5003,33 @@ class _POSScreenState extends State<POSScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: const Color(0xFFEEF2FF),
                             foregroundColor: navy,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          child: const Text('Print Receipt', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                          child: const Text('Print Receipt',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w700)),
                         ),
                       ),
                     ],
                   ),
-                  if (_lastReceiptSnapshot['paymentMethod'] == 'STORE CREDIT') ...[
+                  if (_lastReceiptSnapshot['paymentMethod'] ==
+                      'STORE CREDIT') ...[
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: _openCreditLedgerProfile,
                         icon: const Icon(Icons.menu_book_outlined),
-                        label: const Text('View Credit Ledger Profile', style: TextStyle(fontWeight: FontWeight.w800)),
+                        label: const Text('View Credit Ledger Profile',
+                            style: TextStyle(fontWeight: FontWeight.w800)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFF9A825),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                       ),
                     ),
@@ -3233,10 +5056,13 @@ class _POSScreenState extends State<POSScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: navy,
                             foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          child: const Text('New Sale', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                          child: const Text('New Sale',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w700)),
                         ),
                       ),
                     ],
@@ -3272,7 +5098,11 @@ class _POSScreenState extends State<POSScreen> {
                     icon: const Icon(Icons.arrow_back),
                   ),
                   const SizedBox(width: 12),
-                  const Text('Payment', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                  const Text('Payment',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
                 ],
               ),
             ),
@@ -3285,23 +5115,40 @@ class _POSScreenState extends State<POSScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       children: [
-                        const Text('Total Amount Due', style: TextStyle(color: muted, fontSize: 12)),
+                        const Text('Total Amount Due',
+                            style: TextStyle(color: muted, fontSize: 12)),
                         const SizedBox(height: 8),
-                        Text('KSh $total', style: const TextStyle(color: Color(0xFFD4AF37), fontSize: 36, fontWeight: FontWeight.w900)),
+                        Text('KSh $total',
+                            style: const TextStyle(
+                                color: Color(0xFFD4AF37),
+                                fontSize: 36,
+                                fontWeight: FontWeight.w900)),
                         const SizedBox(height: 6),
-                        Text('$cartCount items', style: const TextStyle(color: muted, fontSize: 12)),
+                        Text('$cartCount items',
+                            style: const TextStyle(color: muted, fontSize: 12)),
                       ],
                     ),
                   ),
                   const SizedBox(height: 20),
-                  const Text('Select Payment Method', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
+                  const Text('Select Payment Method',
+                      style: TextStyle(
+                          color: muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800)),
                   const SizedBox(height: 12),
-                  _paymentOption('cash', 'Cash', 'Physical cash payment', '💵', navy),
-                  _paymentOption('mpesa', 'M-Pesa', 'Mobile money transfer', '📱', const Color(0xFF2E7D32)),
+                  _paymentOption(
+                      'cash', 'Cash', 'Physical cash payment', '💵', navy),
+                  _paymentOption('mpesa', 'M-Pesa', 'Mobile money transfer',
+                      '📱', const Color(0xFF2E7D32)),
                   if (paymentMethod == 'mpesa') ...[
                     const SizedBox(height: 2),
                     TextField(
@@ -3325,12 +5172,18 @@ class _POSScreenState extends State<POSScreen> {
                     onTap: () async {
                       setState(() => paymentMethod = 'credit');
                       final account = await _selectCreditCustomer();
-                      if (mounted && account == null) setState(() => paymentMethod = 'cash');
-                      if (mounted && account != null) setState(() => _selectedCreditAccount = account);
+                      if (mounted && account == null)
+                        setState(() => paymentMethod = 'cash');
+                      if (mounted && account != null)
+                        setState(() => _selectedCreditAccount = account);
                     },
                   ),
                   const SizedBox(height: 20),
-                  const Text('Discount', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
+                  const Text('Discount',
+                      style: TextStyle(
+                          color: muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800)),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
@@ -3345,10 +5198,16 @@ class _POSScreenState extends State<POSScreen> {
                           decoration: BoxDecoration(
                             color: selected ? navy : Colors.white,
                             borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: selected ? navy : const Color(0xFFE8ECF4)),
+                            border: Border.all(
+                                color:
+                                    selected ? navy : const Color(0xFFE8ECF4)),
                           ),
                           child: Center(
-                            child: Text('${value}%', style: TextStyle(color: selected ? Colors.white : muted, fontSize: 13, fontWeight: FontWeight.w700)),
+                            child: Text('${value}%',
+                                style: TextStyle(
+                                    color: selected ? Colors.white : muted,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700)),
                           ),
                         ),
                       );
@@ -3361,11 +5220,18 @@ class _POSScreenState extends State<POSScreen> {
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
                     child: _mpesaRequestPending
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : Text('Complete Sale · KSh $total', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2))
+                        : Text('Complete Sale · KSh $total',
+                            style: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w800)),
                   ),
                 ],
               ),
@@ -3376,6 +5242,7 @@ class _POSScreenState extends State<POSScreen> {
     }
 
     if (view == 'cart') {
+      final hasCartItems = cartItems.isNotEmpty;
       return Container(
         color: const Color(0xFFF5F7FA),
         child: Column(
@@ -3398,7 +5265,11 @@ class _POSScreenState extends State<POSScreen> {
                     icon: const Icon(Icons.arrow_back),
                   ),
                   const SizedBox(width: 12),
-                  Text('Cart ($cartCount items)', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                  Text('Cart ($cartCount items)',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
                 ],
               ),
             ),
@@ -3410,7 +5281,11 @@ class _POSScreenState extends State<POSScreen> {
                         children: [
                           Text('🛒', style: TextStyle(fontSize: 48)),
                           SizedBox(height: 12),
-                          Text('Cart is empty', style: TextStyle(color: muted, fontSize: 18, fontWeight: FontWeight.w700)),
+                          Text('Cart is empty',
+                              style: TextStyle(
+                                  color: muted,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700)),
                         ],
                       ),
                     )
@@ -3425,57 +5300,93 @@ class _POSScreenState extends State<POSScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(14),
-                            boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                            boxShadow: const [
+                              BoxShadow(
+                                  color: Color(0x0F000000),
+                                  blurRadius: 8,
+                                  offset: Offset(0, 2))
+                            ],
                           ),
                           child: Row(
                             children: [
                               Container(
                                 width: 42,
                                 height: 42,
-                                decoration: const BoxDecoration(color: Color(0xFFE3EAF8), borderRadius: BorderRadius.all(Radius.circular(10))),
-                                child: Center(child: Text(item['emoji'] as String, style: const TextStyle(fontSize: 20))),
+                                decoration: const BoxDecoration(
+                                    color: Color(0xFFE3EAF8),
+                                    borderRadius:
+                                        BorderRadius.all(Radius.circular(10))),
+                                child: Center(
+                                    child: Text(item['emoji'] as String,
+                                        style: const TextStyle(fontSize: 20))),
                               ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(item['name'] as String, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                                    Text(item['name'] as String,
+                                        style: const TextStyle(
+                                            color: ink,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w800)),
                                     const SizedBox(height: 4),
-                                    Text('KSh $price each', style: const TextStyle(color: muted, fontSize: 11)),
+                                    Text('KSh $price each',
+                                        style: const TextStyle(
+                                            color: muted, fontSize: 11)),
                                   ],
                                 ),
                               ),
                               Row(
                                 children: [
                                   InkWell(
-                                    onTap: () => updateQty(item['name'] as String, -1),
+                                    onTap: () =>
+                                        updateQty(item['name'] as String, -1),
                                     child: Container(
                                       width: 28,
                                       height: 28,
-                                      decoration: BoxDecoration(color: const Color(0xFFF0F3F9), borderRadius: BorderRadius.circular(8)),
-                                      child: const Center(child: Icon(Icons.remove, size: 16, color: ink)),
+                                      decoration: BoxDecoration(
+                                          color: const Color(0xFFF0F3F9),
+                                          borderRadius:
+                                              BorderRadius.circular(8)),
+                                      child: const Center(
+                                          child: Icon(Icons.remove,
+                                              size: 16, color: ink)),
                                     ),
                                   ),
                                   SizedBox(
                                     width: 28,
                                     child: Center(
-                                      child: Text('$qty', style: const TextStyle(color: ink, fontSize: 15, fontWeight: FontWeight.w800)),
+                                      child: Text('$qty',
+                                          style: const TextStyle(
+                                              color: ink,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w800)),
                                     ),
                                   ),
                                   InkWell(
-                                    onTap: () => updateQty(item['name'] as String, 1),
+                                    onTap: () =>
+                                        updateQty(item['name'] as String, 1),
                                     child: Container(
                                       width: 28,
                                       height: 28,
-                                      decoration: BoxDecoration(color: navy, borderRadius: BorderRadius.circular(8)),
-                                      child: const Center(child: Icon(Icons.add, size: 16, color: Colors.white)),
+                                      decoration: BoxDecoration(
+                                          color: navy,
+                                          borderRadius:
+                                              BorderRadius.circular(8)),
+                                      child: const Center(
+                                          child: Icon(Icons.add,
+                                              size: 16, color: Colors.white)),
                                     ),
                                   ),
                                 ],
                               ),
                               const SizedBox(width: 12),
-                              Text('KSh ${price * qty}', style: const TextStyle(color: ink, fontSize: 12, fontWeight: FontWeight.w800)),
+                              Text('KSh ${price * qty}',
+                                  style: const TextStyle(
+                                      color: ink,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800)),
                             ],
                           ),
                         );
@@ -3494,20 +5405,62 @@ class _POSScreenState extends State<POSScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Subtotal ($cartCount items)', style: const TextStyle(color: muted, fontSize: 14)),
-                      Text('KSh $subtotal', style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
+                      Text('Subtotal ($cartCount items)',
+                          style: const TextStyle(color: muted, fontSize: 14)),
+                      Text('KSh $subtotal',
+                          style: const TextStyle(
+                              color: ink,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800)),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: cartItems.isEmpty ? null : () => setState(() => view = 'payment'),
-                    style: TextButton.styleFrom(
-                      backgroundColor: cartItems.isEmpty ? const Color(0xFFE8ECF4) : navy,
-                      foregroundColor: cartItems.isEmpty ? const Color(0xFFB0BAD3) : Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 54,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: hasCartItems ? null : const Color(0xFFE8ECF4),
+                        gradient: hasCartItems
+                            ? const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFF123A8F), Color(0xFF1A4FBF)],
+                              )
+                            : null,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: hasCartItems
+                            ? const [
+                                BoxShadow(
+                                  color: Color(0x4D123A8F),
+                                  blurRadius: 16,
+                                  offset: Offset(0, 4),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: hasCartItems
+                              ? () => setState(() => view = 'payment')
+                              : null,
+                          borderRadius: BorderRadius.circular(14),
+                          child: Center(
+                            child: Text(
+                              'Proceed to Payment →',
+                              style: TextStyle(
+                                color: hasCartItems
+                                    ? Colors.white
+                                    : const Color(0xFFB0BAD3),
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                    child: const Text('Proceed to Payment →', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                   ),
                 ],
               ),
@@ -3538,19 +5491,24 @@ class _POSScreenState extends State<POSScreen> {
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                          border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.12)),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.search, color: Color(0xCCFFFFFF), size: 18),
+                            const Icon(Icons.search,
+                                color: Color(0xCCFFFFFF), size: 18),
                             const SizedBox(width: 8),
                             Expanded(
                               child: TextField(
-                                onChanged: (value) => setState(() => search = value),
-                                style: const TextStyle(color: Colors.white, fontSize: 14),
+                                onChanged: (value) =>
+                                    setState(() => search = value),
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 14),
                                 decoration: const InputDecoration(
                                   hintText: 'Search products...',
-                                  hintStyle: TextStyle(color: Color(0xCCFFFFFF)),
+                                  hintStyle:
+                                      TextStyle(color: Color(0xCCFFFFFF)),
                                   border: InputBorder.none,
                                   isDense: true,
                                 ),
@@ -3562,7 +5520,7 @@ class _POSScreenState extends State<POSScreen> {
                     ),
                     IconButton(
                       onPressed: _openBarcodeScanner,
-                      tooltip: 'Scan barcode',
+                      tooltip: 'Open SmartScan',
                       color: gold,
                       icon: const Icon(Icons.qr_code_scanner),
                     ),
@@ -3579,7 +5537,8 @@ class _POSScreenState extends State<POSScreen> {
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
-                            const Icon(Icons.shopping_bag_outlined, color: ink, size: 20),
+                            const Icon(Icons.shopping_cart_outlined,
+                                color: ink, size: 20),
                             if (cartCount > 0)
                               Positioned(
                                 right: 8,
@@ -3587,8 +5546,15 @@ class _POSScreenState extends State<POSScreen> {
                                 child: Container(
                                   width: 18,
                                   height: 18,
-                                  decoration: BoxDecoration(color: const Color(0xFFD32F2F), shape: BoxShape.circle),
-                                  child: Center(child: Text('$cartCount', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800))),
+                                  decoration: BoxDecoration(
+                                      color: const Color(0xFFD32F2F),
+                                      shape: BoxShape.circle),
+                                  child: Center(
+                                      child: Text('$cartCount',
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w800))),
                                 ),
                               ),
                           ],
@@ -3602,7 +5568,8 @@ class _POSScreenState extends State<POSScreen> {
                   children: [
                     _metricTile('$cartCount', 'Items', Colors.white),
                     const SizedBox(width: 8),
-                    _metricTile('KSh $subtotal', 'Subtotal', const Color(0xFFE0C35B)),
+                    _metricTile(
+                        'KSh $subtotal', 'Subtotal', const Color(0xFFE0C35B)),
                     const SizedBox(width: 8),
                     _metricTile('KSh $total', 'Total', const Color(0xFFB8F0C3)),
                   ],
@@ -3612,89 +5579,180 @@ class _POSScreenState extends State<POSScreen> {
           ),
           Container(
             color: Colors.white,
-            child: SizedBox(
-              height: 48,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                itemCount: categories.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final value = categories[index];
-                  final selected = category == value;
-                  return _pill(
-                    value,
-                    selected,
-                    navy,
-                    onTap: () => setState(() => category = value),
-                  );
-                },
-              ),
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
-              children: visibleProducts.map((product) {
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(12),
+            height: 48,
+            child: Row(
+              children: [
+                Expanded(
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    itemCount: categories.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final value = categories[index];
+                      final selected = category == value;
+                      return _pill(
+                        value,
+                        selected,
+                        navy,
+                        onTap: () => setState(() => category = value),
+                      );
+                    },
+                  ),
+                ),
+                Container(
+                  margin: const EdgeInsets.only(right: 12, top: 6, bottom: 6),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    color: const Color(0xFFF0F3F9),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: const BoxDecoration(color: Color(0xFFE3EAF8), borderRadius: BorderRadius.all(Radius.circular(12))),
-                        child: Center(child: Text(product.emoji, style: const TextStyle(fontSize: 22))),
+                      _productViewButton(
+                        icon: Icons.grid_view_rounded,
+                        selected: showProductTiles,
+                        tooltip: 'Tile view',
+                        onTap: () => setState(() => showProductTiles = true),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(product.name, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
-                            const SizedBox(height: 4),
-                            Text(product.category, style: const TextStyle(color: muted, fontSize: 11)),
-                          ],
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text('KSh ${product.price}', style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${product.stock} in stock',
-                            style: TextStyle(
-                              color: product.stock <= 5 ? const Color(0xFFD32F2F) : muted,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 10),
-                      TextButton(
-                        onPressed: () => addToCart(product),
-                        style: TextButton.styleFrom(
-                          backgroundColor: navy,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(64, 36),
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        child: const Text('Add', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                      _productViewButton(
+                        icon: Icons.view_list_rounded,
+                        selected: !showProductTiles,
+                        tooltip: 'List view',
+                        onTap: () => setState(() => showProductTiles = false),
                       ),
                     ],
                   ),
-                );
-              }).toList(),
+                ),
+              ],
             ),
+          ),
+          Expanded(
+            child: showProductTiles
+                ? LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Three cards match the web POS at normal mobile widths.
+                      // Compact devices need two wider cards so names, prices,
+                      // and stock labels always fit without overflow.
+                      final compact = constraints.maxWidth < 360;
+                      return GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: compact ? 2 : 3,
+                          // A fixed height safely accommodates the tallest
+                          // two-line names, price, and stock label. Deriving
+                          // height from narrow card widths caused overflow.
+                          mainAxisExtent: 140,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                        ),
+                        itemCount: visibleProducts.isEmpty
+                            ? 1
+                            : visibleProducts.length,
+                        itemBuilder: (context, index) => visibleProducts.isEmpty
+                            ? Center(
+                                child: Text(
+                                  search.isEmpty && category == 'All'
+                                      ? 'No products in your catalogue yet.'
+                                      : 'No products match your search.',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                      color: muted, fontSize: 13),
+                                ),
+                              )
+                            : _productTile(visibleProducts[index]),
+                      );
+                    },
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+                    children: visibleProducts.map((product) {
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x0F000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 2))
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: const BoxDecoration(
+                                  color: Color(0xFFE3EAF8),
+                                  borderRadius:
+                                      BorderRadius.all(Radius.circular(12))),
+                              child: Center(
+                                  child: Text(product.emoji,
+                                      style: const TextStyle(fontSize: 22))),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(product.name,
+                                      style: const TextStyle(
+                                          color: ink,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800)),
+                                  const SizedBox(height: 4),
+                                  Text(product.category,
+                                      style: const TextStyle(
+                                          color: muted, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text('KSh ${product.price}',
+                                    style: const TextStyle(
+                                        color: ink,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w800)),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${product.stock} in stock',
+                                  style: TextStyle(
+                                    color: product.stock <= 5
+                                        ? const Color(0xFFD32F2F)
+                                        : muted,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(width: 10),
+                            TextButton(
+                              onPressed: () => addToCart(product),
+                              style: TextButton.styleFrom(
+                                backgroundColor: navy,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size(64, 36),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 12),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Text('Add',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800)),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
           ),
         ],
       ),
@@ -3710,6 +5768,24 @@ class ProductScreen extends StatefulWidget {
 }
 
 class _ProductScreenState extends State<ProductScreen> {
+  static const _catalogEmojis = <String>[
+    '🌾',
+    '🫙',
+    '🍬',
+    '🧈',
+    '🥛',
+    '🌶️',
+    '💊',
+    '🧺',
+    '🪥',
+    '🍞',
+    '🥚',
+    '☕',
+    '📦',
+    '🥤',
+    '🍫',
+    '🧃',
+  ];
   String search = '';
   String category = 'All';
   String filter = 'all';
@@ -3720,7 +5796,7 @@ class _ProductScreenState extends State<ProductScreen> {
   Product? editProduct;
   final Map<String, String> productForm = {
     'name': '',
-    'category': 'Flour',
+    'category': '',
     'barcode': '',
     'cost': '',
     'price': '',
@@ -3730,6 +5806,58 @@ class _ProductScreenState extends State<ProductScreen> {
   };
   String newCategoryName = '';
   String newCategoryEmoji = '📦';
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadApiCategories());
+  }
+
+  Future<void> _loadApiCategories() async {
+    try {
+      final categories = await InventoryApiService().loadCategories();
+      if (!mounted) return;
+      setState(() {
+        inventoryCategories
+          ..clear()
+          ..addAll(categories.map((category) => category.name));
+        inventoryCategoryIds
+          ..clear()
+          ..addEntries(categories
+              .map((category) => MapEntry(category.name, category.id)));
+        inventoryCategoryEmojis
+          ..clear()
+          ..addEntries(categories.map(
+              (category) => MapEntry(category.name, category.emoji ?? '📦')));
+      });
+    } catch (_) {
+      // The already loaded catalogue categories remain available offline.
+    }
+  }
+
+  String _categoryEmoji(String categoryName) {
+    final categoryEmoji = inventoryCategoryEmojis[categoryName];
+    if (categoryEmoji != null) return categoryEmoji;
+    final product = products.where((item) => item.category == categoryName);
+    if (product.isNotEmpty) return product.first.emoji;
+    const defaults = <String, String>{
+      'Flour': '🌾',
+      'Oils': '🫙',
+      'Sugar': '🍬',
+      'Spreads': '🧈',
+      'Dairy': '🥛',
+      'Spices': '🌶️',
+      'Pharma': '💊',
+      'Detergent': '🧺',
+      'Personal': '🪥',
+      'Bakery': '🍞',
+      'Beverages': '🥤',
+    };
+    return defaults[categoryName] ?? '📦';
+  }
+
+  int _categoryItemCount(String categoryName) =>
+      products.where((product) => product.category == categoryName).length;
 
   Color _statusBadgeBg(String status) {
     switch (status) {
@@ -3767,7 +5895,7 @@ class _ProductScreenState extends State<ProductScreen> {
   void _resetProductForm() {
     productForm
       ..update('name', (_) => '')
-      ..update('category', (_) => 'Flour')
+      ..update('category', (_) => '')
       ..update('barcode', (_) => '')
       ..update('cost', (_) => '')
       ..update('price', (_) => '')
@@ -3776,16 +5904,38 @@ class _ProductScreenState extends State<ProductScreen> {
       ..update('emoji', (_) => '📦');
   }
 
-  void _saveProduct() {
+  Future<void> _saveProduct() async {
     final name = productForm['name']?.trim() ?? '';
-    final categoryValue = productForm['category'] ?? 'Flour';
+    final categoryValue = productForm['category'] ?? '';
     final barcode = productForm['barcode']?.trim();
     final cost = int.tryParse(productForm['cost'] ?? '') ?? 0;
     final price = int.tryParse(productForm['price'] ?? '') ?? 0;
     final stock = int.tryParse(productForm['stock'] ?? '') ?? 0;
     final reorder = int.tryParse(productForm['reorder'] ?? '') ?? 10;
     final emoji = productForm['emoji'] ?? '📦';
-    if (name.isEmpty) return;
+    final categoryId = inventoryCategoryIds[categoryValue];
+    if (name.isEmpty || categoryId == null) return;
+    try {
+      if (editProduct == null) {
+        await InventoryApiService().createProduct({
+          'name': name,
+          'categoryId': categoryId,
+          'barcode': barcode,
+          'costPrice': cost,
+          'sellingPrice': price,
+          'stock': stock,
+          'minimumStock': reorder,
+          'emoji': emoji,
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: const Color(0xFFD32F2F)));
+      }
+      return;
+    }
 
     final status = stock == 0
         ? 'critical'
@@ -3795,10 +5945,15 @@ class _ProductScreenState extends State<ProductScreen> {
                 ? 'low'
                 : 'good';
 
-    final nextProduct = Product(name, categoryValue, cost, price, stock, reorder, emoji, status: status, barcode: barcode == null || barcode.isEmpty ? null : barcode);
+    final nextProduct = Product(
+        name, categoryValue, cost, price, stock, reorder, emoji,
+        status: status,
+        barcode: barcode == null || barcode.isEmpty ? null : barcode);
     setState(() {
       if (editProduct != null) {
-        final index = products.indexWhere((item) => item.name == editProduct!.name && item.category == editProduct!.category);
+        final index = products.indexWhere((item) =>
+            item.name == editProduct!.name &&
+            item.category == editProduct!.category);
         if (index >= 0) {
           products[index] = nextProduct;
         }
@@ -3809,7 +5964,15 @@ class _ProductScreenState extends State<ProductScreen> {
       editProduct = null;
       _resetProductForm();
     });
-    unawaited(ProductRepository.instance.upsertProduct(nextProduct).catchError((_) {}));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Product saved to the catalogue.'),
+        backgroundColor: Color(0xFF2E7D32),
+      ));
+    }
+    unawaited(ProductRepository.instance
+        .upsertProduct(nextProduct)
+        .catchError((_) {}));
   }
 
   Future<void> _scanProductCode() async {
@@ -3817,7 +5980,8 @@ class _ProductScreenState extends State<ProductScreen> {
       MaterialPageRoute(
         builder: (_) => BarcodeScannerView(
           onProductScanned: (_) {},
-          onCodeScanned: (code) => setState(() => productForm['barcode'] = code),
+          onCodeScanned: (code) =>
+              setState(() => productForm['barcode'] = code),
         ),
       ),
     );
@@ -3833,16 +5997,24 @@ class _ProductScreenState extends State<ProductScreen> {
     }
 
     if (selected != null) return _productDetails(selected!);
-    final visible = products.where((p) => (category == 'All' || p.category == category) && p.name.toLowerCase().contains(search.toLowerCase())).toList();
+    final visible = products
+        .where((p) =>
+            (category == 'All' || p.category == category) &&
+            p.name.toLowerCase().contains(search.toLowerCase()))
+        .toList();
     final cartCount = cart.values.fold(0, (sum, quantity) => sum + quantity);
-    final cartTotal = products.where((p) => cart.containsKey(p.name)).fold(0, (sum, p) => sum + p.price * cart[p.name]!);
+    final cartTotal = products
+        .where((p) => cart.containsKey(p.name))
+        .fold(0, (sum, p) => sum + p.price * cart[p.name]!);
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Text(widget.title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+            child: Text(widget.title,
+                style:
+                    const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
           ),
         ),
         Padding(
@@ -3863,10 +6035,27 @@ class _ProductScreenState extends State<ProductScreen> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              children: ['All', 'Flour', 'Oils', 'Sugar', 'Dairy', 'Pharma', 'Beverages', 'Spreads', 'Spices', 'Bakery'].map((value) => Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(label: Text(value), selected: category == value, onSelected: (_) => setState(() => category = value)),
-                  )).toList(),
+              children: [
+                'All',
+                'Flour',
+                'Oils',
+                'Sugar',
+                'Dairy',
+                'Pharma',
+                'Beverages',
+                'Spreads',
+                'Spices',
+                'Bakery'
+              ]
+                  .map((value) => Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                            label: Text(value),
+                            selected: category == value,
+                            onSelected: (_) =>
+                                setState(() => category = value)),
+                      ))
+                  .toList(),
             ),
           ),
         Expanded(
@@ -3875,13 +6064,22 @@ class _ProductScreenState extends State<ProductScreen> {
             children: visible.map((product) {
               return Card(
                 child: ListTile(
-                  onTap: widget.title == 'Inventory & Stock' ? () => setState(() => selected = product) : null,
-                  leading: Text(product.emoji, style: const TextStyle(fontSize: 26)),
+                  onTap: widget.title == 'Inventory & Stock'
+                      ? () => setState(() => selected = product)
+                      : null,
+                  leading:
+                      Text(product.emoji, style: const TextStyle(fontSize: 26)),
                   title: Text(product.name),
                   subtitle: Text('${product.category} · KSh ${product.price}'),
                   trailing: widget.title == 'Point of Sale'
-                      ? FilledButton(onPressed: () => setState(() => cart[product.name] = (cart[product.name] ?? 0) + 1), child: Text('KSh ${product.price}'))
-                      : Text('${product.stock} in stock', style: TextStyle(color: product.stock <= 5 ? Colors.red : muted, fontWeight: FontWeight.w600)),
+                      ? FilledButton(
+                          onPressed: () => setState(() => cart[product.name] =
+                              (cart[product.name] ?? 0) + 1),
+                          child: Text('KSh ${product.price}'))
+                      : Text('${product.stock} in stock',
+                          style: TextStyle(
+                              color: product.stock <= 5 ? Colors.red : muted,
+                              fontWeight: FontWeight.w600)),
                 ),
               );
             }).toList(),
@@ -3892,9 +6090,14 @@ class _ProductScreenState extends State<ProductScreen> {
             color: navy,
             child: ListTile(
               leading: const Icon(Icons.shopping_bag, color: Colors.white),
-              title: Text('$cartCount items in cart', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: Text('KSh $cartTotal', style: const TextStyle(color: Colors.white70)),
-              trailing: FilledButton.tonal(onPressed: () => _showCheckout(context, cartTotal), child: const Text('Checkout')),
+              title: Text('$cartCount items in cart',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: Text('KSh $cartTotal',
+                  style: const TextStyle(color: Colors.white70)),
+              trailing: FilledButton.tonal(
+                  onPressed: () => _showCheckout(context, cartTotal),
+                  child: const Text('Checkout')),
             ),
           ),
       ],
@@ -3906,7 +6109,9 @@ class _ProductScreenState extends State<ProductScreen> {
     final lowCount = products.where((p) => p.status == 'low').length;
     final filtered = products.where((p) {
       final matchSearch = p.name.toLowerCase().contains(search.toLowerCase());
-      final matchFilter = filter == 'all' || p.status == filter || (filter == 'low' && (p.status == 'low' || p.status == 'critical'));
+      final matchFilter = filter == 'all' ||
+          p.status == filter ||
+          (filter == 'low' && (p.status == 'low' || p.status == 'critical'));
       return matchSearch && matchFilter;
     }).toList();
 
@@ -3929,19 +6134,29 @@ class _ProductScreenState extends State<ProductScreen> {
                       children: [
                         const Text(
                           'Inventory',
-                          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800),
                         ),
                         Row(
                           children: [
                             TextButton(
-                              onPressed: () => setState(() => showAddCategory = true),
+                              onPressed: () =>
+                                  setState(() => showAddCategory = true),
                               style: TextButton.styleFrom(
-                                backgroundColor: Colors.white.withValues(alpha: 0.12),
+                                backgroundColor:
+                                    Colors.white.withValues(alpha: 0.12),
                                 foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
                               ),
-                              child: const Text('+ Category', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                              child: const Text('+ Category',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700)),
                             ),
                             const SizedBox(width: 8),
                             TextButton(
@@ -3953,10 +6168,15 @@ class _ProductScreenState extends State<ProductScreen> {
                               style: TextButton.styleFrom(
                                 backgroundColor: gold,
                                 foregroundColor: ink,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
                               ),
-                              child: const Text('+ Product', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                              child: const Text('+ Product',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800)),
                             ),
                           ],
                         ),
@@ -3965,29 +6185,36 @@ class _ProductScreenState extends State<ProductScreen> {
                     const SizedBox(height: 14),
                     Row(
                       children: [
-                        _inventoryMetric('Total SKUs', '${products.length}', Colors.white),
+                        _inventoryMetric(
+                            'Total SKUs', '${products.length}', Colors.white),
                         const SizedBox(width: 8),
-                        _inventoryMetric('Critical', '$criticalCount', const Color(0xFFFF6B6B)),
+                        _inventoryMetric('Critical', '$criticalCount',
+                            const Color(0xFFFF6B6B)),
                         const SizedBox(width: 8),
-                        _inventoryMetric('Low Stock', '$lowCount', const Color(0xFFFFD93D)),
+                        _inventoryMetric(
+                            'Low Stock', '$lowCount', const Color(0xFFFFD93D)),
                       ],
                     ),
                     const SizedBox(height: 14),
                     Container(
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.08),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.14)),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: TextField(
                         onChanged: (value) => setState(() => search = value),
-                        style: const TextStyle(color: Colors.white, fontSize: 14),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 14),
                         decoration: InputDecoration(
                           hintText: 'Search products...',
                           hintStyle: const TextStyle(color: Color(0x99FFFFFF)),
-                          prefixIcon: const Icon(Icons.search, color: Color(0xCCFFFFFF)),
+                          prefixIcon: const Icon(Icons.search,
+                              color: Color(0xCCFFFFFF)),
                           border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -3999,7 +6226,11 @@ class _ProductScreenState extends State<ProductScreen> {
                 color: Colors.white,
                 child: Row(
                   children: ['all', 'low', 'critical'].map((value) {
-                    final label = value == 'all' ? 'All Products' : value == 'low' ? 'Low Stock' : 'Critical';
+                    final label = value == 'all'
+                        ? 'All Products'
+                        : value == 'low'
+                            ? 'Low Stock'
+                            : 'Critical';
                     final selected = filter == value;
                     return Expanded(
                       child: InkWell(
@@ -4007,7 +6238,10 @@ class _ProductScreenState extends State<ProductScreen> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            border: Border(bottom: BorderSide(color: selected ? navy : Colors.transparent, width: 2)),
+                            border: Border(
+                                bottom: BorderSide(
+                                    color: selected ? navy : Colors.transparent,
+                                    width: 2)),
                           ),
                           child: Text(
                             label,
@@ -4036,7 +6270,12 @@ class _ProductScreenState extends State<ProductScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(14),
-                        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x0F000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
                       ),
                       child: InkWell(
                         onTap: () => setState(() => selected = product),
@@ -4049,7 +6288,9 @@ class _ProductScreenState extends State<ProductScreen> {
                                 color: const Color(0xFFE3EAF8),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Center(child: Text(product.emoji, style: const TextStyle(fontSize: 22))),
+                              child: Center(
+                                  child: Text(product.emoji,
+                                      style: const TextStyle(fontSize: 22))),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -4058,12 +6299,16 @@ class _ProductScreenState extends State<ProductScreen> {
                                 children: [
                                   Text(
                                     product.name,
-                                    style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800),
+                                    style: const TextStyle(
+                                        color: ink,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w800),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
                                     '${product.category} · Cost: KSh ${product.cost}',
-                                    style: const TextStyle(color: muted, fontSize: 11),
+                                    style: const TextStyle(
+                                        color: muted, fontSize: 11),
                                   ),
                                 ],
                               ),
@@ -4073,18 +6318,25 @@ class _ProductScreenState extends State<ProductScreen> {
                               children: [
                                 Text(
                                   'KSh ${product.price}',
-                                  style: const TextStyle(color: navy, fontSize: 14, fontWeight: FontWeight.w800),
+                                  style: const TextStyle(
+                                      color: navy,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800),
                                 ),
                                 const SizedBox(height: 5),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 5),
                                   decoration: BoxDecoration(
                                     color: badgeColor,
                                     borderRadius: BorderRadius.circular(999),
                                   ),
                                   child: Text(
                                     '${product.stock} units',
-                                    style: TextStyle(color: badgeTextColor, fontSize: 10, fontWeight: FontWeight.w800),
+                                    style: TextStyle(
+                                        color: badgeTextColor,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w800),
                                   ),
                                 ),
                               ],
@@ -4127,16 +6379,21 @@ class _ProductScreenState extends State<ProductScreen> {
           ),
           child: Column(
             children: [
-              Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 16, fontWeight: FontWeight.w800)),
               const SizedBox(height: 3),
-              Text(label, style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
+              Text(label,
+                  style:
+                      const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
             ],
           ),
         ),
       );
 
   Widget _inventoryDetail(Product product) {
-    final margin = ((product.price - product.cost) / product.price * 100).round();
+    final margin =
+        ((product.price - product.cost) / product.price * 100).round();
     return Container(
       color: const Color(0xFFF5F7FA),
       child: Column(
@@ -4160,7 +6417,11 @@ class _ProductScreenState extends State<ProductScreen> {
                       icon: const Icon(Icons.arrow_back),
                     ),
                     const SizedBox(width: 12),
-                    const Text('Product Details', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                    const Text('Product Details',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700)),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -4173,16 +6434,24 @@ class _ProductScreenState extends State<ProductScreen> {
                         color: Colors.white.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(18),
                       ),
-                      child: Center(child: Text(product.emoji, style: const TextStyle(fontSize: 32))),
+                      child: Center(
+                          child: Text(product.emoji,
+                              style: const TextStyle(fontSize: 32))),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(product.name, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                          Text(product.name,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800)),
                           const SizedBox(height: 4),
-                          Text(product.category, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+                          Text(product.category,
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 13)),
                         ],
                       ),
                     ),
@@ -4203,10 +6472,14 @@ class _ProductScreenState extends State<ProductScreen> {
                   crossAxisSpacing: 10,
                   childAspectRatio: 1.7,
                   children: [
-                    _detailStatCard('Cost Price', 'KSh ${product.cost}', const Color(0xFFD32F2F)),
-                    _detailStatCard('Selling Price', 'KSh ${product.price}', navy),
-                    _detailStatCard('Profit Margin', '$margin%', const Color(0xFF2E7D32)),
-                    _detailStatCard('Current Stock', '${product.stock} units', _statusBadgeText(product.status)),
+                    _detailStatCard('Cost Price', 'KSh ${product.cost}',
+                        const Color(0xFFD32F2F)),
+                    _detailStatCard(
+                        'Selling Price', 'KSh ${product.price}', navy),
+                    _detailStatCard(
+                        'Profit Margin', '$margin%', const Color(0xFF2E7D32)),
+                    _detailStatCard('Current Stock', '${product.stock} units',
+                        _statusBadgeText(product.status)),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -4215,16 +6488,29 @@ class _ProductScreenState extends State<ProductScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Stock Information', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                      const Text('Stock Information',
+                          style: TextStyle(
+                              color: ink,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800)),
                       const SizedBox(height: 12),
                       _stockRow('Reorder Level', '${product.reorder} units'),
                       _stockRow('Stock Status', _statusLabel(product.status)),
-                      _stockRow('Units Below Reorder', product.stock < product.reorder ? '${product.reorder - product.stock} units' : 'None'),
+                      _stockRow(
+                          'Units Below Reorder',
+                          product.stock < product.reorder
+                              ? '${product.reorder - product.stock} units'
+                              : 'None'),
                     ],
                   ),
                 ),
@@ -4250,10 +6536,13 @@ class _ProductScreenState extends State<ProductScreen> {
                         style: TextButton.styleFrom(
                           backgroundColor: const Color(0xFFE9EEFF),
                           foregroundColor: navy,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
                           padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
-                        child: const Text('Edit Product', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        child: const Text('Edit Product',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w700)),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -4263,10 +6552,13 @@ class _ProductScreenState extends State<ProductScreen> {
                         style: TextButton.styleFrom(
                           backgroundColor: navy,
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
                           padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
-                        child: const Text('Purchase Order', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        child: const Text('Purchase Order',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w700)),
                       ),
                     ),
                   ],
@@ -4284,14 +6576,19 @@ class _ProductScreenState extends State<ProductScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(label, style: const TextStyle(color: muted, fontSize: 11)),
             const SizedBox(height: 6),
-            Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w800)),
+            Text(value,
+                style: TextStyle(
+                    color: color, fontSize: 20, fontWeight: FontWeight.w800)),
           ],
         ),
       );
@@ -4305,7 +6602,9 @@ class _ProductScreenState extends State<ProductScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(label, style: const TextStyle(color: muted, fontSize: 12)),
-            Text(value, style: const TextStyle(color: ink, fontSize: 12, fontWeight: FontWeight.w700)),
+            Text(value,
+                style: const TextStyle(
+                    color: ink, fontSize: 12, fontWeight: FontWeight.w700)),
           ],
         ),
       );
@@ -4332,7 +6631,11 @@ class _ProductScreenState extends State<ProductScreen> {
                     icon: const Icon(Icons.arrow_back),
                   ),
                   const SizedBox(width: 12),
-                  const Text('Add Category', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                  const Text('Add Category',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -4345,32 +6648,47 @@ class _ProductScreenState extends State<ProductScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Category Name *', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Category Name *',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 8),
                         TextField(
-                          onChanged: (value) => setState(() => newCategoryName = value),
+                          onChanged: (value) =>
+                              setState(() => newCategoryName = value),
                           decoration: const InputDecoration(
                             hintText: 'e.g. Beverages',
                             border: OutlineInputBorder(),
                           ),
                         ),
                         const SizedBox(height: 18),
-                        const Text('Icon / Emoji', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Icon / Emoji',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 10),
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦'].map((emoji) {
+                          children: _catalogEmojis.map((emoji) {
                             final selected = newCategoryEmoji == emoji;
                             return ChoiceChip(
                               label: Text(emoji),
                               selected: selected,
-                              onSelected: (_) => setState(() => newCategoryEmoji = emoji),
+                              onSelected: (_) =>
+                                  setState(() => newCategoryEmoji = emoji),
                             );
                           }).toList(),
                         ),
@@ -4378,24 +6696,104 @@ class _ProductScreenState extends State<ProductScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Existing Categories',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5)),
+                        const SizedBox(height: 8),
+                        ...inventoryCategories.asMap().entries.map((entry) {
+                          final categoryName = entry.value;
+                          final isLast =
+                              entry.key == inventoryCategories.length - 1;
+                          return Container(
+                            padding: const EdgeInsets.symmetric(vertical: 9),
+                            decoration: BoxDecoration(
+                              border: isLast
+                                  ? null
+                                  : const Border(
+                                      bottom:
+                                          BorderSide(color: Color(0xFFF0F3F9))),
+                            ),
+                            child: Row(children: [
+                              Text(_categoryEmoji(categoryName),
+                                  style: const TextStyle(fontSize: 18)),
+                              const SizedBox(width: 9),
+                              Expanded(
+                                  child: Text(categoryName,
+                                      style: const TextStyle(
+                                          color: ink,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600))),
+                              Text('${_categoryItemCount(categoryName)} items',
+                                  style: const TextStyle(
+                                      color: muted, fontSize: 11)),
+                            ]),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   TextButton(
-                    onPressed: () {
-                      if (newCategoryName.trim().isNotEmpty) {
+                    onPressed: () async {
+                      final name = newCategoryName.trim();
+                      if (name.isEmpty) return;
+                      try {
+                        final category = await InventoryApiService()
+                            .createCategory(
+                                name: name, emoji: newCategoryEmoji);
+                        if (!mounted) return;
                         setState(() {
-                          inventoryCategories.add(newCategoryName.trim());
+                          inventoryCategories.add(category.name);
+                          inventoryCategoryIds[category.name] = category.id;
+                          inventoryCategoryEmojis[category.name] =
+                              category.emoji ?? '📦';
                           newCategoryName = '';
                           newCategoryEmoji = '📦';
                           showAddCategory = false;
                         });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content:
+                                    Text('Category saved to the catalogue.'),
+                                backgroundColor: Color(0xFF2E7D32)));
+                      } catch (error) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(error
+                                  .toString()
+                                  .replaceFirst('Exception: ', '')),
+                              backgroundColor: const Color(0xFFD32F2F)));
+                        }
                       }
                     },
                     style: TextButton.styleFrom(
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: const Text('Save Category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    child: const Text('Save Category',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
@@ -4431,7 +6829,10 @@ class _ProductScreenState extends State<ProductScreen> {
                   const SizedBox(width: 12),
                   Text(
                     editProduct != null ? 'Edit Product' : 'Add Product',
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -4445,22 +6846,34 @@ class _ProductScreenState extends State<ProductScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Product Icon', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Product Icon',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦'].map((emoji) {
-                            final selected = (productForm['emoji'] ?? '📦') == emoji;
+                          children: _catalogEmojis.map((emoji) {
+                            final selected =
+                                (productForm['emoji'] ?? '📦') == emoji;
                             return ChoiceChip(
-                              label: Text(emoji, style: const TextStyle(fontSize: 18)),
+                              label: Text(emoji,
+                                  style: const TextStyle(fontSize: 18)),
                               selected: selected,
-                              onSelected: (_) => setState(() => productForm['emoji'] = emoji),
+                              onSelected: (_) =>
+                                  setState(() => productForm['emoji'] = emoji),
                             );
                           }).toList(),
                         ),
@@ -4473,34 +6886,49 @@ class _ProductScreenState extends State<ProductScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Product Details', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Product Details',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 14),
-                        _textFieldLabel('Product Name *', value: productForm['name'] ?? '', onChanged: (value) => setState(() => productForm['name'] = value)),
+                        _textFieldLabel('Product Name *',
+                            placeholder: 'e.g. Unga Jogoo 2kg',
+                            value: productForm['name'] ?? '',
+                            onChanged: (value) =>
+                                setState(() => productForm['name'] = value)),
                         const SizedBox(height: 14),
-                        const Text('Category *', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          initialValue: productForm['category'] ?? inventoryCategories.first,
-                          items: inventoryCategories.map((categoryName) => DropdownMenuItem(value: categoryName, child: Text(categoryName))).toList(),
-                          onChanged: (value) => setState(() => productForm['category'] = value ?? inventoryCategories.first),
-                          decoration: const InputDecoration(border: OutlineInputBorder()),
-                        ),
-                        const SizedBox(height: 14),
-                        const Text('Barcode / QR code', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Barcode',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 8),
                         Row(
                           children: [
                             Expanded(
                               child: TextField(
-                                controller: TextEditingController(text: productForm['barcode'] ?? '')..selection = TextSelection.collapsed(offset: (productForm['barcode'] ?? '').length),
+                                controller: TextEditingController(
+                                    text: productForm['barcode'] ?? '')
+                                  ..selection = TextSelection.collapsed(
+                                      offset: (productForm['barcode'] ?? '')
+                                          .length),
                                 keyboardType: TextInputType.text,
-                                onChanged: (value) => setState(() => productForm['barcode'] = value.trim()),
-                                decoration: const InputDecoration(hintText: 'Scan or enter code', border: OutlineInputBorder()),
+                                onChanged: (value) => setState(() =>
+                                    productForm['barcode'] = value.trim()),
+                                decoration: const InputDecoration(
+                                    hintText: 'Scan or enter barcode',
+                                    border: OutlineInputBorder()),
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -4508,7 +6936,57 @@ class _ProductScreenState extends State<ProductScreen> {
                               onPressed: _scanProductCode,
                               tooltip: 'Scan product code',
                               icon: const Icon(Icons.qr_code_scanner),
-                              style: IconButton.styleFrom(backgroundColor: navy, foregroundColor: Colors.white),
+                              style: IconButton.styleFrom(
+                                  backgroundColor: navy,
+                                  foregroundColor: Colors.white),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        const Text('Category *',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: inventoryCategories
+                                        .contains(productForm['category'])
+                                    ? productForm['category']
+                                    : null,
+                                items: inventoryCategories
+                                    .map((categoryName) => DropdownMenuItem(
+                                        value: categoryName,
+                                        child: Text(
+                                            '${_categoryEmoji(categoryName)}  $categoryName')))
+                                    .toList(),
+                                onChanged: (value) => setState(() =>
+                                    productForm['category'] = value ?? ''),
+                                decoration: const InputDecoration(
+                                    hintText: 'Select category',
+                                    border: OutlineInputBorder()),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            TextButton(
+                              onPressed: () =>
+                                  setState(() => showAddCategory = true),
+                              style: TextButton.styleFrom(
+                                backgroundColor: const Color(0xFFE3EAF8),
+                                foregroundColor: navy,
+                                minimumSize: const Size(0, 48),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 11),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Text('+ Cat',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700)),
                             ),
                           ],
                         ),
@@ -4521,12 +6999,21 @@ class _ProductScreenState extends State<ProductScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Pricing & Stock', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Pricing & Stock',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 14),
                         GridView.count(
                           shrinkWrap: true,
@@ -4534,14 +7021,72 @@ class _ProductScreenState extends State<ProductScreen> {
                           crossAxisCount: 2,
                           mainAxisSpacing: 12,
                           crossAxisSpacing: 12,
-                          childAspectRatio: 2.3,
+                          // Labels plus Material input fields need a stable
+                          // height; a width-derived ratio clips on phones.
+                          mainAxisExtent: 88,
                           children: [
-                            _numberField('Cost Price (KSh) *', productForm['cost'] ?? '', (value) => setState(() => productForm['cost'] = value)),
-                            _numberField('Selling Price (KSh) *', productForm['price'] ?? '', (value) => setState(() => productForm['price'] = value)),
-                            _numberField('Current Stock *', productForm['stock'] ?? '', (value) => setState(() => productForm['stock'] = value)),
-                            _numberField('Reorder Level', productForm['reorder'] ?? '', (value) => setState(() => productForm['reorder'] = value)),
+                            _numberField(
+                                'Cost Price (KSh) *',
+                                productForm['cost'] ?? '',
+                                (value) =>
+                                    setState(() => productForm['cost'] = value),
+                                placeholder: '0'),
+                            _numberField(
+                                'Selling Price (KSh) *',
+                                productForm['price'] ?? '',
+                                (value) => setState(
+                                    () => productForm['price'] = value),
+                                placeholder: '0'),
+                            _numberField(
+                                'Current Stock *',
+                                productForm['stock'] ?? '',
+                                (value) => setState(
+                                    () => productForm['stock'] = value),
+                                placeholder: '0'),
+                            _numberField(
+                                'Reorder Level',
+                                productForm['reorder'] ?? '',
+                                (value) => setState(
+                                    () => productForm['reorder'] = value),
+                                placeholder: '10'),
                           ],
                         ),
+                        if ((int.tryParse(productForm['cost'] ?? '') ?? 0) >
+                                0 &&
+                            (int.tryParse(productForm['price'] ?? '') ?? 0) >
+                                (int.tryParse(productForm['cost'] ?? '') ?? 0))
+                          Builder(builder: (context) {
+                            final cost = int.parse(productForm['cost'] ?? '0');
+                            final price =
+                                int.parse(productForm['price'] ?? '0');
+                            final margin =
+                                ((price - cost) / price * 100).round();
+                            return Container(
+                              margin: const EdgeInsets.only(top: 14),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE8F5E9),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('Profit Margin',
+                                      style: TextStyle(
+                                          color: Color(0xFF2E7D32),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700)),
+                                  Text('$margin%',
+                                      style: const TextStyle(
+                                          color: Color(0xFF2E7D32),
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800)),
+                                ],
+                              ),
+                            );
+                          }),
                       ],
                     ),
                   ),
@@ -4552,9 +7097,13 @@ class _ProductScreenState extends State<ProductScreen> {
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: Text(editProduct != null ? 'Save Changes' : 'Add Product', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    child: Text(
+                        editProduct != null ? 'Save Changes' : 'Add Product',
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
@@ -4563,40 +7112,83 @@ class _ProductScreenState extends State<ProductScreen> {
         ),
       );
 
-  Widget _textFieldLabel(String label, {required String value, required ValueChanged<String> onChanged}) => Column(
+  Widget _textFieldLabel(String label,
+          {required String value,
+          required ValueChanged<String> onChanged,
+          String? placeholder}) =>
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           TextField(
-            controller: TextEditingController(text: value)..selection = TextSelection.collapsed(offset: value.length),
+            controller: TextEditingController(text: value)
+              ..selection = TextSelection.collapsed(offset: value.length),
             onChanged: onChanged,
-            decoration: const InputDecoration(border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                hintText: placeholder, border: const OutlineInputBorder()),
           ),
         ],
       );
 
-  Widget _numberField(String label, String value, ValueChanged<String> onChanged) => Column(
+  Widget _numberField(
+          String label, String value, ValueChanged<String> onChanged,
+          {required String placeholder}) =>
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w700)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 11, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           TextField(
-            keyboardType: TextInputType.number,
-            controller: TextEditingController(text: value)..selection = TextSelection.collapsed(offset: value.length),
+            keyboardType: const TextInputType.numberWithOptions(decimal: false),
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            controller: TextEditingController(text: value)
+              ..selection = TextSelection.collapsed(offset: value.length),
             onChanged: onChanged,
-            decoration: const InputDecoration(border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                hintText: placeholder, border: const OutlineInputBorder()),
           ),
         ],
       );
 
-  Widget _productDetails(Product product) => ListView(padding: const EdgeInsets.fromLTRB(16, 28, 16, 24), children: [
-        Row(children: [IconButton(onPressed: () => setState(() => selected = null), icon: const Icon(Icons.arrow_back)), const Text('Product Details', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]),
-        Card(color: navy, child: ListTile(leading: Text(product.emoji, style: const TextStyle(fontSize: 36)), title: Text(product.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), subtitle: Text(product.category, style: const TextStyle(color: Colors.white70)))),
+  Widget _productDetails(Product product) =>
+      ListView(padding: const EdgeInsets.fromLTRB(16, 28, 16, 24), children: [
+        Row(children: [
+          IconButton(
+              onPressed: () => setState(() => selected = null),
+              icon: const Icon(Icons.arrow_back)),
+          const Text('Product Details',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))
+        ]),
+        Card(
+            color: navy,
+            child: ListTile(
+                leading:
+                    Text(product.emoji, style: const TextStyle(fontSize: 36)),
+                title: Text(product.name,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(product.category,
+                    style: const TextStyle(color: Colors.white70)))),
         const SizedBox(height: 12),
-        Row(children: [_infoCard('Cost Price', 'KSh ${product.cost}', Colors.red), _infoCard('Selling Price', 'KSh ${product.price}', navy)]),
-        Row(children: [_infoCard('Stock', '${product.stock} units', product.stock <= 5 ? Colors.red : Colors.green), _infoCard('Reorder', '${product.reorder} units', gold)]),
-        Card(child: ListTile(title: const Text('Stock Information'), subtitle: Text('Status: ${product.stock <= 5 ? 'Critical' : product.stock < 20 ? 'Low Stock' : 'In Stock'}\nCategory: ${product.category}\nCurrent stock: ${product.stock} units'))),
+        Row(children: [
+          _infoCard('Cost Price', 'KSh ${product.cost}', Colors.red),
+          _infoCard('Selling Price', 'KSh ${product.price}', navy)
+        ]),
+        Row(children: [
+          _infoCard('Stock', '${product.stock} units',
+              product.stock <= 5 ? Colors.red : Colors.green),
+          _infoCard('Reorder', '${product.reorder} units', gold)
+        ]),
+        Card(
+            child: ListTile(
+                title: const Text('Stock Information'),
+                subtitle: Text(
+                    'Status: ${product.stock <= 5 ? 'Critical' : product.stock < 20 ? 'Low Stock' : 'In Stock'}\nCategory: ${product.category}\nCurrent stock: ${product.stock} units'))),
       ]);
 
   Widget _infoCard(String label, String value, Color color) => Expanded(
@@ -4606,7 +7198,11 @@ class _ProductScreenState extends State<ProductScreen> {
             child: Column(
               children: [
                 Text(label, style: const TextStyle(color: muted, fontSize: 11)),
-                Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
+                Text(value,
+                    style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16)),
               ],
             ),
           ),
@@ -4614,7 +7210,26 @@ class _ProductScreenState extends State<ProductScreen> {
       );
 
   void _showCheckout(BuildContext context, int total) {
-    showModalBottomSheet<void>(context: context, builder: (context) => SafeArea(child: Padding(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, children: [Text('Payment · KSh $total', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), const SizedBox(height: 16), FilledButton(onPressed: () { Navigator.pop(context); setState(() => cart.clear()); }, child: const Text('Complete Cash Sale')), OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))]))));
+    showModalBottomSheet<void>(
+        context: context,
+        builder: (context) => SafeArea(
+            child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text('Payment · KSh $total',
+                      style: const TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        setState(() => cart.clear());
+                      },
+                      child: const Text('Complete Cash Sale')),
+                  OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'))
+                ]))));
   }
 }
 
@@ -4641,22 +7256,32 @@ class CustomerEntry {
 }
 
 class _CreditCustomerSelectorSheet extends StatefulWidget {
-  const _CreditCustomerSelectorSheet({required this.accounts, required this.searchController, required this.onSelected, required this.onAddCustomer});
+  const _CreditCustomerSelectorSheet(
+      {required this.accounts,
+      required this.searchController,
+      required this.onSelected,
+      required this.onAddCustomer});
   final List<CreditAccount> accounts;
   final TextEditingController searchController;
   final ValueChanged<CreditAccount> onSelected;
   final VoidCallback onAddCustomer;
 
   @override
-  State<_CreditCustomerSelectorSheet> createState() => _CreditCustomerSelectorSheetState();
+  State<_CreditCustomerSelectorSheet> createState() =>
+      _CreditCustomerSelectorSheetState();
 }
 
-class _CreditCustomerSelectorSheetState extends State<_CreditCustomerSelectorSheet> {
+class _CreditCustomerSelectorSheetState
+    extends State<_CreditCustomerSelectorSheet> {
   String query = '';
 
   @override
   Widget build(BuildContext context) {
-    final accounts = widget.accounts.where((account) => account.customer.toLowerCase().contains(query.toLowerCase()) || account.phone.contains(query)).toList();
+    final accounts = widget.accounts
+        .where((account) =>
+            account.customer.toLowerCase().contains(query.toLowerCase()) ||
+            account.phone.contains(query))
+        .toList();
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -4664,32 +7289,60 @@ class _CreditCustomerSelectorSheetState extends State<_CreditCustomerSelectorShe
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Select Credit Customer', style: TextStyle(color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
+            const Text('Select Credit Customer',
+                style: TextStyle(
+                    color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
-            const Text('Search an existing debtor or add a new customer profile.', style: TextStyle(color: muted, fontSize: 12)),
+            const Text(
+                'Search an existing debtor or add a new customer profile.',
+                style: TextStyle(color: muted, fontSize: 12)),
             const SizedBox(height: 12),
             TextField(
               controller: widget.searchController,
               onChanged: (value) => setState(() => query = value),
-              decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search name or phone', border: OutlineInputBorder()),
+              decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  hintText: 'Search name or phone',
+                  border: OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             SizedBox(
               height: 230,
               child: accounts.isEmpty
-                  ? const Center(child: Text('No matching credit accounts.', style: TextStyle(color: muted)))
+                  ? const Center(
+                      child: Text('No matching credit accounts.',
+                          style: TextStyle(color: muted)))
                   : ListView(
-                      children: accounts.map((account) => ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                            leading: CircleAvatar(backgroundColor: Color(account.colorValue), child: Text(account.initials, style: const TextStyle(color: Colors.white, fontSize: 12))),
-                            title: Text(account.customer, style: const TextStyle(color: ink, fontWeight: FontWeight.w700)),
-                            subtitle: Text('${account.phone} · Outstanding KSh ${account.balance.toStringAsFixed(0)}', style: const TextStyle(color: muted, fontSize: 11)),
-                            onTap: () => widget.onSelected(account),
-                          )).toList(),
+                      children: accounts
+                          .map((account) => ListTile(
+                                contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                leading: CircleAvatar(
+                                    backgroundColor: Color(account.colorValue),
+                                    child: Text(account.initials,
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12))),
+                                title: Text(account.customer,
+                                    style: const TextStyle(
+                                        color: ink,
+                                        fontWeight: FontWeight.w700)),
+                                subtitle: Text(
+                                    '${account.phone} · Outstanding KSh ${account.balance.toStringAsFixed(0)}',
+                                    style: const TextStyle(
+                                        color: muted, fontSize: 11)),
+                                onTap: () => widget.onSelected(account),
+                              ))
+                          .toList(),
                     ),
             ),
             const SizedBox(height: 8),
-            SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: widget.onAddCustomer, icon: const Icon(Icons.person_add_alt_1), label: const Text('Add New Customer'))),
+            SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                    onPressed: widget.onAddCustomer,
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const Text('Add New Customer'))),
           ],
         ),
       ),
@@ -4732,10 +7385,26 @@ class _CustomerScreenState extends State<CustomerScreen> {
   List<CustomerEntry> _customers = const [];
 
   static const List<CustomerTransaction> _transactions = [
-    CustomerTransaction(date: 'Today 14:18', type: 'Sale', amount: 3400, method: 'M-Pesa', items: 8),
-    CustomerTransaction(date: 'Yesterday', type: 'Credit', amount: 1200, method: 'Credit', items: 4),
-    CustomerTransaction(date: '5 Jul', type: 'Payment', amount: -2000, method: 'Cash', items: 0),
-    CustomerTransaction(date: '3 Jul', type: 'Sale', amount: 4800, method: 'Cash', items: 12),
+    CustomerTransaction(
+        date: 'Today 14:18',
+        type: 'Sale',
+        amount: 3400,
+        method: 'M-Pesa',
+        items: 8),
+    CustomerTransaction(
+        date: 'Yesterday',
+        type: 'Credit',
+        amount: 1200,
+        method: 'Credit',
+        items: 4),
+    CustomerTransaction(
+        date: '5 Jul',
+        type: 'Payment',
+        amount: -2000,
+        method: 'Cash',
+        items: 0),
+    CustomerTransaction(
+        date: '3 Jul', type: 'Sale', amount: 4800, method: 'Cash', items: 12),
   ];
 
   @override
@@ -4751,7 +7420,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
   }
 
   Future<void> _loadCustomers() async {
-    final rows = await _customerService.searchCachedCustomers(_searchController.text);
+    final rows =
+        await _customerService.searchCachedCustomers(_searchController.text);
     if (!mounted) return;
     setState(() {
       _customers = rows.map(_customerFromRow).toList();
@@ -4761,7 +7431,14 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
   CustomerEntry _customerFromRow(Map<String, dynamic> row) {
     final name = row['name'] as String? ?? 'Customer';
-    final initials = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).map((part) => part[0]).take(2).join().toUpperCase();
+    final initials = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .map((part) => part[0])
+        .take(2)
+        .join()
+        .toUpperCase();
     return CustomerEntry(
       id: row['id'] as String? ?? name,
       initials: initials.isEmpty ? 'CU' : initials,
@@ -4786,20 +7463,45 @@ class _CustomerScreenState extends State<CustomerScreen> {
       isScrollControlled: true,
       showDragHandle: true,
       builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
+        padding: EdgeInsets.fromLTRB(
+            20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
         child: Form(
           key: formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Register New Customer', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+              const Text('Register New Customer',
+                  style: TextStyle(
+                      color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 16),
-              TextFormField(controller: nameController, decoration: const InputDecoration(labelText: 'Customer name', border: OutlineInputBorder()), validator: (value) => value == null || value.trim().isEmpty ? 'Name is required' : null),
+              TextFormField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                      labelText: 'Customer name', border: OutlineInputBorder()),
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? 'Name is required'
+                      : null),
               const SizedBox(height: 12),
-              TextFormField(controller: phoneController, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone number', hintText: '0712 345 678', border: OutlineInputBorder())),
+              TextFormField(
+                  controller: phoneController,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                      labelText: 'Phone number',
+                      hintText: '0712 345 678',
+                      border: OutlineInputBorder())),
               const SizedBox(height: 12),
-              TextFormField(controller: limitController, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Initial credit limit', prefixText: 'KSh ', border: OutlineInputBorder()), validator: (value) => double.tryParse(value ?? '') == null ? 'Enter a valid amount' : null),
+              TextFormField(
+                  controller: limitController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                      labelText: 'Initial credit limit',
+                      prefixText: 'KSh ',
+                      border: OutlineInputBorder()),
+                  validator: (value) => double.tryParse(value ?? '') == null
+                      ? 'Enter a valid amount'
+                      : null),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
@@ -4830,19 +7532,27 @@ class _CustomerScreenState extends State<CustomerScreen> {
     if (!created) return;
     await _loadCustomers();
     if (!mounted) return;
-    unawaited(_syncService.processCloudSync(businessId: 'demo-business', deviceId: 'mobile-device', userId: 'demo-owner'));
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Customer registered and queued for sync.')));
+    unawaited(_syncService.processCloudSync(
+        businessId: 'demo-business',
+        deviceId: 'mobile-device',
+        userId: 'demo-owner'));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        backgroundColor: Color(0xFF2E7D32),
+        content: Text('Customer registered and queued for sync.')));
   }
 
   @override
   Widget build(BuildContext context) {
     final filtered = _customers.where((customer) {
-      final matchesSearch = customer.name.toLowerCase().contains(search.toLowerCase());
-      final matchesTab = tab == 'all' || (tab == 'credit' && customer.credit > 0);
+      final matchesSearch =
+          customer.name.toLowerCase().contains(search.toLowerCase());
+      final matchesTab =
+          tab == 'all' || (tab == 'credit' && customer.credit > 0);
       return matchesSearch && matchesTab;
     }).toList();
 
-    final totalCredit = _customers.fold<int>(0, (sum, customer) => sum + customer.credit);
+    final totalCredit =
+        _customers.fold<int>(0, (sum, customer) => sum + customer.credit);
 
     if (selected != null) {
       final customer = _customers.firstWhere((item) => item.name == selected);
@@ -4872,7 +7582,11 @@ class _CustomerScreenState extends State<CustomerScreen> {
                         icon: const Icon(Icons.arrow_back),
                       ),
                       const SizedBox(width: 12),
-                      const Text('Customer Profile', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                      const Text('Customer Profile',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700)),
                     ],
                   ),
                   const SizedBox(height: 18),
@@ -4886,7 +7600,11 @@ class _CustomerScreenState extends State<CustomerScreen> {
                           shape: BoxShape.circle,
                         ),
                         child: Center(
-                          child: Text(customer.initials, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                          child: Text(customer.initials,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -4894,11 +7612,19 @@ class _CustomerScreenState extends State<CustomerScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(customer.name, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                            Text(customer.name,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800)),
                             const SizedBox(height: 3),
-                            Text(customer.phone, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                            Text(customer.phone,
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 13)),
                             const SizedBox(height: 3),
-                            Text('Last visit: ${customer.lastVisit}', style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                            Text('Last visit: ${customer.lastVisit}',
+                                style: const TextStyle(
+                                    color: Color(0x99FFFFFF), fontSize: 11)),
                           ],
                         ),
                       ),
@@ -4919,8 +7645,14 @@ class _CustomerScreenState extends State<CustomerScreen> {
                     mainAxisSpacing: 10,
                     childAspectRatio: 1.35,
                     children: [
-                      _detailStatCard('Credit', 'KSh ${customer.credit.toString()}', customer.credit > 0 ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32)),
-                      _detailStatCard('Purchases', '${customer.purchases}', navy),
+                      _detailStatCard(
+                          'Credit',
+                          'KSh ${customer.credit.toString()}',
+                          customer.credit > 0
+                              ? const Color(0xFFD32F2F)
+                              : const Color(0xFF2E7D32)),
+                      _detailStatCard(
+                          'Purchases', '${customer.purchases}', navy),
                       _detailStatCard('This Month', 'KSh 9.2K', gold),
                     ],
                   ),
@@ -4939,9 +7671,17 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Outstanding Balance', style: TextStyle(color: Color(0xFFB71C1C), fontSize: 13, fontWeight: FontWeight.w700)),
+                                const Text('Outstanding Balance',
+                                    style: TextStyle(
+                                        color: Color(0xFFB71C1C),
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700)),
                                 const SizedBox(height: 4),
-                                Text('KSh ${customer.credit}', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 24, fontWeight: FontWeight.w900)),
+                                Text('KSh ${customer.credit}',
+                                    style: const TextStyle(
+                                        color: Color(0xFFD32F2F),
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900)),
                               ],
                             ),
                           ),
@@ -4950,10 +7690,14 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             style: TextButton.styleFrom(
                               backgroundColor: const Color(0xFFD32F2F),
                               foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
                             ),
-                            child: const Text('Record Payment', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                            child: const Text('Record Payment',
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w800)),
                           ),
                         ],
                       ),
@@ -4967,10 +7711,13 @@ class _CustomerScreenState extends State<CustomerScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: navy,
                             foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
-                          child: const Text('New Sale', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                          child: const Text('New Sale',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -4980,10 +7727,13 @@ class _CustomerScreenState extends State<CustomerScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: const Color(0xFFE9EEFF),
                             foregroundColor: navy,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
-                          child: const Text('Statement', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                          child: const Text('Statement',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w700)),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -4994,7 +7744,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
                           color: const Color(0xFFE3EAF8),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Center(child: Text('📞', style: TextStyle(fontSize: 18))),
+                        child: const Center(
+                            child: Text('📞', style: TextStyle(fontSize: 18))),
                       ),
                     ],
                   ),
@@ -5004,22 +7755,42 @@ class _CustomerScreenState extends State<CustomerScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Transaction History', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Transaction History',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
                         ..._transactions.map((transaction) {
                           final isPositive = transaction.amount >= 0;
-                          final badgeColor = transaction.amount < 0 ? const Color(0xFFE8F5E9) : transaction.method == 'Credit' ? const Color(0xFFFFEBEE) : const Color(0xFFE3EAF8);
-                          final icon = transaction.amount < 0 ? '✅' : transaction.method == 'Credit' ? '📋' : transaction.method == 'M-Pesa' ? '📱' : '💵';
+                          final badgeColor = transaction.amount < 0
+                              ? const Color(0xFFE8F5E9)
+                              : transaction.method == 'Credit'
+                                  ? const Color(0xFFFFEBEE)
+                                  : const Color(0xFFE3EAF8);
+                          final icon = transaction.amount < 0
+                              ? '✅'
+                              : transaction.method == 'Credit'
+                                  ? '📋'
+                                  : transaction.method == 'M-Pesa'
+                                      ? '📱'
+                                      : '💵';
                           return Container(
                             padding: const EdgeInsets.only(bottom: 12),
                             margin: const EdgeInsets.only(bottom: 12),
                             decoration: const BoxDecoration(
-                              border: Border(bottom: BorderSide(color: Color(0xFFF0F3F9))),
+                              border: Border(
+                                  bottom: BorderSide(color: Color(0xFFF0F3F9))),
                             ),
                             child: Row(
                               children: [
@@ -5030,26 +7801,38 @@ class _CustomerScreenState extends State<CustomerScreen> {
                                     color: badgeColor,
                                     borderRadius: BorderRadius.circular(10),
                                   ),
-                                  child: Center(child: Text(icon, style: const TextStyle(fontSize: 16))),
+                                  child: Center(
+                                      child: Text(icon,
+                                          style:
+                                              const TextStyle(fontSize: 16))),
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         '${transaction.type}${transaction.items > 0 ? ' · ${transaction.items} items' : ''}',
-                                        style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w600),
+                                        style: const TextStyle(
+                                            color: ink,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600),
                                       ),
                                       const SizedBox(height: 2),
-                                      Text(transaction.date, style: const TextStyle(color: muted, fontSize: 11)),
+                                      Text(transaction.date,
+                                          style: const TextStyle(
+                                              color: muted, fontSize: 11)),
                                     ],
                                   ),
                                 ),
                                 Text(
-                                  '${isPositive ? '' : '-'}KSh ${isPositive ? transaction.amount : transaction.amount.abs()}'.replaceAll(RegExp(r'-KSh 0'), 'KSh 0'),
+                                  '${isPositive ? '' : '-'}KSh ${isPositive ? transaction.amount : transaction.amount.abs()}'
+                                      .replaceAll(RegExp(r'-KSh 0'), 'KSh 0'),
                                   style: TextStyle(
-                                    color: isPositive ? ink : const Color(0xFF2E7D32),
+                                    color: isPositive
+                                        ? ink
+                                        : const Color(0xFF2E7D32),
                                     fontSize: 13,
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -5084,34 +7867,48 @@ class _CustomerScreenState extends State<CustomerScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Customers', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                    const Text('Customers',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800)),
                     TextButton(
                       onPressed: _showRegisterCustomerSheet,
                       style: TextButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: ink,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
                       ),
-                      child: const Text('+ Add Customer', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                      child: const Text('+ Add Customer',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    _summaryMetric('Total Customers', '${_customers.length}', Colors.white),
+                    _summaryMetric('Total Customers', '${_customers.length}',
+                        Colors.white),
                     const SizedBox(width: 8),
-                    _summaryMetric('Total Credit', 'KSh $totalCredit', const Color(0xFFFF6B6B)),
+                    _summaryMetric('Total Credit', 'KSh $totalCredit',
+                        const Color(0xFFFF6B6B)),
                     const SizedBox(width: 8),
-                    _summaryMetric('Credit Accounts', '${_customers.where((customer) => customer.credit > 0).length}', const Color(0xFFFFD93D)),
+                    _summaryMetric(
+                        'Credit Accounts',
+                        '${_customers.where((customer) => customer.credit > 0).length}',
+                        const Color(0xFFFFD93D)),
                   ],
                 ),
                 const SizedBox(height: 14),
                 Container(
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.08),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.14)),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: TextField(
@@ -5124,7 +7921,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
                     decoration: InputDecoration(
                       hintText: 'Search customers...',
                       hintStyle: const TextStyle(color: Color(0x99FFFFFF)),
-                      prefixIcon: const Icon(Icons.search, color: Color(0xCCFFFFFF)),
+                      prefixIcon:
+                          const Icon(Icons.search, color: Color(0xCCFFFFFF)),
                       border: InputBorder.none,
                       contentPadding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -5137,7 +7935,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
             color: Colors.white,
             child: Row(
               children: ['all', 'credit'].map((value) {
-                final label = value == 'all' ? 'All Customers' : 'Credit Accounts';
+                final label =
+                    value == 'all' ? 'All Customers' : 'Credit Accounts';
                 final selected = tab == value;
                 return Expanded(
                   child: InkWell(
@@ -5145,7 +7944,10 @@ class _CustomerScreenState extends State<CustomerScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       decoration: BoxDecoration(
-                        border: Border(bottom: BorderSide(color: selected ? navy : Colors.transparent, width: 2)),
+                        border: Border(
+                            bottom: BorderSide(
+                                color: selected ? navy : Colors.transparent,
+                                width: 2)),
                       ),
                       child: Text(
                         label,
@@ -5172,7 +7974,12 @@ class _CustomerScreenState extends State<CustomerScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: InkWell(
                     onTap: () => setState(() => selected = customer.name),
@@ -5186,7 +7993,11 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             shape: BoxShape.circle,
                           ),
                           child: Center(
-                            child: Text(customer.initials, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+                            child: Text(customer.initials,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800)),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -5194,9 +8005,16 @@ class _CustomerScreenState extends State<CustomerScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(customer.name, style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
+                              Text(customer.name,
+                                  style: const TextStyle(
+                                      color: ink,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800)),
                               const SizedBox(height: 2),
-                              Text('${customer.phone} · ${customer.purchases} purchases', style: const TextStyle(color: muted, fontSize: 12)),
+                              Text(
+                                  '${customer.phone} · ${customer.purchases} purchases',
+                                  style: const TextStyle(
+                                      color: muted, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -5204,18 +8022,31 @@ class _CustomerScreenState extends State<CustomerScreen> {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: customer.credit > 0
                               ? [
-                                  Text('KSh ${customer.credit}', style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 13, fontWeight: FontWeight.w800)),
+                                  Text('KSh ${customer.credit}',
+                                      style: const TextStyle(
+                                          color: Color(0xFFD32F2F),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800)),
                                   const SizedBox(height: 2),
-                                  const Text('Credit', style: TextStyle(color: Color(0xFFD32F2F), fontSize: 11, fontWeight: FontWeight.w700)),
+                                  const Text('Credit',
+                                      style: TextStyle(
+                                          color: Color(0xFFD32F2F),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700)),
                                 ]
                               : [
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 5),
                                     decoration: BoxDecoration(
                                       color: const Color(0xFFE9F7EE),
                                       borderRadius: BorderRadius.circular(999),
                                     ),
-                                    child: const Text('Cleared', style: TextStyle(color: Color(0xFF2E7D32), fontSize: 10, fontWeight: FontWeight.w800)),
+                                    child: const Text('Cleared',
+                                        style: TextStyle(
+                                            color: Color(0xFF2E7D32),
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800)),
                                   ),
                                 ],
                         ),
@@ -5240,9 +8071,13 @@ class _CustomerScreenState extends State<CustomerScreen> {
           ),
           child: Column(
             children: [
-              Text(label, style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
+              Text(label,
+                  style:
+                      const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
               const SizedBox(height: 3),
-              Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 16, fontWeight: FontWeight.w800)),
             ],
           ),
         ),
@@ -5253,57 +8088,171 @@ class _CustomerScreenState extends State<CustomerScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(label, style: const TextStyle(color: muted, fontSize: 11)),
             const SizedBox(height: 6),
-            Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w800)),
+            Text(value,
+                style: TextStyle(
+                    color: color, fontSize: 16, fontWeight: FontWeight.w800)),
           ],
         ),
       );
 }
 
+class UnreadNotificationBadge extends StatefulWidget {
+  const UnreadNotificationBadge({super.key});
+
+  @override
+  State<UnreadNotificationBadge> createState() =>
+      _UnreadNotificationBadgeState();
+}
+
+class _UnreadNotificationBadgeState extends State<UnreadNotificationBadge> {
+  int _count = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final session = await AuthService().readSession();
+      if (session == null) return;
+      final count = await NotificationService().unreadCount(session);
+      if (mounted) setState(() => _count = count);
+    } catch (_) {
+      // A badge is supplementary; keep it hidden on a temporary API failure.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_count == 0) return const SizedBox.shrink();
+    return Container(
+      constraints: const BoxConstraints(minWidth: 20),
+      height: 20,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+          color: const Color(0xFFD32F2F),
+          borderRadius: BorderRadius.circular(99)),
+      child: Text(_count > 99 ? '99+' : '$_count',
+          style: const TextStyle(
+              color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
 class MoreScreen extends StatelessWidget {
-  const MoreScreen({required this.onOpen, required this.role, required this.isDarkMode, required this.onLogout, required this.onCloseShift});
+  const MoreScreen(
+      {required this.onOpen,
+      required this.role,
+      required this.isDarkMode,
+      required this.onLogout,
+      required this.onCloseShift});
   final ValueChanged<String> onOpen;
   final String role;
   final bool isDarkMode;
   final VoidCallback onLogout;
   final VoidCallback onCloseShift;
 
-  Color get pageBackground => isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
-  Color get panelBackground => isDarkMode ? const Color(0xFF192235) : Colors.white;
+  Color get pageBackground =>
+      isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
+  Color get panelBackground =>
+      isDarkMode ? const Color(0xFF192235) : Colors.white;
   Color get primaryText => isDarkMode ? Colors.white : ink;
-  Color get dividerColor => isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
+  Color get dividerColor =>
+      isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
 
   final List<Map<String, dynamic>> _menuSections = const [
     {
       'section': 'Sales & Finance',
       'items': [
-        {'label': 'Sales History', 'icon': '🧾', 'color': Color(0xFF123A8F), 'screen': 'Reports & Analytics'},
-        {'label': 'Purchase Orders', 'icon': '📦', 'color': Color(0xFF2E7D32), 'screen': 'Purchase Orders'},
-        {'label': 'Suppliers', 'icon': '🏭', 'color': Color(0xFF00796B), 'screen': 'Suppliers'},
-        {'label': 'Credit Book', 'icon': '📋', 'color': Color(0xFFD32F2F), 'screen': 'Credit Book'},
-        {'label': 'Expense Tracking', 'icon': '💸', 'color': Color(0xFFF57C00), 'screen': 'Expense Tracking'},
+        {
+          'label': 'Sales History',
+          'icon': '🧾',
+          'color': Color(0xFF123A8F),
+          'screen': 'Reports & Analytics'
+        },
+        {
+          'label': 'Purchase Orders',
+          'icon': '📦',
+          'color': Color(0xFF2E7D32),
+          'screen': 'Purchase Orders'
+        },
+        {
+          'label': 'Suppliers',
+          'icon': '🏭',
+          'color': Color(0xFF00796B),
+          'screen': 'Suppliers'
+        },
+        {
+          'label': 'Credit Book',
+          'icon': '📋',
+          'color': Color(0xFFD32F2F),
+          'screen': 'Credit Book'
+        },
+        {
+          'label': 'Expense Tracking',
+          'icon': '💸',
+          'color': Color(0xFFF57C00),
+          'screen': 'Expense Tracking'
+        },
       ],
     },
     {
       'section': 'People',
       'items': [
-        {'label': 'Employees', 'icon': '👥', 'color': Color(0xFF5E35B1), 'screen': 'Employees'},
-        {'label': 'Customer List', 'icon': '🙂', 'color': Color(0xFF0288D1), 'screen': 'customers'},
+        {
+          'label': 'Employees',
+          'icon': '👥',
+          'color': Color(0xFF5E35B1),
+          'screen': 'Employees'
+        },
+        {
+          'label': 'Customer List',
+          'icon': '🙂',
+          'color': Color(0xFF0288D1),
+          'screen': 'customers'
+        },
       ],
     },
     {
       'section': 'System',
       'items': [
-        {'label': 'Notifications', 'icon': '🔔', 'color': Color(0xFFE91E63), 'screen': 'Notifications', 'badge': '3'},
-        {'label': 'Backup & Cloud Sync', 'icon': '☁️', 'color': Color(0xFF0288D1), 'screen': 'Backup & Cloud Sync'},
-        {'label': 'Settings', 'icon': '⚙️', 'color': Color(0xFF546E7A), 'screen': 'Settings'},
-        {'label': 'User Profile', 'icon': '👤', 'color': Color(0xFF123A8F), 'screen': 'User Profile'},
+        {
+          'label': 'Notifications',
+          'icon': '🔔',
+          'color': Color(0xFFE91E63),
+          'screen': 'Notifications'
+        },
+        {
+          'label': 'Backup & Cloud Sync',
+          'icon': '☁️',
+          'color': Color(0xFF0288D1),
+          'screen': 'Backup & Cloud Sync'
+        },
+        {
+          'label': 'Settings',
+          'icon': '⚙️',
+          'color': Color(0xFF546E7A),
+          'screen': 'Settings'
+        },
+        {
+          'label': 'User Profile',
+          'icon': '👤',
+          'color': Color(0xFF123A8F),
+          'screen': 'User Profile'
+        },
       ],
     },
   ];
@@ -5314,148 +8263,204 @@ class MoreScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
           children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [ink, navy]),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const CircleAvatar(
-                      radius: 28,
-                      backgroundColor: gold,
-                      child: Text('A', style: TextStyle(color: ink, fontWeight: FontWeight.bold, fontSize: 20)),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Admin User', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
-                          SizedBox(height: 2),
-                          Text('admin@mobiduka.co.ke', style: TextStyle(color: Colors.white60, fontSize: 12)),
-                          SizedBox(height: 6),
-                          DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Color(0x40D4AF37),
-                              borderRadius: BorderRadius.all(Radius.circular(999)),
-                            ),
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              child: Text('Store Manager', style: TextStyle(color: Color(0xFFF4D46A), fontSize: 10, fontWeight: FontWeight.w700)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => onOpen('User Profile'),
-                      icon: const Icon(Icons.edit, color: Colors.white),
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.white.withValues(alpha: 0.12),
-                        fixedSize: const Size(36, 36),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Row(
+            Container(
+              padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(colors: [ink, navy]),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Expanded(
+                      const CircleAvatar(
+                        radius: 28,
+                        backgroundColor: gold,
+                        child: Text('A',
+                            style: TextStyle(
+                                color: ink,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 20)),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Store', style: TextStyle(color: Colors.white60, fontSize: 10)),
+                            Text('Admin User',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w800)),
                             SizedBox(height: 2),
-                            Text('MobiDuka Store', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
+                            Text('owner@mobiduka.com',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 12)),
+                            SizedBox(height: 6),
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Color(0x40D4AF37),
+                                borderRadius:
+                                    BorderRadius.all(Radius.circular(999)),
+                              ),
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                child: Text('Store Manager',
+                                    style: TextStyle(
+                                        color: Color(0xFFF4D46A),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700)),
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text('Branch', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                            SizedBox(height: 2),
-                            Text('Nairobi CBD', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text('Shift', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                            SizedBox(height: 2),
-                            Text('Morning', style: TextStyle(color: gold, fontWeight: FontWeight.w700, fontSize: 12)),
-                          ],
+                      IconButton(
+                        onPressed: () => onOpen('User Profile'),
+                        icon: const Icon(Icons.edit, color: Colors.white),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: 0.12),
+                          fixedSize: const Size(36, 36),
                         ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            children: [
+                              Text('Store',
+                                  style: TextStyle(
+                                      color: Colors.white60, fontSize: 10)),
+                              SizedBox(height: 2),
+                              Text('MobiDuka Store',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              Text('Branch',
+                                  style: TextStyle(
+                                      color: Colors.white60, fontSize: 10)),
+                              SizedBox(height: 2),
+                              Text('Nairobi CBD',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              Text('Shift',
+                                  style: TextStyle(
+                                      color: Colors.white60, fontSize: 10)),
+                              SizedBox(height: 2),
+                              Text('Morning',
+                                  style: TextStyle(
+                                      color: gold,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            ..._menuSections.map((section) {
+              final items = (section['items'] as List<Map<String, dynamic>>)
+                  .where((item) {
+                final screen = item['screen'];
+                if (role == 'OWNER' || role == 'ADMIN') return true;
+                if (role == 'CASHIER')
+                  return screen == 'Expense Tracking' ||
+                      screen == 'Credit Book';
+                if (role == 'SUPERVISOR')
+                  return screen != 'Reports & Analytics' &&
+                      screen != 'Settings' &&
+                      screen != 'Backup & Cloud Sync';
+                if (role == 'ACCOUNTANT')
+                  return screen == 'Reports & Analytics' ||
+                      screen == 'Credit Book' ||
+                      screen == 'Expense Tracking' ||
+                      screen == 'User Profile';
+                return false;
+              }).toList();
+              return items.isEmpty
+                  ? null
+                  : _menuSection(section['section'] as String, items);
+            }).whereType<Widget>(),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: onCloseShift,
+              icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
+              label: const Text('Close Shift Session',
+                  style: TextStyle(
+                      color: Color(0xFF2E7D32),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700)),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFFE8F5E9),
+                foregroundColor: const Color(0xFF2E7D32),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: Color(0xFFC8E6C9)),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          ..._menuSections
-              .map((section) {
-                final items = (section['items'] as List<Map<String, dynamic>>).where((item) {
-                  final screen = item['screen'];
-                  if (role == 'OWNER' || role == 'ADMIN') return true;
-                  if (role == 'CASHIER') return screen == 'Expense Tracking' || screen == 'Credit Book';
-                  if (role == 'SUPERVISOR') return screen != 'Reports & Analytics' && screen != 'Settings' && screen != 'Backup & Cloud Sync';
-                  if (role == 'ACCOUNTANT') return screen == 'Reports & Analytics' || screen == 'Credit Book' || screen == 'Expense Tracking' || screen == 'User Profile';
-                  return false;
-                }).toList();
-                return items.isEmpty ? null : _menuSection(section['section'] as String, items);
-              })
-              .whereType<Widget>(),
-          const SizedBox(height: 12),
-          TextButton.icon(
-            onPressed: onCloseShift,
-            icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
-            label: const Text('Close Shift Session', style: TextStyle(color: Color(0xFF2E7D32), fontSize: 15, fontWeight: FontWeight.w700)),
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFFE8F5E9),
-              foregroundColor: const Color(0xFF2E7D32),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-                side: const BorderSide(color: Color(0xFFC8E6C9)),
               ),
             ),
-          ),
-          const SizedBox(height: 10),
-          TextButton.icon(
-            onPressed: onLogout,
-            icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
-            label: const Text('Logout', style: TextStyle(color: Color(0xFFD32F2F), fontSize: 15, fontWeight: FontWeight.w700)),
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFFFFF5F5),
-              foregroundColor: const Color(0xFFD32F2F),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-                side: const BorderSide(color: Color(0xFFFFCDD2)),
+            const SizedBox(height: 10),
+            TextButton.icon(
+              onPressed: onLogout,
+              icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
+              label: const Text('Logout',
+                  style: TextStyle(
+                      color: Color(0xFFD32F2F),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700)),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFFFFF5F5),
+                foregroundColor: const Color(0xFFD32F2F),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: Color(0xFFFFCDD2)),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 14),
-          Center(
-            child: Text(
-              'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: isDarkMode ? const Color(0xFF8290AD) : muted, fontSize: 11, height: 1.5),
+            const SizedBox(height: 14),
+            Center(
+              child: Text(
+                'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: isDarkMode ? const Color(0xFF8290AD) : muted,
+                    fontSize: 11,
+                    height: 1.5),
+              ),
             ),
-          ),
           ],
         ),
       );
@@ -5479,23 +8484,31 @@ class MoreScreen extends StatelessWidget {
             decoration: BoxDecoration(
               color: panelBackground,
               borderRadius: BorderRadius.circular(14),
-              boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+              boxShadow: const [
+                BoxShadow(
+                    color: Color(0x0F000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2))
+              ],
             ),
             child: Column(
               children: items.asMap().entries.map((entry) {
                 final i = entry.key;
                 final item = entry.value;
-                final badge = item['badge'];
+                final isNotifications = item['screen'] == 'Notifications';
                 return Material(
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: () => onOpen(item['screen'] as String),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
                         border: Border(
                           bottom: BorderSide(
-                            color: i < items.length - 1 ? dividerColor : Colors.transparent,
+                            color: i < items.length - 1
+                                ? dividerColor
+                                : Colors.transparent,
                             width: 1,
                           ),
                         ),
@@ -5506,37 +8519,31 @@ class MoreScreen extends StatelessWidget {
                             width: 40,
                             height: 40,
                             decoration: BoxDecoration(
-                              color: Color.alphaBlend((item['color'] as Color).withValues(alpha: 0.12), Colors.white),
+                              color: Color.alphaBlend(
+                                  (item['color'] as Color)
+                                      .withValues(alpha: 0.12),
+                                  Colors.white),
                               borderRadius: BorderRadius.circular(11),
                             ),
                             child: Center(
-                              child: Text(item['icon'] as String, style: const TextStyle(fontSize: 18)),
+                              child: Text(item['icon'] as String,
+                                  style: const TextStyle(fontSize: 18)),
                             ),
                           ),
                           const SizedBox(width: 14),
                           Expanded(
                             child: Text(
                               item['label'] as String,
-                              style: TextStyle(color: primaryText, fontSize: 14, fontWeight: FontWeight.w600),
+                              style: TextStyle(
+                                  color: primaryText,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600),
                             ),
                           ),
-                          if (badge != null)
-                            Container(
-                              width: 20,
-                              height: 20,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFD32F2F),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Center(
-                                child: Text(
-                                  badge as String,
-                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                            ),
-                          if (badge == null)
-                            const Icon(Icons.chevron_right, color: Color(0xFFB0BAD3), size: 18),
+                          if (isNotifications) const UnreadNotificationBadge(),
+                          if (!isNotifications)
+                            const Icon(Icons.chevron_right,
+                                color: Color(0xFFB0BAD3), size: 18),
                         ],
                       ),
                     ),
@@ -5551,7 +8558,11 @@ class MoreScreen extends StatelessWidget {
 }
 
 class SettingsDetailScreen extends StatefulWidget {
-  const SettingsDetailScreen({required this.onBack, required this.isDarkMode, required this.onThemeChanged, super.key});
+  const SettingsDetailScreen(
+      {required this.onBack,
+      required this.isDarkMode,
+      required this.onThemeChanged,
+      super.key});
   final VoidCallback onBack;
   final bool isDarkMode;
   final ValueChanged<bool> onThemeChanged;
@@ -5568,9 +8579,12 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   bool mpesaEnabled = true;
 
   bool get isDarkMode => widget.isDarkMode;
-  Color get pageBackground => isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
-  Color get panelBackground => isDarkMode ? const Color(0xFF192235) : Colors.white;
-  Color get dividerColor => isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
+  Color get pageBackground =>
+      isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
+  Color get panelBackground =>
+      isDarkMode ? const Color(0xFF192235) : Colors.white;
+  Color get dividerColor =>
+      isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
 
   Widget _toggle(bool value, ValueChanged<bool> onChanged) {
     return GestureDetector(
@@ -5592,7 +8606,12 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
             decoration: const BoxDecoration(
               color: Colors.white,
               shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: Color(0x22000000), blurRadius: 2, offset: Offset(0, 1))],
+              boxShadow: [
+                BoxShadow(
+                    color: Color(0x22000000),
+                    blurRadius: 2,
+                    offset: Offset(0, 1))
+              ],
             ),
           ),
         ),
@@ -5624,7 +8643,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                   icon: const Icon(Icons.arrow_back),
                 ),
                 const SizedBox(width: 12),
-                const Text('Settings', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                const Text('Settings',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -5632,13 +8655,23 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
               children: [
-                const Text('Business Information', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                const Text('Business Information',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
@@ -5646,18 +8679,31 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                       _settingsRow('Location', 'Nairobi CBD, Kenya'),
                       _settingsRow('Phone', '+254 712 345 678'),
                       _settingsRow('Tax PIN', 'A123456789B'),
-                      _settingsRow('Currency', 'KES (Kenyan Shilling)', isLast: true),
+                      _settingsRow('Currency', 'KES (Kenyan Shilling)',
+                          isLast: true),
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Appearance', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                const Text('Appearance',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: isDarkMode ? const [] : const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: isDarkMode
+                        ? const []
+                        : const [
+                            BoxShadow(
+                                color: Color(0x0F000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 2))
+                          ],
                   ),
                   child: _settingsToggleRow(
                     'Dark Mode',
@@ -5668,56 +8714,120 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Preferences', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                const Text('Preferences',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _settingsToggleRow('Auto-print Receipt', 'Print receipt after every sale', receiptPrint, (value) => setState(() => receiptPrint = value)),
-                      _settingsToggleRow('Low Stock Alerts', 'Notify when stock is below reorder level', lowStockAlerts, (value) => setState(() => lowStockAlerts = value)),
-                      _settingsToggleRow('Daily Report Email', 'Send end-of-day report to email', dailyReport, (value) => setState(() => dailyReport = value)),
-                      _settingsToggleRow('Auto Cloud Backup', 'Backup data daily at midnight', autoBackup, (value) => setState(() => autoBackup = value)),
-                      _settingsToggleRow('M-Pesa Integration', 'Accept M-Pesa payments', mpesaEnabled, (value) => setState(() => mpesaEnabled = value), isLast: true),
+                      _settingsToggleRow(
+                          'Auto-print Receipt',
+                          'Print receipt after every sale',
+                          receiptPrint,
+                          (value) => setState(() => receiptPrint = value)),
+                      _settingsToggleRow(
+                          'Low Stock Alerts',
+                          'Notify when stock is below reorder level',
+                          lowStockAlerts,
+                          (value) => setState(() => lowStockAlerts = value)),
+                      _settingsToggleRow(
+                          'Daily Report Email',
+                          'Send end-of-day report to email',
+                          dailyReport,
+                          (value) => setState(() => dailyReport = value)),
+                      _settingsToggleRow(
+                          'Auto Cloud Backup',
+                          'Backup data daily at midnight',
+                          autoBackup,
+                          (value) => setState(() => autoBackup = value)),
+                      _settingsToggleRow(
+                          'M-Pesa Integration',
+                          'Accept M-Pesa payments',
+                          mpesaEnabled,
+                          (value) => setState(() => mpesaEnabled = value),
+                          isLast: true),
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Payment Methods', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                const Text('Payment Methods',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
                       _paymentMethodRow('💵', 'Cash', true, '', false),
-                      _paymentMethodRow('📱', 'M-Pesa', mpesaEnabled, '2.8% fee', false),
+                      _paymentMethodRow(
+                          '📱', 'M-Pesa', mpesaEnabled, '2.8% fee', false),
                       _paymentMethodRow('📋', 'Credit / Tab', true, '', false),
-                      _paymentMethodRow('🏦', 'Bank Transfer', false, 'Offline', true),
+                      _paymentMethodRow(
+                          '🏦', 'Bank Transfer', false, 'Offline', true),
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Data Management', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                const Text('Data Management',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: panelBackground,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _actionRow('☁️', 'Backup Now', 'Last backup: Today 06:00 AM', const Color(0xFF0288D1), false),
-                      _actionRow('📤', 'Export Data (CSV)', 'Download all transactions', const Color(0xFF2E7D32), false),
-                      _actionRow('🗑️', 'Clear Cache', '12.4 MB used', const Color(0xFFF57C00), true),
+                      _actionRow(
+                          '☁️',
+                          'Backup Now',
+                          'Last backup: Today 06:00 AM',
+                          const Color(0xFF0288D1),
+                          false),
+                      _actionRow(
+                          '📤',
+                          'Export Data (CSV)',
+                          'Download all transactions',
+                          const Color(0xFF2E7D32),
+                          false),
+                      _actionRow('🗑️', 'Clear Cache', '12.4 MB used',
+                          const Color(0xFFF57C00), true),
                     ],
                   ),
                 ),
@@ -5740,18 +8850,25 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
+        border: Border(
+            bottom: BorderSide(
+                color: isLast ? Colors.transparent : dividerColor, width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 13, fontWeight: FontWeight.w600)),
           SizedBox(
             width: 180,
             child: Text(
               value,
               textAlign: TextAlign.right,
-              style: TextStyle(color: isDarkMode ? Colors.white : ink, fontSize: 13, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: isDarkMode ? Colors.white : ink,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700),
             ),
           ),
         ],
@@ -5759,11 +8876,15 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     );
   }
 
-  Widget _settingsToggleRow(String label, String sub, bool value, ValueChanged<bool> onChanged, {bool isLast = false}) {
+  Widget _settingsToggleRow(
+      String label, String sub, bool value, ValueChanged<bool> onChanged,
+      {bool isLast = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
+        border: Border(
+            bottom: BorderSide(
+                color: isLast ? Colors.transparent : dividerColor, width: 1)),
       ),
       child: Row(
         children: [
@@ -5771,7 +8892,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: TextStyle(color: isDarkMode ? Colors.white : ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(label,
+                    style: TextStyle(
+                        color: isDarkMode ? Colors.white : ink,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700)),
                 const SizedBox(height: 2),
                 Text(sub, style: const TextStyle(color: muted, fontSize: 11)),
               ],
@@ -5784,14 +8909,19 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     );
   }
 
-  Widget _paymentMethodRow(String icon, String label, bool enabled, String tag, bool isLast) {
-    final badgeColor = enabled ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
-    final badgeText = enabled ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F);
+  Widget _paymentMethodRow(
+      String icon, String label, bool enabled, String tag, bool isLast) {
+    final badgeColor =
+        enabled ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
+    final badgeText =
+        enabled ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
+        border: Border(
+            bottom: BorderSide(
+                color: isLast ? Colors.transparent : dividerColor, width: 1)),
       ),
       child: Row(
         children: [
@@ -5802,36 +8932,53 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
               color: const Color(0xFFEEF3FF),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Center(child: Text(icon, style: const TextStyle(fontSize: 18))),
+            child:
+                Center(child: Text(icon, style: const TextStyle(fontSize: 18))),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(label, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+            child: Text(label,
+                style: const TextStyle(
+                    color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
           ),
           if (tag.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(999)),
-              child: Text(tag, style: TextStyle(color: badgeText, fontSize: 10, fontWeight: FontWeight.w700)),
+              decoration: BoxDecoration(
+                  color: badgeColor, borderRadius: BorderRadius.circular(999)),
+              child: Text(tag,
+                  style: TextStyle(
+                      color: badgeText,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700)),
             )
           else
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: enabled ? badgeColor : const Color(0xFFFFEBEE), borderRadius: BorderRadius.circular(999)),
-              child: Text(enabled ? 'Active' : 'Inactive', style: TextStyle(color: enabled ? badgeText : const Color(0xFFD32F2F), fontSize: 10, fontWeight: FontWeight.w700)),
+              decoration: BoxDecoration(
+                  color: enabled ? badgeColor : const Color(0xFFFFEBEE),
+                  borderRadius: BorderRadius.circular(999)),
+              child: Text(enabled ? 'Active' : 'Inactive',
+                  style: TextStyle(
+                      color: enabled ? badgeText : const Color(0xFFD32F2F),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700)),
             ),
         ],
       ),
     );
   }
 
-  Widget _actionRow(String icon, String label, String sub, Color color, bool isLast) {
+  Widget _actionRow(
+      String icon, String label, String sub, Color color, bool isLast) {
     return InkWell(
       onTap: () {},
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : dividerColor, width: 1)),
+          border: Border(
+              bottom: BorderSide(
+                  color: isLast ? Colors.transparent : dividerColor, width: 1)),
         ),
         child: Row(
           children: [
@@ -5839,17 +8986,23 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Color.alphaBlend(color.withValues(alpha: 0.12), Colors.white),
+                color: Color.alphaBlend(
+                    color.withValues(alpha: 0.12), Colors.white),
                 borderRadius: BorderRadius.circular(11),
               ),
-              child: Center(child: Text(icon, style: const TextStyle(fontSize: 18))),
+              child: Center(
+                  child: Text(icon, style: const TextStyle(fontSize: 18))),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                  Text(label,
+                      style: const TextStyle(
+                          color: ink,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
                   Text(sub, style: const TextStyle(color: muted, fontSize: 11)),
                 ],
@@ -5864,7 +9017,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
 }
 
 class DetailScreen extends StatefulWidget {
-  const DetailScreen({required this.title, required this.onBack, required this.isDarkMode, required this.onThemeChanged});
+  const DetailScreen(
+      {required this.title,
+      required this.onBack,
+      required this.isDarkMode,
+      required this.onThemeChanged});
   final String title;
   final VoidCallback onBack;
   final bool isDarkMode;
@@ -5880,12 +9037,21 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.title == 'Reports & Analytics') return ReportsScreen(onBack: widget.onBack);
-    if (widget.title == 'Credit Book') return CreditBookScreen(onBack: widget.onBack);
+    if (widget.title == 'Reports & Analytics')
+      return ReportsScreen(onBack: widget.onBack);
+    if (widget.title == 'Credit Book')
+      return CreditBookScreen(onBack: widget.onBack);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 28, 16, 20),
       children: [
-        Row(children: [IconButton(onPressed: widget.onBack, icon: const Icon(Icons.arrow_back)), Expanded(child: Text(widget.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)))]),
+        Row(children: [
+          IconButton(
+              onPressed: widget.onBack, icon: const Icon(Icons.arrow_back)),
+          Expanded(
+              child: Text(widget.title,
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.bold)))
+        ]),
         const SizedBox(height: 12),
         ..._content(),
       ],
@@ -5901,29 +9067,83 @@ class _DetailScreenState extends State<DetailScreen> {
       case 'Credit Book':
         return [CreditBookScreen(onBack: widget.onBack)];
       case 'Expense Tracking':
-        return _cards([('Electricity Bill', 'Utilities · M-Pesa · 8 Jul 2026', 'RECURRING', 'KSh 8,500'), ('Staff Salaries', 'Payroll · Bank · 7 Jul 2026', 'RECURRING', 'KSh 75,000'), ('Shop Rent', 'Rent · Bank · 1 Jul 2026', 'RECURRING', 'KSh 35,000'), ('Plastic Bags & Packaging', 'Supplies · Cash · 6 Jul 2026', '', 'KSh 2,300')]);
+        return _cards([
+          (
+            'Electricity Bill',
+            'Utilities · M-Pesa · 8 Jul 2026',
+            'RECURRING',
+            'KSh 8,500'
+          ),
+          (
+            'Staff Salaries',
+            'Payroll · Bank · 7 Jul 2026',
+            'RECURRING',
+            'KSh 75,000'
+          ),
+          ('Shop Rent', 'Rent · Bank · 1 Jul 2026', 'RECURRING', 'KSh 35,000'),
+          (
+            'Plastic Bags & Packaging',
+            'Supplies · Cash · 6 Jul 2026',
+            '',
+            'KSh 2,300'
+          )
+        ]);
       case 'Employees':
         return [EmployeeScreen(onBack: widget.onBack)];
       case 'Notifications':
         return [NotificationsScreen(onBack: widget.onBack)];
       case 'Backup & Cloud Sync':
-        return [const Card(child: ListTile(leading: Icon(Icons.cloud_done, color: Colors.green), title: Text('Cloud Backup'), subtitle: Text('Last backup: Today, 06:00 AM\nAll data synced'))), FilledButton.icon(onPressed: () {}, icon: const Icon(Icons.cloud_upload), label: const Text('Backup Now')), SwitchListTile(title: const Text('Auto Backup'), subtitle: const Text('Every day at 6:00 AM'), value: autoBackup, onChanged: (value) => setState(() => autoBackup = value)), SwitchListTile(title: const Text('Wi-Fi Only'), value: wifiOnly, onChanged: (value) => setState(() => wifiOnly = value))];
+        return [
+          const Card(
+              child: ListTile(
+                  leading: Icon(Icons.cloud_done, color: Colors.green),
+                  title: Text('Cloud Backup'),
+                  subtitle:
+                      Text('Last backup: Today, 06:00 AM\nAll data synced'))),
+          FilledButton.icon(
+              onPressed: () {},
+              icon: const Icon(Icons.cloud_upload),
+              label: const Text('Backup Now')),
+          SwitchListTile(
+              title: const Text('Auto Backup'),
+              subtitle: const Text('Every day at 6:00 AM'),
+              value: autoBackup,
+              onChanged: (value) => setState(() => autoBackup = value)),
+          SwitchListTile(
+              title: const Text('Wi-Fi Only'),
+              value: wifiOnly,
+              onChanged: (value) => setState(() => wifiOnly = value))
+        ];
       case 'Settings':
-        return [SettingsDetailScreen(onBack: widget.onBack, isDarkMode: widget.isDarkMode, onThemeChanged: widget.onThemeChanged)];
+        return [
+          SettingsDetailScreen(
+              onBack: widget.onBack,
+              isDarkMode: widget.isDarkMode,
+              onThemeChanged: widget.onThemeChanged)
+        ];
       case 'User Profile':
         return [UserProfileDetailScreen(onBack: widget.onBack)];
       default:
-        return [Card(child: ListTile(title: Text(widget.title), subtitle: const Text('MobiDuka Store · Nairobi CBD\nThis section is ready for local store data.')))];
+        return [
+          Card(
+              child: ListTile(
+                  title: Text(widget.title),
+                  subtitle: const Text(
+                      'MobiDuka Store · Nairobi CBD\nThis section is ready for local store data.')))
+        ];
     }
   }
 
-  List<Widget> _cards(List<(String, String, String, String)> values) => values.map((item) {
+  List<Widget> _cards(List<(String, String, String, String)> values) =>
+      values.map((item) {
         return Card(
           child: ListTile(
-            title: Text(item.$1, style: const TextStyle(fontWeight: FontWeight.bold)),
+            title: Text(item.$1,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('${item.$2}\n${item.$3}'),
             isThreeLine: true,
-            trailing: Text(item.$4, style: const TextStyle(fontWeight: FontWeight.bold)),
+            trailing: Text(item.$4,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
         );
       }).toList();
@@ -5934,7 +9154,8 @@ class UserProfileDetailScreen extends StatefulWidget {
   final VoidCallback onBack;
 
   @override
-  State<UserProfileDetailScreen> createState() => _UserProfileDetailScreenState();
+  State<UserProfileDetailScreen> createState() =>
+      _UserProfileDetailScreenState();
 }
 
 class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
@@ -5944,7 +9165,7 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
   final Map<String, String> form = {
     'name': 'Admin User',
     'phone': '0712 345 678',
-    'email': 'admin@mobiduka.co.ke',
+    'email': 'owner@mobiduka.com',
     'store': 'MobiDuka Store',
     'branch': 'Nairobi CBD',
   };
@@ -5964,19 +9185,25 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
     });
   }
 
-  Widget _field(String label, String value, ValueChanged<String> onChanged, {bool isPassword = false}) => Column(
+  Widget _field(String label, String value, ValueChanged<String> onChanged,
+          {bool isPassword = false}) =>
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
           editing
               ? TextField(
                   obscureText: isPassword,
-                  controller: TextEditingController(text: value)..selection = TextSelection.collapsed(offset: value.length),
+                  controller: TextEditingController(text: value)
+                    ..selection = TextSelection.collapsed(offset: value.length),
                   onChanged: onChanged,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   ),
                 )
               : Padding(
@@ -5985,20 +9212,27 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                     width: double.infinity,
                     child: Text(
                       value,
-                      style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w700),
+                      style: const TextStyle(
+                          color: ink,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700),
                     ),
                   ),
                 ),
         ],
       );
 
-  Widget _securityRow(String icon, String label, String sub, VoidCallback onTap, {bool last = false}) {
+  Widget _securityRow(String icon, String label, String sub, VoidCallback onTap,
+      {bool last = false}) {
     return InkWell(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: last ? Colors.transparent : const Color(0xFFF0F3F9), width: 1)),
+          border: Border(
+              bottom: BorderSide(
+                  color: last ? Colors.transparent : const Color(0xFFF0F3F9),
+                  width: 1)),
         ),
         child: Row(
           children: [
@@ -6009,14 +9243,19 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                 color: const Color(0xFFE3EAF8),
                 borderRadius: BorderRadius.circular(11),
               ),
-              child: Center(child: Text(icon, style: const TextStyle(fontSize: 18))),
+              child: Center(
+                  child: Text(icon, style: const TextStyle(fontSize: 18))),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                  Text(label,
+                      style: const TextStyle(
+                          color: ink,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
                   Text(sub, style: const TextStyle(color: muted, fontSize: 11)),
                 ],
@@ -6054,7 +9293,11 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                     icon: const Icon(Icons.arrow_back),
                   ),
                   const SizedBox(width: 12),
-                  const Text('Change PIN', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                  const Text('Change PIN',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
                 ],
               ),
             ),
@@ -6067,7 +9310,12 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       children: [
@@ -6083,9 +9331,12 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                             backgroundColor: navy,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 15),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
                           ),
-                          child: const Text('Update PIN', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                          child: const Text('Update PIN',
+                              style: TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w800)),
                         ),
                       ],
                     ),
@@ -6122,17 +9373,27 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                       icon: const Icon(Icons.arrow_back),
                     ),
                     const SizedBox(width: 12),
-                    const Text('User Profile', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                    const Text('User Profile',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800)),
                     const Spacer(),
                     TextButton(
                       onPressed: () => setState(() => editing = !editing),
                       style: TextButton.styleFrom(
-                        backgroundColor: editing ? gold : Colors.white.withValues(alpha: 0.12),
+                        backgroundColor: editing
+                            ? gold
+                            : Colors.white.withValues(alpha: 0.12),
                         foregroundColor: editing ? ink : Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
                       ),
-                      child: Text(editing ? 'Cancel' : 'Edit', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                      child: Text(editing ? 'Cancel' : 'Edit',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700)),
                     ),
                   ],
                 ),
@@ -6144,11 +9405,18 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                         width: 80,
                         height: 80,
                         decoration: const BoxDecoration(
-                          gradient: LinearGradient(colors: [gold, Color(0xFFF0D060)]),
+                          gradient:
+                              LinearGradient(colors: [gold, Color(0xFFF0D060)]),
                           shape: BoxShape.circle,
-                          border: Border.fromBorderSide(BorderSide(color: Color(0x55FFFFFF), width: 3)),
+                          border: Border.fromBorderSide(
+                              BorderSide(color: Color(0x55FFFFFF), width: 3)),
                         ),
-                        child: const Center(child: Text('A', style: TextStyle(color: ink, fontSize: 30, fontWeight: FontWeight.w800))),
+                        child: const Center(
+                            child: Text('A',
+                                style: TextStyle(
+                                    color: ink,
+                                    fontSize: 30,
+                                    fontWeight: FontWeight.w800))),
                       ),
                       if (editing)
                         Positioned(
@@ -6160,25 +9428,38 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                             decoration: const BoxDecoration(
                               color: gold,
                               shape: BoxShape.circle,
-                              border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)),
+                              border: Border.fromBorderSide(
+                                  BorderSide(color: Colors.white, width: 2)),
                             ),
-                            child: const Center(child: Text('✏️', style: TextStyle(fontSize: 12))),
+                            child: const Center(
+                                child:
+                                    Text('✏️', style: TextStyle(fontSize: 12))),
                           ),
                         ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                Text(form['name'] ?? 'Admin User', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                Text(form['name'] ?? 'Admin User',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.08),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.25)),
                     borderRadius: BorderRadius.circular(999),
                   ),
-                  child: const Text('Store Manager', style: TextStyle(color: Color(0xFFD4AF37), fontSize: 11, fontWeight: FontWeight.w700)),
+                  child: const Text('Store Manager',
+                      style: TextStyle(
+                          color: Color(0xFFD4AF37),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
@@ -6190,7 +9471,8 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                 if (saved)
                   Container(
                     margin: const EdgeInsets.only(bottom: 16),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
                       color: const Color(0xFFE8F5E9),
                       border: Border.all(color: const Color(0xFFC8E6C9)),
@@ -6200,26 +9482,43 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                       children: const [
                         Text('✅', style: TextStyle(fontSize: 18)),
                         SizedBox(width: 10),
-                        Text('Profile updated successfully', style: TextStyle(color: Color(0xFF2E7D32), fontSize: 13, fontWeight: FontWeight.w700)),
+                        Text('Profile updated successfully',
+                            style: TextStyle(
+                                color: Color(0xFF2E7D32),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700)),
                       ],
                     ),
                   ),
-                const Text('Personal Information', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                const Text('Personal Information',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.6)),
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _field('Full Name', form['name'] ?? '', (value) => setState(() => form['name'] = value)),
+                      _field('Full Name', form['name'] ?? '',
+                          (value) => setState(() => form['name'] = value)),
                       const SizedBox(height: 14),
-                      _field('Phone Number', form['phone'] ?? '', (value) => setState(() => form['phone'] = value)),
+                      _field('Phone Number', form['phone'] ?? '',
+                          (value) => setState(() => form['phone'] = value)),
                       const SizedBox(height: 14),
-                      _field('Email Address', form['email'] ?? '', (value) => setState(() => form['email'] = value)),
+                      _field('Email Address', form['email'] ?? '',
+                          (value) => setState(() => form['email'] = value)),
                       if (editing)
                         Padding(
                           padding: const EdgeInsets.only(top: 10),
@@ -6229,46 +9528,78 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                               backgroundColor: navy,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14)),
                             ),
-                            child: const Text('Save Changes', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                            child: const Text('Save Changes',
+                                style: TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.w800)),
                           ),
                         ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Store Information', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                const Text('Store Information',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.6)),
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _field('Store Name', form['store'] ?? '', (value) => setState(() => form['store'] = value)),
+                      _field('Store Name', form['store'] ?? '',
+                          (value) => setState(() => form['store'] = value)),
                       const SizedBox(height: 14),
-                      _field('Branch', form['branch'] ?? '', (value) => setState(() => form['branch'] = value)),
+                      _field('Branch', form['branch'] ?? '',
+                          (value) => setState(() => form['branch'] = value)),
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Security', style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                const Text('Security',
+                    style: TextStyle(
+                        color: muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.6)),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _securityRow('🔐', 'Change PIN', 'Update your 4-digit login PIN', () => setState(() => changingPin = true)),
-                      _securityRow('📱', 'Active Sessions', '1 device currently logged in', () {}),
-                      _securityRow('🛡️', 'Two-Factor Auth', 'Not enabled', () {}, last: true),
+                      _securityRow(
+                          '🔐',
+                          'Change PIN',
+                          'Update your 4-digit login PIN',
+                          () => setState(() => changingPin = true)),
+                      _securityRow('📱', 'Active Sessions',
+                          '1 device currently logged in', () {}),
+                      _securityRow(
+                          '🛡️', 'Two-Factor Auth', 'Not enabled', () {},
+                          last: true),
                     ],
                   ),
                 ),
@@ -6276,9 +9607,13 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                 const Center(
                   child: Column(
                     children: [
-                      Text('Member since January 2024', style: TextStyle(color: Color(0xFFB0BAD3), fontSize: 12)),
+                      Text('Member since January 2024',
+                          style: TextStyle(
+                              color: Color(0xFFB0BAD3), fontSize: 12)),
                       SizedBox(height: 2),
-                      Text('MobiDuka POS · Store Manager', style: TextStyle(color: Color(0xFFB0BAD3), fontSize: 12)),
+                      Text('MobiDuka POS · Store Manager',
+                          style: TextStyle(
+                              color: Color(0xFFB0BAD3), fontSize: 12)),
                     ],
                   ),
                 ),
@@ -6293,20 +9628,26 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
   Widget _pinField(String label, String key) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           TextField(
             keyboardType: TextInputType.number,
             maxLength: 4,
             obscureText: true,
             textAlign: TextAlign.center,
-            controller: TextEditingController(text: pinForm[key] ?? '')..selection = TextSelection.collapsed(offset: (pinForm[key] ?? '').length),
+            controller: TextEditingController(text: pinForm[key] ?? '')
+              ..selection =
+                  TextSelection.collapsed(offset: (pinForm[key] ?? '').length),
             onChanged: (value) => setState(() => pinForm[key] = value),
-            style: const TextStyle(fontSize: 28, letterSpacing: 12, fontWeight: FontWeight.w800),
+            style: const TextStyle(
+                fontSize: 28, letterSpacing: 12, fontWeight: FontWeight.w800),
             decoration: const InputDecoration(
               hintText: '••••',
               border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
           ),
         ],
@@ -6323,7 +9664,8 @@ class PurchaseOrdersScreen extends StatefulWidget {
 
 class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   final SyncService _syncService = SyncService();
-  final PurchaseOrderService _purchaseOrderService = PurchaseOrderService.instance;
+  final PurchaseOrderService _purchaseOrderService =
+      PurchaseOrderService.instance;
 
   String filter = 'all';
   _PurchaseOrderEntry? selected;
@@ -6332,15 +9674,57 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   final Map<String, TextEditingController> _itemControllers = {};
 
   final List<Map<String, dynamic>> orderItems = const [
-    {'name': 'Unga Jogoo 2kg', 'qty': 50, 'unit': 'Bags', 'cost': 160, 'total': 8000},
-    {'name': 'Unga Pembe 2kg', 'qty': 40, 'unit': 'Bags', 'cost': 155, 'total': 6200},
-    {'name': 'Sembe 2kg', 'qty': 60, 'unit': 'Bags', 'cost': 110, 'total': 6600},
-    {'name': 'Unga Dola 1kg', 'qty': 80, 'unit': 'Bags', 'cost': 80, 'total': 6400},
-    {'name': 'Maize Meal 2kg', 'qty': 50, 'unit': 'Bags', 'cost': 100, 'total': 5000},
-    {'name': 'Rice Pishori 1kg', 'qty': 40, 'unit': 'Packs', 'cost': 190, 'total': 7600},
+    {
+      'name': 'Unga Jogoo 2kg',
+      'qty': 50,
+      'unit': 'Bags',
+      'cost': 160,
+      'total': 8000
+    },
+    {
+      'name': 'Unga Pembe 2kg',
+      'qty': 40,
+      'unit': 'Bags',
+      'cost': 155,
+      'total': 6200
+    },
+    {
+      'name': 'Sembe 2kg',
+      'qty': 60,
+      'unit': 'Bags',
+      'cost': 110,
+      'total': 6600
+    },
+    {
+      'name': 'Unga Dola 1kg',
+      'qty': 80,
+      'unit': 'Bags',
+      'cost': 80,
+      'total': 6400
+    },
+    {
+      'name': 'Maize Meal 2kg',
+      'qty': 50,
+      'unit': 'Bags',
+      'cost': 100,
+      'total': 5000
+    },
+    {
+      'name': 'Rice Pishori 1kg',
+      'qty': 40,
+      'unit': 'Packs',
+      'cost': 190,
+      'total': 7600
+    },
   ];
 
-  final List<String> suppliers = const ['Unga Limited', 'Bidco Africa', 'Procter & Gamble', 'Dawa Limited', 'Brookside Dairy'];
+  final List<String> suppliers = const [
+    'Unga Limited',
+    'Bidco Africa',
+    'Procter & Gamble',
+    'Dawa Limited',
+    'Brookside Dairy'
+  ];
 
   final Map<String, String> newForm = {'supplier': '', 'notes': ''};
 
@@ -6388,7 +9772,10 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
       supplier: row['supplierName'] as String? ?? 'Supplier',
       date: _formatDisplayDate(row['createdAt'] as String?),
       items: decodedItems.length,
-      itemLines: decodedItems.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList(),
+      itemLines: decodedItems
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(),
       total: row['total'] as int? ?? 0,
       status: status,
       dueDate: _formatDisplayDate(row['expectedDeliveryDate'] as String?),
@@ -6414,7 +9801,20 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   }
 
   String _monthShort(int month) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return months[month - 1];
   }
 
@@ -6423,14 +9823,17 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     if (supplierName.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a supplier before submitting the procurement request.')),
+        const SnackBar(
+            content: Text(
+                'Please select a supplier before submitting the procurement request.')),
       );
       return;
     }
 
     final draftedItems = orderItems.map((item) {
       final name = item['name'] as String;
-      final controller = _itemControllers[name] ?? TextEditingController(text: '${item['qty']}');
+      final controller = _itemControllers[name] ??
+          TextEditingController(text: '${item['qty']}');
       final qty = int.tryParse(controller.text) ?? (item['qty'] as int);
       final cost = item['cost'] as int;
       return {
@@ -6446,10 +9849,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
       supplierName: supplierName,
       items: draftedItems,
       notes: newForm['notes'],
-      expectedDeliveryDate: DateTime.now().add(const Duration(days: 5)).toIso8601String(),
+      expectedDeliveryDate:
+          DateTime.now().add(const Duration(days: 5)).toIso8601String(),
     );
 
-    final orderId = created['id'] as String? ?? 'PO-${DateTime.now().millisecondsSinceEpoch}';
+    final orderId = created['id'] as String? ??
+        'PO-${DateTime.now().millisecondsSinceEpoch}';
 
     await _syncService.queueChange(
       id: orderId,
@@ -6461,7 +9866,8 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
         'status': 'REQUESTED',
         'action': 'CREATE',
         'notes': newForm['notes'] ?? '',
-        'expectedDeliveryDate': DateTime.now().add(const Duration(days: 5)).toIso8601String(),
+        'expectedDeliveryDate':
+            DateTime.now().add(const Duration(days: 5)).toIso8601String(),
         'items': draftedItems,
         'total': created['total'],
       },
@@ -6482,7 +9888,9 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     await _loadOrders();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Procurement request saved offline.')),
+      const SnackBar(
+          backgroundColor: Color(0xFF2E7D32),
+          content: Text('Procurement request saved offline.')),
     );
     unawaited(_syncService.processCloudSync(
       businessId: 'demo-business',
@@ -6492,11 +9900,13 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   }
 
   Future<void> _markOrderReceived(_PurchaseOrderEntry order) async {
-    final updated = await _purchaseOrderService.markPurchaseOrderReceived(order.id);
+    final updated =
+        await _purchaseOrderService.markPurchaseOrderReceived(order.id);
     if (updated.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to mark the purchase order as received.')),
+        const SnackBar(
+            content: Text('Unable to mark the purchase order as received.')),
       );
       return;
     }
@@ -6518,7 +9928,8 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
           : int.tryParse(itemMap['qty']?.toString() ?? '') ?? 0;
       if (name.isEmpty || qty <= 0) continue;
 
-      final index = refreshedProducts.indexWhere((product) => product.name == name);
+      final index =
+          refreshedProducts.indexWhere((product) => product.name == name);
       if (index >= 0) {
         final existing = refreshedProducts[index];
         refreshedProducts[index] = Product(
@@ -6558,7 +9969,10 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     await _loadOrders();
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Stock was refreshed and the receipt was recorded offline.')),
+      const SnackBar(
+          backgroundColor: Color(0xFF2E7D32),
+          content: Text(
+              'Stock was refreshed and the receipt was recorded offline.')),
     );
     unawaited(_syncService.processCloudSync(
       businessId: 'demo-business',
@@ -6568,8 +9982,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   }
 
   List<_PurchaseOrderEntry> get filteredOrders {
-    if (filter == 'pending') return orders.where((o) => o.status == 'pending' || o.status == 'partial').toList();
-    if (filter == 'delivered') return orders.where((o) => o.status == 'delivered').toList();
+    if (filter == 'pending')
+      return orders
+          .where((o) => o.status == 'pending' || o.status == 'partial')
+          .toList();
+    if (filter == 'delivered')
+      return orders.where((o) => o.status == 'delivered').toList();
     return orders;
   }
 
@@ -6577,7 +9995,8 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     var total = 0;
     for (final item in orderItems) {
       final name = item['name'] as String;
-      final qty = int.tryParse(_itemControllers[name]?.text ?? '') ?? (item['qty'] as int);
+      final qty = int.tryParse(_itemControllers[name]?.text ?? '') ??
+          (item['qty'] as int);
       final cost = item['cost'] as int;
       total += qty * cost;
     }
@@ -6589,26 +10008,36 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
 
   Color _statusColor(String status) {
     switch (status) {
-      case 'pending': return const Color(0xFFF9A825);
-      case 'delivered': return const Color(0xFF2E7D32);
-      case 'partial': return const Color(0xFF0288D1);
-      case 'cancelled': return const Color(0xFFD32F2F);
-      default: return const Color(0xFF123A8F);
+      case 'pending':
+        return const Color(0xFFF9A825);
+      case 'delivered':
+        return const Color(0xFF2E7D32);
+      case 'partial':
+        return const Color(0xFF0288D1);
+      case 'cancelled':
+        return const Color(0xFFD32F2F);
+      default:
+        return const Color(0xFF123A8F);
     }
   }
 
-  String _statusLabel(String status) => status[0].toUpperCase() + status.substring(1);
+  String _statusLabel(String status) =>
+      status[0].toUpperCase() + status.substring(1);
 
   Widget _statusBadge(String status) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           color: _statusColor(status).withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: _statusColor(status).withValues(alpha: 0.25)),
+          border:
+              Border.all(color: _statusColor(status).withValues(alpha: 0.25)),
         ),
         child: Text(
           _statusLabel(status),
-          style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w800),
+          style: TextStyle(
+              color: _statusColor(status),
+              fontSize: 10,
+              fontWeight: FontWeight.w800),
         ),
       );
 
@@ -6621,7 +10050,10 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+            ],
           ),
           child: Column(
             children: [
@@ -6632,9 +10064,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(order.id, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        Text(order.id,
+                            style: const TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 2),
-                        Text(order.supplier, style: const TextStyle(color: muted, fontSize: 12)),
+                        Text(order.supplier,
+                            style: const TextStyle(color: muted, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -6645,8 +10082,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('${order.items} items · Due ${order.dueDate}', style: const TextStyle(color: muted, fontSize: 11)),
-                  Text('KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}', style: const TextStyle(color: navy, fontSize: 14, fontWeight: FontWeight.w800)),
+                  Text('${order.items} items · Due ${order.dueDate}',
+                      style: const TextStyle(color: muted, fontSize: 11)),
+                  Text(
+                      'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}',
+                      style: const TextStyle(
+                          color: navy,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800)),
                 ],
               ),
               const SizedBox(height: 10),
@@ -6682,11 +10125,16 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(10),
-            boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+            ],
           ),
           child: Column(
             children: [
-              Text(value, style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 15, fontWeight: FontWeight.w800)),
               const SizedBox(height: 4),
               Text(label, style: const TextStyle(color: muted, fontSize: 10)),
             ],
@@ -6703,9 +10151,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
           backgroundColor: active ? gold : Colors.white.withValues(alpha: 0.12),
           foregroundColor: active ? ink : Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 8),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
         ),
-        child: Text(label.toUpperCase(), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: active ? ink : Colors.white)),
+        child: Text(label.toUpperCase(),
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: active ? ink : Colors.white)),
       ),
     );
   }
@@ -6733,7 +10186,11 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   icon: const Icon(Icons.arrow_back),
                 ),
                 const SizedBox(width: 12),
-                const Text('New Purchase Order', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                const Text('New Purchase Order',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -6746,22 +10203,38 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Order Details', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                      const Text('Order Details',
+                          style: TextStyle(
+                              color: ink,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800)),
                       const SizedBox(height: 16),
                       DropdownButtonFormField<String>(
-                        initialValue: newForm['supplier']!.isEmpty ? null : newForm['supplier'],
+                        initialValue: newForm['supplier']!.isEmpty
+                            ? null
+                            : newForm['supplier'],
                         decoration: const InputDecoration(
                           labelText: 'Supplier *',
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 12),
                         ),
-                        items: suppliers.map((supplier) => DropdownMenuItem(value: supplier, child: Text(supplier))).toList(),
-                        onChanged: (value) => setState(() => newForm['supplier'] = value ?? ''),
+                        items: suppliers
+                            .map((supplier) => DropdownMenuItem(
+                                value: supplier, child: Text(supplier)))
+                            .toList(),
+                        onChanged: (value) =>
+                            setState(() => newForm['supplier'] = value ?? ''),
                       ),
                       const SizedBox(height: 14),
                       TextField(
@@ -6769,7 +10242,8 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                         decoration: const InputDecoration(
                           labelText: 'Expected Delivery Date *',
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 12),
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -6780,15 +10254,19 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                           labelText: 'Notes',
                           hintText: 'Optional notes...',
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 12),
                         ),
-                        onChanged: (value) => setState(() => newForm['notes'] = value),
+                        onChanged: (value) =>
+                            setState(() => newForm['notes'] = value),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('Order Items', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                const Text('Order Items',
+                    style: TextStyle(
+                        color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
                 ...orderItems.take(4).map((item) => Container(
                       margin: const EdgeInsets.only(bottom: 8),
@@ -6796,7 +10274,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x0F000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
                       ),
                       child: Row(
                         children: [
@@ -6804,8 +10287,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(item['name'] as String, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
-                                Text('KSh ${item['cost']} / ${item['unit']}', style: const TextStyle(color: muted, fontSize: 11)),
+                                Text(item['name'] as String,
+                                    style: const TextStyle(
+                                        color: ink,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700)),
+                                Text('KSh ${item['cost']} / ${item['unit']}',
+                                    style: const TextStyle(
+                                        color: muted, fontSize: 11)),
                               ],
                             ),
                           ),
@@ -6814,9 +10303,11 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             child: TextField(
                               textAlign: TextAlign.center,
                               keyboardType: TextInputType.number,
-                              controller: _itemControllers[item['name']] ?? TextEditingController(text: '${item['qty']}'),
+                              controller: _itemControllers[item['name']] ??
+                                  TextEditingController(text: '${item['qty']}'),
                               decoration: const InputDecoration(
-                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 8),
                                 border: OutlineInputBorder(),
                               ),
                             ),
@@ -6827,7 +10318,10 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             child: Text(
                               'KSh ${item['total']}',
                               textAlign: TextAlign.right,
-                              style: const TextStyle(color: navy, fontSize: 12, fontWeight: FontWeight.w800),
+                              style: const TextStyle(
+                                  color: navy,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800),
                             ),
                           ),
                         ],
@@ -6840,10 +10334,17 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   decoration: BoxDecoration(
                     color: Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF123A8F), width: 1.5, style: BorderStyle.solid),
+                    border: Border.all(
+                        color: const Color(0xFF123A8F),
+                        width: 1.5,
+                        style: BorderStyle.solid),
                   ),
                   child: const Center(
-                    child: Text('+ Add Item', style: TextStyle(color: navy, fontSize: 13, fontWeight: FontWeight.w700)),
+                    child: Text('+ Add Item',
+                        style: TextStyle(
+                            color: navy,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700)),
                   ),
                 ),
                 Container(
@@ -6851,13 +10352,22 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _totalsRow('Subtotal', 'KSh ${draftSubtotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
-                      _totalsRow('Tax (16% VAT)', 'KSh ${draftTax.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
-                      _totalsRow('Total', 'KSh ${draftTotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}', bold: true),
+                      _totalsRow('Subtotal',
+                          'KSh ${draftSubtotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
+                      _totalsRow('Tax (16% VAT)',
+                          'KSh ${draftTax.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
+                      _totalsRow('Total',
+                          'KSh ${draftTotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}',
+                          bold: true),
                     ],
                   ),
                 ),
@@ -6867,10 +10377,13 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   style: TextButton.styleFrom(
                     backgroundColor: navy,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16)),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  child: const Text('Submit Procurement Request', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                  child: const Text('Submit Procurement Request',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 ),
               ],
             ),
@@ -6885,8 +10398,16 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: TextStyle(color: bold ? ink : muted, fontSize: bold ? 14 : 13, fontWeight: bold ? FontWeight.w800 : FontWeight.w500)),
-            Text(value, style: TextStyle(color: bold ? navy : ink, fontSize: bold ? 14 : 13, fontWeight: bold ? FontWeight.w800 : FontWeight.w700)),
+            Text(label,
+                style: TextStyle(
+                    color: bold ? ink : muted,
+                    fontSize: bold ? 14 : 13,
+                    fontWeight: bold ? FontWeight.w800 : FontWeight.w500)),
+            Text(value,
+                style: TextStyle(
+                    color: bold ? navy : ink,
+                    fontSize: bold ? 14 : 13,
+                    fontWeight: bold ? FontWeight.w800 : FontWeight.w700)),
           ],
         ),
       );
@@ -6920,8 +10441,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(order.id, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
-                          Text(order.supplier, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                          Text(order.id,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800)),
+                          Text(order.supplier,
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 12)),
                         ],
                       ),
                     ),
@@ -6945,7 +10472,9 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                const Text('Order Items', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                const Text('Order Items',
+                    style: TextStyle(
+                        color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
                 ...order.itemLines.map((item) => Container(
                       margin: const EdgeInsets.only(bottom: 8),
@@ -6953,7 +10482,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x0F000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
                       ),
                       child: Row(
                         children: [
@@ -6961,12 +10495,23 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(item['name'] as String, style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
-                                Text('${item['qty']} ${item['unit']} × KSh ${item['cost']}', style: const TextStyle(color: muted, fontSize: 11)),
+                                Text(item['name'] as String,
+                                    style: const TextStyle(
+                                        color: ink,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700)),
+                                Text(
+                                    '${item['qty']} ${item['unit']} × KSh ${item['cost']}',
+                                    style: const TextStyle(
+                                        color: muted, fontSize: 11)),
                               ],
                             ),
                           ),
-                          Text('KSh ${item['total']}', style: const TextStyle(color: navy, fontSize: 13, fontWeight: FontWeight.w800)),
+                          Text('KSh ${item['total']}',
+                              style: const TextStyle(
+                                  color: navy,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800)),
                         ],
                       ),
                     )),
@@ -6976,13 +10521,27 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
-                      _totalsRow('Subtotal', 'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
-                      _totalsRow('Received', order.status == 'delivered' ? 'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}' : 'KSh 0'),
-                      _totalsRow('Balance', order.status == 'delivered' ? 'KSh 0' : 'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
+                      _totalsRow('Subtotal',
+                          'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
+                      _totalsRow(
+                          'Received',
+                          order.status == 'delivered'
+                              ? 'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'
+                              : 'KSh 0'),
+                      _totalsRow(
+                          'Balance',
+                          order.status == 'delivered'
+                              ? 'KSh 0'
+                              : 'KSh ${order.total.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
                     ],
                   ),
                 ),
@@ -6997,9 +10556,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             foregroundColor: navy,
                             backgroundColor: const Color(0x1A123A8F),
                             padding: const EdgeInsets.symmetric(vertical: 13),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
                           ),
-                          child: const Text('Edit Order', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                          child: const Text('Edit Order',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -7010,9 +10572,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             foregroundColor: Colors.white,
                             backgroundColor: const Color(0xFF2E7D32),
                             padding: const EdgeInsets.symmetric(vertical: 13),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
                           ),
-                          child: const Text('Mark Received', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                          child: const Text('Mark Received',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w800)),
                         ),
                       ),
                     ],
@@ -7036,9 +10601,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: const TextStyle(color: Colors.white60, fontSize: 9)),
+              Text(label,
+                  style: const TextStyle(color: Colors.white60, fontSize: 9)),
               const SizedBox(height: 2),
-              Text(value, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800)),
             ],
           ),
         ),
@@ -7067,7 +10637,11 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
-                        Text('Purchase Orders', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                        Text('Purchase Orders',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800)),
                       ],
                     ),
                     TextButton(
@@ -7075,10 +10649,14 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       style: TextButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: ink,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
                       ),
-                      child: const Text('+ New PO', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                      child: const Text('+ New PO',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
@@ -7101,11 +10679,20 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
               children: [
                 Row(
                   children: [
-                    _topMetric('KSh ${orders.fold<int>(0, (sum, order) => sum + order.total).toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}', 'Total Orders', navy),
+                    _topMetric(
+                        'KSh ${orders.fold<int>(0, (sum, order) => sum + order.total).toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}',
+                        'Total Orders',
+                        navy),
                     const SizedBox(width: 8),
-                    _topMetric('${orders.where((order) => order.status == 'pending').length}', 'Pending', const Color(0xFFF9A825)),
+                    _topMetric(
+                        '${orders.where((order) => order.status == 'pending').length}',
+                        'Pending',
+                        const Color(0xFFF9A825)),
                     const SizedBox(width: 8),
-                    _topMetric('${orders.where((order) => order.status == 'delivered').length}', 'Delivered', const Color(0xFF2E7D32)),
+                    _topMetric(
+                        '${orders.where((order) => order.status == 'delivered').length}',
+                        'Delivered',
+                        const Color(0xFF2E7D32)),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -7181,12 +10768,84 @@ class SupplierScreen extends StatefulWidget {
 
 class _SupplierScreenState extends State<SupplierScreen> {
   final List<SupplierEntry> _suppliers = const [
-    SupplierEntry(id: 1, name: 'Unga Limited', category: 'Flour & Grains', contact: 'James Mwenda', phone: '+254 20 330 0000', email: 'orders@unga.com', orders: 12, outstanding: 48000, initials: 'UL', color: Color(0xFF123A8F), rating: 5, terms: 'Net 30'),
-    SupplierEntry(id: 2, name: 'Bidco Africa', category: 'Oils & Fats', contact: 'Sarah Kamau', phone: '+254 51 350 5000', email: 'supply@bidco.co.ke', orders: 8, outstanding: 0, initials: 'BA', color: Color(0xFF2E7D32), rating: 4, terms: 'Net 14'),
-    SupplierEntry(id: 3, name: 'Procter & Gamble', category: 'FMCG', contact: 'Peter Otieno', phone: '+254 20 421 0000', email: 'kenya@pg.com', orders: 15, outstanding: 32500, initials: 'PG', color: Color(0xFF0288D1), rating: 5, terms: 'Net 21'),
-    SupplierEntry(id: 4, name: 'Dawa Limited', category: 'Pharmaceuticals', contact: 'Dr. Mary Njeri', phone: '+254 20 802 8000', email: 'orders@dawa.co.ke', orders: 6, outstanding: 0, initials: 'DL', color: Color(0xFFD32F2F), rating: 4, terms: 'Prepaid'),
-    SupplierEntry(id: 5, name: 'Brookside Dairy', category: 'Dairy Products', contact: 'Alice Wambui', phone: '+254 722 111 000', email: 'trade@brookside.co.ke', orders: 22, outstanding: 12000, initials: 'BD', color: Color(0xFF00796B), rating: 5, terms: 'COD'),
-    SupplierEntry(id: 6, name: 'Kapa Oil', category: 'Cooking Oil', contact: 'David Kariuki', phone: '+254 20 534 5600', email: 'sales@kapaoil.co.ke', orders: 5, outstanding: 0, initials: 'KO', color: Color(0xFFF57C00), rating: 3, terms: 'Net 7'),
+    SupplierEntry(
+        id: 1,
+        name: 'Unga Limited',
+        category: 'Flour & Grains',
+        contact: 'James Mwenda',
+        phone: '+254 20 330 0000',
+        email: 'orders@unga.com',
+        orders: 12,
+        outstanding: 48000,
+        initials: 'UL',
+        color: Color(0xFF123A8F),
+        rating: 5,
+        terms: 'Net 30'),
+    SupplierEntry(
+        id: 2,
+        name: 'Bidco Africa',
+        category: 'Oils & Fats',
+        contact: 'Sarah Kamau',
+        phone: '+254 51 350 5000',
+        email: 'supply@bidco.co.ke',
+        orders: 8,
+        outstanding: 0,
+        initials: 'BA',
+        color: Color(0xFF2E7D32),
+        rating: 4,
+        terms: 'Net 14'),
+    SupplierEntry(
+        id: 3,
+        name: 'Procter & Gamble',
+        category: 'FMCG',
+        contact: 'Peter Otieno',
+        phone: '+254 20 421 0000',
+        email: 'kenya@pg.com',
+        orders: 15,
+        outstanding: 32500,
+        initials: 'PG',
+        color: Color(0xFF0288D1),
+        rating: 5,
+        terms: 'Net 21'),
+    SupplierEntry(
+        id: 4,
+        name: 'Dawa Limited',
+        category: 'Pharmaceuticals',
+        contact: 'Dr. Mary Njeri',
+        phone: '+254 20 802 8000',
+        email: 'orders@dawa.co.ke',
+        orders: 6,
+        outstanding: 0,
+        initials: 'DL',
+        color: Color(0xFFD32F2F),
+        rating: 4,
+        terms: 'Prepaid'),
+    SupplierEntry(
+        id: 5,
+        name: 'Brookside Dairy',
+        category: 'Dairy Products',
+        contact: 'Alice Wambui',
+        phone: '+254 722 111 000',
+        email: 'trade@brookside.co.ke',
+        orders: 22,
+        outstanding: 12000,
+        initials: 'BD',
+        color: Color(0xFF00796B),
+        rating: 5,
+        terms: 'COD'),
+    SupplierEntry(
+        id: 6,
+        name: 'Kapa Oil',
+        category: 'Cooking Oil',
+        contact: 'David Kariuki',
+        phone: '+254 20 534 5600',
+        email: 'sales@kapaoil.co.ke',
+        orders: 5,
+        outstanding: 0,
+        initials: 'KO',
+        color: Color(0xFFF57C00),
+        rating: 3,
+        terms: 'Net 7'),
   ];
 
   String search = '';
@@ -7201,12 +10860,14 @@ class _SupplierScreenState extends State<SupplierScreen> {
     'terms': 'Net 30',
   };
 
-  int get totalOutstanding => _suppliers.fold<int>(0, (sum, supplier) => sum + supplier.outstanding);
+  int get totalOutstanding =>
+      _suppliers.fold<int>(0, (sum, supplier) => sum + supplier.outstanding);
 
   List<SupplierEntry> get filteredSuppliers => _suppliers.where((supplier) {
-    final query = search.toLowerCase();
-    return supplier.name.toLowerCase().contains(query) || supplier.category.toLowerCase().contains(query);
-  }).toList();
+        final query = search.toLowerCase();
+        return supplier.name.toLowerCase().contains(query) ||
+            supplier.category.toLowerCase().contains(query);
+      }).toList();
 
   void _resetForm() {
     form
@@ -7249,7 +10910,11 @@ class _SupplierScreenState extends State<SupplierScreen> {
                     icon: const Icon(Icons.arrow_back),
                   ),
                   const SizedBox(width: 12),
-                  const Text('Add Supplier', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                  const Text('Add Supplier',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -7262,22 +10927,52 @@ class _SupplierScreenState extends State<SupplierScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _formField('Business Name *', 'e.g. Unga Limited', form['name'] ?? '', (value) => setState(() => form['name'] = value)),
+                        _formField(
+                            'Business Name *',
+                            'e.g. Unga Limited',
+                            form['name'] ?? '',
+                            (value) => setState(() => form['name'] = value)),
                         const SizedBox(height: 14),
-                        _formField('Category *', 'e.g. Flour & Grains', form['category'] ?? '', (value) => setState(() => form['category'] = value)),
+                        _formField(
+                            'Category *',
+                            'e.g. Flour & Grains',
+                            form['category'] ?? '',
+                            (value) =>
+                                setState(() => form['category'] = value)),
                         const SizedBox(height: 14),
-                        _formField('Contact Person', 'Full name', form['contact'] ?? '', (value) => setState(() => form['contact'] = value)),
+                        _formField(
+                            'Contact Person',
+                            'Full name',
+                            form['contact'] ?? '',
+                            (value) => setState(() => form['contact'] = value)),
                         const SizedBox(height: 14),
-                        _formField('Phone Number', '+254 ...', form['phone'] ?? '', (value) => setState(() => form['phone'] = value)),
+                        _formField(
+                            'Phone Number',
+                            '+254 ...',
+                            form['phone'] ?? '',
+                            (value) => setState(() => form['phone'] = value)),
                         const SizedBox(height: 14),
-                        _formField('Email Address', 'supplier@email.com', form['email'] ?? '', (value) => setState(() => form['email'] = value)),
+                        _formField(
+                            'Email Address',
+                            'supplier@email.com',
+                            form['email'] ?? '',
+                            (value) => setState(() => form['email'] = value)),
                         const SizedBox(height: 16),
-                        const Text('Payment Terms', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Payment Terms',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -7289,11 +10984,24 @@ class _SupplierScreenState extends State<SupplierScreen> {
                             child: DropdownButton<String>(
                               isExpanded: true,
                               value: form['terms'] ?? 'Net 30',
-                              items: ['COD', 'Prepaid', 'Net 7', 'Net 14', 'Net 21', 'Net 30', 'Net 60'].map((value) {
-                                return DropdownMenuItem<String>(value: value, child: Text(value));
+                              items: [
+                                'COD',
+                                'Prepaid',
+                                'Net 7',
+                                'Net 14',
+                                'Net 21',
+                                'Net 30',
+                                'Net 60'
+                              ].map((value) {
+                                return DropdownMenuItem<String>(
+                                    value: value, child: Text(value));
                               }).toList(),
-                              onChanged: (value) => setState(() => form['terms'] = value ?? 'Net 30'),
-                              style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w600),
+                              onChanged: (value) => setState(
+                                  () => form['terms'] = value ?? 'Net 30'),
+                              style: const TextStyle(
+                                  color: ink,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600),
                             ),
                           ),
                         ),
@@ -7307,9 +11015,12 @@ class _SupplierScreenState extends State<SupplierScreen> {
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: const Text('Save Supplier', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                    child: const Text('Save Supplier',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800)),
                   ),
                 ],
               ),
@@ -7345,7 +11056,11 @@ class _SupplierScreenState extends State<SupplierScreen> {
                         icon: const Icon(Icons.arrow_back),
                       ),
                       const SizedBox(width: 12),
-                      const Text('Supplier Profile', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                      const Text('Supplier Profile',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800)),
                       const Spacer(),
                       IconButton(
                         onPressed: () => setState(() => showAdd = true),
@@ -7369,7 +11084,11 @@ class _SupplierScreenState extends State<SupplierScreen> {
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: Center(
-                          child: Text(supplier.initials, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                          child: Text(supplier.initials,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -7377,16 +11096,26 @@ class _SupplierScreenState extends State<SupplierScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(supplier.name, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
+                            Text(supplier.name,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w800)),
                             const SizedBox(height: 4),
-                            Text(supplier.category, style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+                            Text(supplier.category,
+                                style: const TextStyle(
+                                    color: Color(0x99FFFFFF), fontSize: 12)),
                             const SizedBox(height: 6),
                             Row(
-                              children: List.generate(5, (index) => Icon(
-                                Icons.star,
-                                size: 11,
-                                color: index < supplier.rating ? gold : const Color(0x40FFFFFF),
-                              )),
+                              children: List.generate(
+                                  5,
+                                  (index) => Icon(
+                                        Icons.star,
+                                        size: 11,
+                                        color: index < supplier.rating
+                                            ? gold
+                                            : const Color(0x40FFFFFF),
+                                      )),
                             ),
                           ],
                         ),
@@ -7409,7 +11138,14 @@ class _SupplierScreenState extends State<SupplierScreen> {
                     childAspectRatio: 1.9,
                     children: [
                       _statCard('Total Orders', '${supplier.orders}', navy),
-                      _statCard('Outstanding', supplier.outstanding > 0 ? 'KSh ${supplier.outstanding.toString()}' : 'Cleared', supplier.outstanding > 0 ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32)),
+                      _statCard(
+                          'Outstanding',
+                          supplier.outstanding > 0
+                              ? 'KSh ${supplier.outstanding.toString()}'
+                              : 'Cleared',
+                          supplier.outstanding > 0
+                              ? const Color(0xFFD32F2F)
+                              : const Color(0xFF2E7D32)),
                     ],
                   ),
                   const SizedBox(height: 16),
@@ -7418,17 +11154,27 @@ class _SupplierScreenState extends State<SupplierScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Contact Information', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Contact Information',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
                         _detailRow('Contact Person', supplier.contact),
                         _detailRow('Phone', supplier.phone),
                         _detailRow('Email', supplier.email),
-                        _detailRow('Payment Terms', supplier.terms, isLast: true),
+                        _detailRow('Payment Terms', supplier.terms,
+                            isLast: true),
                       ],
                     ),
                   ),
@@ -7441,10 +11187,13 @@ class _SupplierScreenState extends State<SupplierScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: navy,
                             foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          child: const Text('New Order', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                          child: const Text('New Order',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -7455,7 +11204,8 @@ class _SupplierScreenState extends State<SupplierScreen> {
                           color: const Color(0xFFE8F5E9),
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Center(child: Text('📞', style: TextStyle(fontSize: 20))),
+                        child: const Center(
+                            child: Text('📞', style: TextStyle(fontSize: 20))),
                       ),
                       const SizedBox(width: 10),
                       Container(
@@ -7465,7 +11215,8 @@ class _SupplierScreenState extends State<SupplierScreen> {
                           color: const Color(0xFFE3EAF8),
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Center(child: Text('✉️', style: TextStyle(fontSize: 20))),
+                        child: const Center(
+                            child: Text('✉️', style: TextStyle(fontSize: 20))),
                       ),
                     ],
                   ),
@@ -7505,7 +11256,11 @@ class _SupplierScreenState extends State<SupplierScreen> {
                           icon: const Icon(Icons.arrow_back, size: 18),
                         ),
                         const SizedBox(height: 2),
-                        const Text('Suppliers', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                        const Text('Suppliers',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800)),
                       ],
                     ),
                     TextButton(
@@ -7516,10 +11271,14 @@ class _SupplierScreenState extends State<SupplierScreen> {
                       style: TextButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: ink,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
                       ),
-                      child: const Text('+ Add', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                      child: const Text('+ Add',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
@@ -7528,7 +11287,10 @@ class _SupplierScreenState extends State<SupplierScreen> {
                   children: [
                     _metricCard('Total', '${_suppliers.length}', Colors.white),
                     const SizedBox(width: 8),
-                    _metricCard('Outstanding', 'KSh ${(totalOutstanding / 1000).toStringAsFixed(0)}K', const Color(0xFFFF6B6B)),
+                    _metricCard(
+                        'Outstanding',
+                        'KSh ${(totalOutstanding / 1000).toStringAsFixed(0)}K',
+                        const Color(0xFFFF6B6B)),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -7536,17 +11298,20 @@ class _SupplierScreenState extends State<SupplierScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.08),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.14)),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.search, color: Color(0xCCFFFFFF), size: 18),
+                      const Icon(Icons.search,
+                          color: Color(0xCCFFFFFF), size: 18),
                       const SizedBox(width: 8),
                       Expanded(
                         child: TextField(
                           onChanged: (value) => setState(() => search = value),
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 14),
                           decoration: const InputDecoration(
                             hintText: 'Search suppliers...',
                             hintStyle: TextStyle(color: Color(0xCCFFFFFF)),
@@ -7572,7 +11337,12 @@ class _SupplierScreenState extends State<SupplierScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: InkWell(
                     onTap: () => setState(() => selected = supplier),
@@ -7586,7 +11356,11 @@ class _SupplierScreenState extends State<SupplierScreen> {
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: Center(
-                            child: Text(supplier.initials, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                            child: Text(supplier.initials,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800)),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -7594,16 +11368,26 @@ class _SupplierScreenState extends State<SupplierScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(supplier.name, style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
+                              Text(supplier.name,
+                                  style: const TextStyle(
+                                      color: ink,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800)),
                               const SizedBox(height: 3),
-                              Text('${supplier.category} · ${supplier.terms}', style: const TextStyle(color: muted, fontSize: 11)),
+                              Text('${supplier.category} · ${supplier.terms}',
+                                  style: const TextStyle(
+                                      color: muted, fontSize: 11)),
                               const SizedBox(height: 4),
                               Row(
-                                children: List.generate(5, (index) => Icon(
-                                  Icons.star,
-                                  size: 10,
-                                  color: index < supplier.rating ? gold : const Color(0xFFE8ECF4),
-                                )),
+                                children: List.generate(
+                                    5,
+                                    (index) => Icon(
+                                          Icons.star,
+                                          size: 10,
+                                          color: index < supplier.rating
+                                              ? gold
+                                              : const Color(0xFFE8ECF4),
+                                        )),
                               ),
                             ],
                           ),
@@ -7611,18 +11395,27 @@ class _SupplierScreenState extends State<SupplierScreen> {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text('${supplier.orders} orders', style: const TextStyle(color: muted, fontSize: 10)),
+                            Text('${supplier.orders} orders',
+                                style: const TextStyle(
+                                    color: muted, fontSize: 10)),
                             const SizedBox(height: 4),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
-                                color: hasOutstanding ? const Color(0xFFFFEBEE) : const Color(0xFFE8F5E9),
+                                color: hasOutstanding
+                                    ? const Color(0xFFFFEBEE)
+                                    : const Color(0xFFE8F5E9),
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                hasOutstanding ? 'KSh ${(supplier.outstanding / 1000).toStringAsFixed(0)}K' : 'Settled',
+                                hasOutstanding
+                                    ? 'KSh ${(supplier.outstanding / 1000).toStringAsFixed(0)}K'
+                                    : 'Settled',
                                 style: TextStyle(
-                                  color: hasOutstanding ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+                                  color: hasOutstanding
+                                      ? const Color(0xFFD32F2F)
+                                      : const Color(0xFF2E7D32),
                                   fontSize: 10,
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -7651,21 +11444,30 @@ class _SupplierScreenState extends State<SupplierScreen> {
           ),
           child: Column(
             children: [
-              Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 2),
-              Text(label, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 10)),
+              Text(label,
+                  style:
+                      const TextStyle(color: Color(0xCCFFFFFF), fontSize: 10)),
             ],
           ),
         ),
       );
 
-  Widget _formField(String label, String hint, String value, ValueChanged<String> onChanged) => Column(
+  Widget _formField(String label, String hint, String value,
+          ValueChanged<String> onChanged) =>
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           TextField(
-            controller: TextEditingController(text: value)..selection = TextSelection.collapsed(offset: value.length),
+            controller: TextEditingController(text: value)
+              ..selection = TextSelection.collapsed(offset: value.length),
             onChanged: onChanged,
             decoration: InputDecoration(
               hintText: hint,
@@ -7681,22 +11483,31 @@ class _SupplierScreenState extends State<SupplierScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
-          boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+          ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(label, style: const TextStyle(color: muted, fontSize: 11)),
             const SizedBox(height: 6),
-            Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w800)),
+            Text(value,
+                style: TextStyle(
+                    color: color, fontSize: 18, fontWeight: FontWeight.w800)),
           ],
         ),
       );
 
-  Widget _detailRow(String label, String value, {bool isLast = false}) => Container(
+  Widget _detailRow(String label, String value, {bool isLast = false}) =>
+      Container(
         padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: isLast ? Colors.transparent : const Color(0xFFF0F3F9), width: 1)),
+          border: Border(
+              bottom: BorderSide(
+                  color: isLast ? Colors.transparent : const Color(0xFFF0F3F9),
+                  width: 1)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -7707,7 +11518,8 @@ class _SupplierScreenState extends State<SupplierScreen> {
               child: Text(
                 value,
                 textAlign: TextAlign.right,
-                style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: ink, fontSize: 13, fontWeight: FontWeight.w700),
               ),
             ),
           ],
@@ -7768,11 +11580,34 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
 
   final Map<String, List<String>> _rolePermissions = const {
     'Admin': ['View Platform Health', 'Manage Tenants', 'Manage Licenses'],
-    'Store Owner': ['Full Access', 'Edit Settings', 'Manage Staff', 'View Reports', 'Process Sales', 'Manage Inventory', 'Add Expenses'],
-    'Supervisor': ['View Reports', 'Process Sales', 'Manage Inventory', 'Override Discount', 'View Expenses'],
+    'Store Owner': [
+      'Full Access',
+      'Edit Settings',
+      'Manage Staff',
+      'View Reports',
+      'Process Sales',
+      'Manage Inventory',
+      'Add Expenses'
+    ],
+    'Supervisor': [
+      'View Reports',
+      'Process Sales',
+      'Manage Inventory',
+      'Override Discount',
+      'View Expenses'
+    ],
     'Cashier': ['Process Sales', 'View Products', 'View Customers'],
-    'Stock Keeper': ['Manage Inventory', 'View Products', 'Create Purchase Orders'],
-    'Accountant': ['View Reports', 'View Expenses', 'Export Data', 'Manage Credit'],
+    'Stock Keeper': [
+      'Manage Inventory',
+      'View Products',
+      'Create Purchase Orders'
+    ],
+    'Accountant': [
+      'View Reports',
+      'View Expenses',
+      'Export Data',
+      'Manage Credit'
+    ],
   };
 
   bool _showForm = false;
@@ -7803,9 +11638,18 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
   EmployeeEntry _mapEmployee(Map<String, dynamic> row) {
     final role = (row['role'] as String? ?? 'CASHIER').toUpperCase();
     final normalizedRole = role == 'MANAGER' ? 'SUPERVISOR' : role;
-    final displayRole = normalizedRole == 'OWNER' ? 'Store Owner' : normalizedRole[0] + normalizedRole.substring(1).toLowerCase();
+    final displayRole = normalizedRole == 'OWNER'
+        ? 'Store Owner'
+        : normalizedRole[0] + normalizedRole.substring(1).toLowerCase();
     final name = row['fullName'] as String? ?? 'Employee';
-    final initials = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).map((part) => part[0]).take(2).join().toUpperCase();
+    final initials = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .map((part) => part[0])
+        .take(2)
+        .join()
+        .toUpperCase();
     return EmployeeEntry(
       id: row['id'] as String? ?? '',
       name: name,
@@ -7863,8 +11707,20 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
       fullName: name,
       email: _form['email'] as String,
       phone: _form['phone'] as String,
-      role: selectedRole == 'ADMIN' ? 'ADMIN' : selectedRole == 'STORE OWNER' ? 'OWNER' : selectedRole == 'STORE MANAGER' ? 'OWNER' : selectedRole == 'SUPERVISOR' ? 'SUPERVISOR' : selectedRole == 'ACCOUNTANT' ? 'ACCOUNTANT' : 'CASHIER',
-      pin: (_form['pin'] as String).trim().isEmpty ? null : (_form['pin'] as String).trim(),
+      role: selectedRole == 'ADMIN'
+          ? 'ADMIN'
+          : selectedRole == 'STORE OWNER'
+              ? 'OWNER'
+              : selectedRole == 'STORE MANAGER'
+                  ? 'OWNER'
+                  : selectedRole == 'SUPERVISOR'
+                      ? 'SUPERVISOR'
+                      : selectedRole == 'ACCOUNTANT'
+                          ? 'ACCOUNTANT'
+                          : 'CASHIER',
+      pin: (_form['pin'] as String).trim().isEmpty
+          ? null
+          : (_form['pin'] as String).trim(),
     );
 
     setState(() {
@@ -7875,8 +11731,11 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     if (!mounted) return;
     final synced = saved['synced'] == true;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      backgroundColor: synced ? const Color(0xFF2E7D32) : const Color(0xFFF57C00),
-      content: Text(synced ? 'Employee saved to the business database.' : 'Employee saved locally; will sync when online.'),
+      backgroundColor:
+          synced ? const Color(0xFF2E7D32) : const Color(0xFFF57C00),
+      content: Text(synced
+          ? 'Employee saved to the business database.'
+          : 'Employee saved locally; will sync when online.'),
     ));
     unawaited(_employeeRepository.syncPending(userId: 'demo-owner'));
   }
@@ -7910,7 +11769,10 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                   const SizedBox(width: 12),
                   Text(
                     isEdit ? 'Edit Employee' : 'Add Employee',
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -7924,18 +11786,36 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Personal Information', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Personal Information',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 14),
-                        _fieldLabel('Full Name *', value: _form['name'], onChanged: (value) => setState(() => _form['name'] = value)),
+                        _fieldLabel('Full Name *',
+                            value: _form['name'],
+                            onChanged: (value) =>
+                                setState(() => _form['name'] = value)),
                         const SizedBox(height: 14),
-                        _fieldLabel('Phone Number *', value: _form['phone'], onChanged: (value) => setState(() => _form['phone'] = value)),
+                        _fieldLabel('Phone Number *',
+                            value: _form['phone'],
+                            onChanged: (value) =>
+                                setState(() => _form['phone'] = value)),
                         const SizedBox(height: 14),
-                        _fieldLabel('Email Address', value: _form['email'], onChanged: (value) => setState(() => _form['email'] = value)),
+                        _fieldLabel('Email Address',
+                            value: _form['email'],
+                            onChanged: (value) =>
+                                setState(() => _form['email'] = value)),
                       ],
                     ),
                   ),
@@ -7945,26 +11825,48 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Role & Access', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Role & Access',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 14),
-                        const Text('Role *', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Role *',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: ['Admin', 'Store Owner', 'Supervisor', 'Cashier', 'Accountant'].map((option) {
+                          children: [
+                            'Admin',
+                            'Store Owner',
+                            'Supervisor',
+                            'Cashier',
+                            'Accountant'
+                          ].map((option) {
                             final selected = role == option;
                             return ChoiceChip(
                               label: Text(option),
                               selected: selected,
-                              onSelected: (_) => setState(() => _form['role'] = option),
+                              onSelected: (_) =>
+                                  setState(() => _form['role'] = option),
                               selectedColor: _roleColors[option],
-                              labelStyle: TextStyle(color: selected ? Colors.white : muted, fontWeight: FontWeight.w700),
+                              labelStyle: TextStyle(
+                                  color: selected ? Colors.white : muted,
+                                  fontWeight: FontWeight.w700),
                             );
                           }).toList(),
                         ),
@@ -7979,18 +11881,32 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('PERMISSIONS FOR ${role.toUpperCase()}', style: const TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w800)),
+                              Text('PERMISSIONS FOR ${role.toUpperCase()}',
+                                  style: const TextStyle(
+                                      color: muted,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800)),
                               const SizedBox(height: 8),
-                              ...(_rolePermissions[role] ?? const ['Full Access']).map((permission) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 4),
-                                    child: Row(
-                                      children: [
-                                        Container(width: 5, height: 5, decoration: BoxDecoration(color: _roleColors[role], shape: BoxShape.circle)),
-                                        const SizedBox(width: 8),
-                                        Text(permission, style: const TextStyle(color: ink, fontSize: 11)),
-                                      ],
-                                    ),
-                                  )),
+                              ...(_rolePermissions[role] ??
+                                      const ['Full Access'])
+                                  .map((permission) => Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 4),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                                width: 5,
+                                                height: 5,
+                                                decoration: BoxDecoration(
+                                                    color: _roleColors[role],
+                                                    shape: BoxShape.circle)),
+                                            const SizedBox(width: 8),
+                                            Text(permission,
+                                                style: const TextStyle(
+                                                    color: ink, fontSize: 11)),
+                                          ],
+                                        ),
+                                      )),
                             ],
                           ),
                         ),
@@ -8003,36 +11919,63 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Work Details', style: TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+                        const Text('Work Details',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 14),
-                        const Text('Shift', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        const Text('Shift',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                         const SizedBox(height: 8),
                         Row(
-                          children: ['Morning', 'Afternoon', 'Evening'].map((option) {
-                            final selected = (_form['shift'] as String) == option;
+                          children:
+                              ['Morning', 'Afternoon', 'Evening'].map((option) {
+                            final selected =
+                                (_form['shift'] as String) == option;
                             return Expanded(
                               child: Padding(
                                 padding: const EdgeInsets.only(right: 8),
                                 child: ChoiceChip(
                                   label: Text(option),
                                   selected: selected,
-                                  onSelected: (_) => setState(() => _form['shift'] = option),
+                                  onSelected: (_) =>
+                                      setState(() => _form['shift'] = option),
                                   selectedColor: navy,
-                                  labelStyle: TextStyle(color: selected ? Colors.white : muted, fontWeight: FontWeight.w700),
+                                  labelStyle: TextStyle(
+                                      color: selected ? Colors.white : muted,
+                                      fontWeight: FontWeight.w700),
                                 ),
                               ),
                             );
                           }).toList(),
                         ),
                         const SizedBox(height: 14),
-                        _fieldLabel('Monthly Salary (KSh)', value: _form['salary'], keyboardType: TextInputType.number, onChanged: (value) => setState(() => _form['salary'] = value)),
+                        _fieldLabel('Monthly Salary (KSh)',
+                            value: _form['salary'],
+                            keyboardType: TextInputType.number,
+                            onChanged: (value) =>
+                                setState(() => _form['salary'] = value)),
                         const SizedBox(height: 14),
-                        _fieldLabel('PIN (4 digits) *', value: _form['pin'], keyboardType: TextInputType.number, onChanged: (value) => setState(() => _form['pin'] = value), maxLength: 4),
+                        _fieldLabel('PIN (4 digits) *',
+                            value: _form['pin'],
+                            keyboardType: TextInputType.number,
+                            onChanged: (value) =>
+                                setState(() => _form['pin'] = value),
+                            maxLength: 4),
                       ],
                     ),
                   ),
@@ -8043,9 +11986,12 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: Text(isEdit ? 'Save Changes' : 'Add Employee', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    child: Text(isEdit ? 'Save Changes' : 'Add Employee',
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
@@ -8056,7 +12002,8 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     }
 
     if (_selected != null) {
-      final employee = _employees.firstWhere((item) => item.id == _selected!.id);
+      final employee =
+          _employees.firstWhere((item) => item.id == _selected!.id);
       return Container(
         color: const Color(0xFFF5F7FA),
         child: Column(
@@ -8081,7 +12028,11 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         icon: const Icon(Icons.arrow_back),
                       ),
                       const SizedBox(width: 12),
-                      const Text('Employee Profile', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                      const Text('Employee Profile',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700)),
                     ],
                   ),
                   const SizedBox(height: 18),
@@ -8095,7 +12046,11 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                           shape: BoxShape.circle,
                         ),
                         child: Center(
-                          child: Text(employee.initials, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                          child: Text(employee.initials,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -8103,26 +12058,43 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(employee.name, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                            Text(employee.name,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800)),
                             const SizedBox(height: 6),
                             Row(
                               children: [
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
                                     color: _roleColors[employee.role],
                                     borderRadius: BorderRadius.circular(999),
                                   ),
-                                  child: Text(employee.role, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+                                  child: Text(employee.role,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700)),
                                 ),
                                 const SizedBox(width: 8),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: employee.active ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F),
+                                    color: employee.active
+                                        ? const Color(0xFF2E7D32)
+                                        : const Color(0xFFD32F2F),
                                     borderRadius: BorderRadius.circular(999),
                                   ),
-                                  child: Text(employee.active ? 'Active' : 'Inactive', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+                                  child: Text(
+                                      employee.active ? 'Active' : 'Inactive',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700)),
                                 ),
                               ],
                             ),
@@ -8143,14 +12115,20 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       children: [
                         _profileRow('Phone', employee.phone),
                         _profileRow('Email', employee.email),
                         _profileRow('Shift', employee.shift),
-                        _profileRow('Monthly Salary', 'KSh ${employee.salary.toString()}'),
+                        _profileRow('Monthly Salary',
+                            'KSh ${employee.salary.toString()}'),
                         _profileRow('Start Date', employee.startDate),
                         _profileRow('PIN', '••••'),
                       ],
@@ -8162,24 +12140,41 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Permissions', style: TextStyle(color: ink, fontSize: 12, fontWeight: FontWeight.w800)),
+                        const Text('Permissions',
+                            style: TextStyle(
+                                color: ink,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
                         Wrap(
                           spacing: 6,
                           runSpacing: 8,
-                          children: (_rolePermissions[employee.role] ?? const ['View Products']).map((permission) => Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE9EEFF),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Text(permission, style: const TextStyle(color: navy, fontSize: 10, fontWeight: FontWeight.w700)),
-                              )).toList(),
+                          children: (_rolePermissions[employee.role] ??
+                                  const ['View Products'])
+                              .map((permission) => Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFE9EEFF),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(permission,
+                                        style: const TextStyle(
+                                            color: navy,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700)),
+                                  ))
+                              .toList(),
                         ),
                       ],
                     ),
@@ -8193,10 +12188,13 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: navy,
                             foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          child: const Text('Edit Details', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                          child: const Text('Edit Details',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w800)),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -8204,15 +12202,25 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         child: TextButton(
                           onPressed: () => setState(() => _selected = null),
                           style: TextButton.styleFrom(
-                            backgroundColor: employee.active ? const Color(0xFFFFF5F5) : const Color(0xFFE8F5E9),
-                            foregroundColor: employee.active ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+                            backgroundColor: employee.active
+                                ? const Color(0xFFFFF5F5)
+                                : const Color(0xFFE8F5E9),
+                            foregroundColor: employee.active
+                                ? const Color(0xFFD32F2F)
+                                : const Color(0xFF2E7D32),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
-                              side: BorderSide(color: employee.active ? const Color(0xFFFFCDD2) : const Color(0xFFC8E6C9)),
+                              side: BorderSide(
+                                  color: employee.active
+                                      ? const Color(0xFFFFCDD2)
+                                      : const Color(0xFFC8E6C9)),
                             ),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          child: Text(employee.active ? 'Deactivate' : 'Activate', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                          child: Text(
+                              employee.active ? 'Deactivate' : 'Activate',
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w700)),
                         ),
                       ),
                     ],
@@ -8253,7 +12261,11 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                           icon: const Icon(Icons.arrow_back, size: 18),
                         ),
                         const SizedBox(height: 2),
-                        const Text('Employees', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                        const Text('Employees',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800)),
                       ],
                     ),
                     TextButton(
@@ -8261,21 +12273,32 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                       style: TextButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: ink,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
                       ),
-                      child: const Text('+ Add', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                      child: const Text('+ Add',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    _summaryMetric('Total', '${_employees.length}', Colors.white),
+                    _summaryMetric(
+                        'Total', '${_employees.length}', Colors.white),
                     const SizedBox(width: 8),
-                    _summaryMetric('Active', '${_employees.where((employee) => employee.active).length}', const Color(0xFF4CAF50)),
+                    _summaryMetric(
+                        'Active',
+                        '${_employees.where((employee) => employee.active).length}',
+                        const Color(0xFF4CAF50)),
                     const SizedBox(width: 8),
-                    _summaryMetric('Inactive', '${_employees.where((employee) => !employee.active).length}', const Color(0xFFFF6B6B)),
+                    _summaryMetric(
+                        'Inactive',
+                        '${_employees.where((employee) => !employee.active).length}',
+                        const Color(0xFFFF6B6B)),
                   ],
                 ),
               ],
@@ -8291,7 +12314,12 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))],
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x0F000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2))
+                    ],
                   ),
                   child: InkWell(
                     onTap: () => setState(() => _selected = employee),
@@ -8305,7 +12333,11 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                             shape: BoxShape.circle,
                           ),
                           child: Center(
-                            child: Text(employee.initials, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
+                            child: Text(employee.initials,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w800)),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -8313,20 +12345,34 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(employee.name, style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
+                              Text(employee.name,
+                                  style: const TextStyle(
+                                      color: ink,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800)),
                               const SizedBox(height: 4),
                               Row(
                                 children: [
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 7, vertical: 3),
                                     decoration: BoxDecoration(
-                                      color: Color.alphaBlend(_roleColors[employee.role]!.withValues(alpha: 0.12), Colors.white),
+                                      color: Color.alphaBlend(
+                                          _roleColors[employee.role]!
+                                              .withValues(alpha: 0.12),
+                                          Colors.white),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
-                                    child: Text(employee.role, style: TextStyle(color: _roleColors[employee.role], fontSize: 10, fontWeight: FontWeight.w800)),
+                                    child: Text(employee.role,
+                                        style: TextStyle(
+                                            color: _roleColors[employee.role],
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800)),
                                   ),
                                   const SizedBox(width: 8),
-                                  Text('${employee.shift} shift', style: const TextStyle(color: muted, fontSize: 10)),
+                                  Text('${employee.shift} shift',
+                                      style: const TextStyle(
+                                          color: muted, fontSize: 10)),
                                 ],
                               ),
                             ],
@@ -8335,9 +12381,20 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text('KSh ${(employee.salary / 1000).toStringAsFixed(0)}K', style: const TextStyle(color: ink, fontSize: 12, fontWeight: FontWeight.w800)),
+                            Text(
+                                'KSh ${(employee.salary / 1000).toStringAsFixed(0)}K',
+                                style: const TextStyle(
+                                    color: ink,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800)),
                             const SizedBox(height: 4),
-                            Text(employee.active ? '● Active' : '● Inactive', style: TextStyle(color: employee.active ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F), fontSize: 10, fontWeight: FontWeight.w700)),
+                            Text(employee.active ? '● Active' : '● Inactive',
+                                style: TextStyle(
+                                    color: employee.active
+                                        ? const Color(0xFF2E7D32)
+                                        : const Color(0xFFD32F2F),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700)),
                           ],
                         ),
                       ],
@@ -8361,9 +12418,13 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
           ),
           child: Column(
             children: [
-              Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 3),
-              Text(label, style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
+              Text(label,
+                  style:
+                      const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
             ],
           ),
         ),
@@ -8375,15 +12436,19 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     required ValueChanged<String> onChanged,
     TextInputType keyboardType = TextInputType.text,
     int maxLength = 999,
-  }) => Column(
+  }) =>
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+          Text(label,
+              style: const TextStyle(
+                  color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           TextField(
             keyboardType: keyboardType,
             maxLength: maxLength,
-            controller: TextEditingController(text: value)..selection = TextSelection.collapsed(offset: value.length),
+            controller: TextEditingController(text: value)
+              ..selection = TextSelection.collapsed(offset: value.length),
             onChanged: onChanged,
             decoration: const InputDecoration(border: OutlineInputBorder()),
           ),
@@ -8405,7 +12470,8 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
               child: Text(
                 value,
                 textAlign: TextAlign.right,
-                style: const TextStyle(color: ink, fontSize: 13, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: ink, fontSize: 13, fontWeight: FontWeight.w700),
               ),
             ),
           ],
@@ -8444,98 +12510,7 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  List<NotificationEntry> _items = [
-    NotificationEntry(
-      type: 'critical',
-      title: 'Critical Stock Alert',
-      body: 'Panadol 500mg has only 3 units remaining. Reorder level is 50 units.',
-      time: '14:30',
-      date: 'Today',
-      read: false,
-      icon: '🔴',
-    ),
-    NotificationEntry(
-      type: 'warning',
-      title: 'Low Stock Warning',
-      body: 'Royco 75g is running low (5 units). Consider placing a purchase order.',
-      time: '13:55',
-      date: 'Today',
-      read: false,
-      icon: '⚠️',
-    ),
-    NotificationEntry(
-      type: 'success',
-      title: 'Daily Sales Target Achieved',
-      body: "Congratulations! Today's sales of KSh 84,250 exceeded the daily target of KSh 70,000.",
-      time: '13:00',
-      date: 'Today',
-      read: false,
-      icon: '🎯',
-    ),
-    NotificationEntry(
-      type: 'info',
-      title: 'New Purchase Order Received',
-      body: 'PO-2026-083 from Bidco Africa has been marked as delivered. 4 items received.',
-      time: '11:20',
-      date: 'Today',
-      read: true,
-      icon: '📦',
-    ),
-    NotificationEntry(
-      type: 'warning',
-      title: 'Credit Account Overdue',
-      body: "Grace Achieng's credit balance of KSh 9,600 is overdue by 5 days.",
-      time: '09:00',
-      date: 'Today',
-      read: true,
-      icon: '💳',
-    ),
-    NotificationEntry(
-      type: 'info',
-      title: 'Backup Completed',
-      body: 'Your data has been successfully backed up to the cloud. All records are safe.',
-      time: '06:00',
-      date: 'Today',
-      read: true,
-      icon: '☁️',
-    ),
-    NotificationEntry(
-      type: 'success',
-      title: 'New Customer Registered',
-      body: 'Grace Achieng has been added as a new customer to your database.',
-      time: '15:30',
-      date: 'Yesterday',
-      read: true,
-      icon: '👤',
-    ),
-    NotificationEntry(
-      type: 'info',
-      title: 'Monthly Report Available',
-      body: 'Your June 2026 monthly sales and profit report is ready to view.',
-      time: '07:00',
-      date: 'Yesterday',
-      read: true,
-      icon: '📊',
-    ),
-    NotificationEntry(
-      type: 'warning',
-      title: 'Low Cash in Till',
-      body: 'Cash in till is below KSh 20,000. Consider topping up or depositing excess.',
-      time: '16:00',
-      date: 'Earlier',
-      read: true,
-      icon: '💵',
-    ),
-    NotificationEntry(
-      type: 'critical',
-      title: 'Expired Product Alert',
-      body: 'Dawa Product Batch #DW2209 is approaching expiry in 7 days. Check pharmacy stock.',
-      time: '10:00',
-      date: 'Earlier',
-      read: true,
-      icon: '💊',
-    ),
-  ];
+  List<NotificationEntry> _items = const [];
 
   String _filter = 'all';
   bool _loading = true;
@@ -8550,7 +12525,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _loadNotifications() async {
     try {
       final session = await AuthService().readSession();
-      if (session == null) throw Exception('Please sign in to load notifications.');
+      if (session == null)
+        throw Exception('Please sign in to load notifications.');
       final remoteItems = await NotificationService().fetch(session);
       if (!mounted) return;
       setState(() {
@@ -8581,19 +12557,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   String _formatDate(DateTime value) {
     final now = DateTime.now();
-    if (value.year == now.year && value.month == now.month && value.day == now.day) return 'Today';
+    if (value.year == now.year &&
+        value.month == now.month &&
+        value.day == now.day) return 'Today';
     final yesterday = now.subtract(const Duration(days: 1));
-    if (value.year == yesterday.year && value.month == yesterday.month && value.day == yesterday.day) return 'Yesterday';
+    if (value.year == yesterday.year &&
+        value.month == yesterday.month &&
+        value.day == yesterday.day) return 'Yesterday';
     return 'Earlier';
   }
 
-  String _formatTime(DateTime value) => '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+  String _formatTime(DateTime value) =>
+      '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
 
   int get unreadCount => _items.where((item) => !item.read).length;
 
   bool _isVisible(NotificationEntry item) => _filter == 'all' || !item.read;
 
-  List<NotificationEntry> _sectionItems(String date) => _items.where((item) => item.date == date && _isVisible(item)).toList();
+  List<NotificationEntry> _sectionItems(String date) =>
+      _items.where((item) => item.date == date && _isVisible(item)).toList();
 
   Future<void> _markAllRead() async {
     final session = await AuthService().readSession();
@@ -8601,13 +12583,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       try {
         await NotificationService().markRead(session, all: true);
       } on Object catch (error) {
-        if (mounted) setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+        if (mounted)
+          setState(
+              () => _error = error.toString().replaceFirst('Exception: ', ''));
         return;
       }
     }
     setState(() {
       for (var i = 0; i < _items.length; i++) {
         _items[i] = NotificationEntry(
+          id: _items[i].id,
           type: _items[i].type,
           title: _items[i].title,
           body: _items[i].body,
@@ -8620,22 +12605,24 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
   }
 
-  Future<void> _markRead(String title) async {
-    final matchingItems = _items.where((candidate) => candidate.title == title).toList();
-    final item = matchingItems.isEmpty ? null : matchingItems.first;
+  Future<void> _markRead(NotificationEntry item) async {
     final session = await AuthService().readSession();
-    if (session != null && item != null && item.id.isNotEmpty) {
+    if (item.read || item.id.isEmpty) return;
+    if (session != null) {
       try {
         await NotificationService().markRead(session, id: item.id);
       } on Object catch (error) {
-        if (mounted) setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+        if (mounted)
+          setState(
+              () => _error = error.toString().replaceFirst('Exception: ', ''));
         return;
       }
     }
     setState(() {
       for (var i = 0; i < _items.length; i++) {
-        if (_items[i].title == title) {
+        if (_items[i].id == item.id) {
           _items[i] = NotificationEntry(
+            id: _items[i].id,
             type: _items[i].type,
             title: _items[i].title,
             body: _items[i].body,
@@ -8647,6 +12634,22 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         }
       }
     });
+  }
+
+  Future<void> _deleteNotification(NotificationEntry item) async {
+    if (!item.read || item.id.isEmpty) return;
+    final session = await AuthService().readSession();
+    if (session == null) return;
+    try {
+      await NotificationService().delete(session, item.id);
+      if (mounted)
+        setState(() => _items.removeWhere((entry) => entry.id == item.id));
+    } on Object catch (error) {
+      if (mounted) {
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+      }
+    }
   }
 
   @override
@@ -8678,13 +12681,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   children: [
                     TextButton.icon(
                       onPressed: widget.onBack,
-                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 14, color: Colors.white70),
-                      label: const Text('Back', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                          size: 14, color: Colors.white70),
+                      label: const Text('Back',
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 12)),
                       style: TextButton.styleFrom(padding: EdgeInsets.zero),
                     ),
                     if (unreadCount > 0)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: const Color(0xFFD32F2F),
                           borderRadius: BorderRadius.circular(99),
@@ -8701,13 +12708,31 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Notifications',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
+                Row(
+                  children: [
+                    const Text(
+                      'Notifications',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (unreadCount > 0)
+                      TextButton(
+                        onPressed: _markAllRead,
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: 0.12),
+                          foregroundColor: Colors.white70,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                        ),
+                        child: const Text('Mark all read',
+                            style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 14),
                 Row(
@@ -8715,16 +12740,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     _filterChip('All', 'all'),
                     const SizedBox(width: 8),
                     _filterChip('Unread', 'unread'),
-                    const Spacer(),
-                    if (unreadCount > 0)
-                      TextButton(
-                        onPressed: _markAllRead,
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.white70,
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        ),
-                        child: const Text('Mark all read', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      ),
                   ],
                 ),
               ],
@@ -8742,7 +12757,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(8, 24, 8, 12),
-                    child: Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),
+                    child: Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.red)),
                   ),
                 if (today.isNotEmpty) _section('Today', today),
                 if (yesterday.isNotEmpty) _section('Yesterday', yesterday),
@@ -8753,24 +12770,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     child: Center(
                       child: Text(
                         'No notifications',
-                        style: TextStyle(color: muted, fontSize: 16, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: muted,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),
-                const Padding(
-                  padding: EdgeInsets.only(top: 18),
-                  child: Center(
-                    child: Text(
-                      'MobiDuka POS · Interactive Prototype\n25+ screens · Android UI · Material Design 3',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: muted,
-                        fontSize: 11,
-                        height: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -8827,14 +12833,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Widget _notificationRow(NotificationEntry item) {
     final palette = {
-      'critical': {'bg': const Color(0xFFFFF5F5), 'border': const Color(0xFFFFCDD2), 'dot': const Color(0xFFD32F2F)},
-      'warning': {'bg': const Color(0xFFFFF8E1), 'border': const Color(0xFFFFE082), 'dot': const Color(0xFFF9A825)},
-      'success': {'bg': const Color(0xFFF1F8E9), 'border': const Color(0xFFC5E1A5), 'dot': const Color(0xFF2E7D32)},
-      'info': {'bg': const Color(0xFFE3F2FD), 'border': const Color(0xFF90CAF9), 'dot': const Color(0xFF0288D1)},
+      'critical': {
+        'bg': const Color(0xFFFFF5F5),
+        'border': const Color(0xFFFFCDD2),
+        'dot': const Color(0xFFD32F2F)
+      },
+      'warning': {
+        'bg': const Color(0xFFFFF8E1),
+        'border': const Color(0xFFFFE082),
+        'dot': const Color(0xFFF9A825)
+      },
+      'success': {
+        'bg': const Color(0xFFF1F8E9),
+        'border': const Color(0xFFC5E1A5),
+        'dot': const Color(0xFF2E7D32)
+      },
+      'info': {
+        'bg': const Color(0xFFE3F2FD),
+        'border': const Color(0xFF90CAF9),
+        'dot': const Color(0xFF0288D1)
+      },
     }[item.type]!;
 
     return GestureDetector(
-      onTap: () => _markRead(item.title),
+      onTap: () => _markRead(item),
       child: Container(
         width: double.infinity,
         margin: const EdgeInsets.only(bottom: 8),
@@ -8842,9 +12864,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         decoration: BoxDecoration(
           color: item.read ? Colors.white : palette['bg'] as Color,
           borderRadius: BorderRadius.circular(14),
-          border: Border(left: BorderSide(color: item.read ? Colors.transparent : palette['dot'] as Color, width: 3)),
+          border: Border(
+              left: BorderSide(
+                  color:
+                      item.read ? Colors.transparent : palette['dot'] as Color,
+                  width: 3)),
           boxShadow: item.read
-              ? const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))]
+              ? const [
+                  BoxShadow(
+                      color: Color(0x0F000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 2))
+                ]
               : [
                   BoxShadow(
                     color: (palette['border'] as Color).withValues(alpha: 0.45),
@@ -8861,7 +12892,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               height: 38,
               margin: const EdgeInsets.only(right: 12),
               decoration: BoxDecoration(
-                color: item.read ? const Color(0xFFF5F7FA) : palette['bg'] as Color,
+                color: item.read
+                    ? const Color(0xFFF5F7FA)
+                    : palette['bg'] as Color,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Center(
@@ -8880,7 +12913,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           item.title,
                           style: TextStyle(
                             fontSize: 13,
-                            fontWeight: item.read ? FontWeight.w600 : FontWeight.w700,
+                            fontWeight:
+                                item.read ? FontWeight.w600 : FontWeight.w700,
                             color: ink,
                           ),
                         ),
@@ -8895,17 +12929,28 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             shape: BoxShape.circle,
                           ),
                         ),
+                      if (item.read)
+                        GestureDetector(
+                          onTap: () => _deleteNotification(item),
+                          child: const Padding(
+                            padding: EdgeInsets.only(left: 8),
+                            child: Icon(Icons.close_rounded,
+                                color: Color(0xFFB0BAD3), size: 18),
+                          ),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
                     item.body,
-                    style: const TextStyle(fontSize: 12, color: muted, height: 1.5),
+                    style: const TextStyle(
+                        fontSize: 12, color: muted, height: 1.5),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     item.time,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFFB0BAD3)),
+                    style:
+                        const TextStyle(fontSize: 11, color: Color(0xFFB0BAD3)),
                   ),
                 ],
               ),
@@ -8918,7 +12963,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 }
 
 class CreditBookScreen extends StatefulWidget {
-  const CreditBookScreen({required this.onBack, this.initialCustomerId, super.key});
+  const CreditBookScreen(
+      {required this.onBack, this.initialCustomerId, super.key});
   final VoidCallback onBack;
   final String? initialCustomerId;
 
@@ -8951,7 +12997,9 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
       _loading = false;
     });
     final initialCustomerId = widget.initialCustomerId;
-    if (initialCustomerId != null && mounted && _accounts.any((account) => account.customerId == initialCustomerId)) {
+    if (initialCustomerId != null &&
+        mounted &&
+        _accounts.any((account) => account.customerId == initialCustomerId)) {
       // The current screen is list-based; preserve the selected customer for the next detail-screen extension.
       setState(() {});
     }
@@ -8966,33 +13014,43 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
       builder: (sheetContext) => SizedBox(
         height: MediaQuery.of(sheetContext).size.height,
         child: Padding(
-          padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
+          padding: EdgeInsets.fromLTRB(
+              20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-            const Text('Receive Debt Repayment', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 6),
-            Text('${account.customer} · Outstanding KSh ${account.balance.toStringAsFixed(0)}', style: const TextStyle(color: muted, fontSize: 12)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: amountController,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Collected Repayment Amount', prefixText: 'KSh ', border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () {
-                  final value = double.tryParse(amountController.text.trim());
-                  if (value == null || value <= 0 || value > account.balance) return;
-                  Navigator.of(sheetContext).pop(value);
-                },
-                child: const Text('Record Repayment'),
+              const Text('Receive Debt Repayment',
+                  style: TextStyle(
+                      color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 6),
+              Text(
+                  '${account.customer} · Outstanding KSh ${account.balance.toStringAsFixed(0)}',
+                  style: const TextStyle(color: muted, fontSize: 12)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: amountController,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                    labelText: 'Collected Repayment Amount',
+                    prefixText: 'KSh ',
+                    border: OutlineInputBorder()),
               ),
-            ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () {
+                    final value = double.tryParse(amountController.text.trim());
+                    if (value == null || value <= 0 || value > account.balance)
+                      return;
+                    Navigator.of(sheetContext).pop(value);
+                  },
+                  child: const Text('Record Repayment'),
+                ),
+              ),
             ],
           ),
         ),
@@ -9001,14 +13059,17 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
     amountController.dispose();
     if (amount == null) return;
 
-    final updated = await _creditService.recordOfflinePayment(customerId: account.customerId, amount: amount);
+    final updated = await _creditService.recordOfflinePayment(
+        customerId: account.customerId, amount: amount);
     if (updated == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment exceeds the outstanding balance.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Payment exceeds the outstanding balance.')));
       return;
     }
 
-    final paymentRecordId = 'credit-payment-${DateTime.now().microsecondsSinceEpoch}';
+    final paymentRecordId =
+        'credit-payment-${DateTime.now().microsecondsSinceEpoch}';
     await _syncService.queueChange(
       id: paymentRecordId,
       entityName: 'Credit',
@@ -9024,9 +13085,14 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
     await _loadAccounts();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(backgroundColor: Color(0xFF2E7D32), content: Text('Debt repayment recorded successfully.')),
+      const SnackBar(
+          backgroundColor: Color(0xFF2E7D32),
+          content: Text('Debt repayment recorded successfully.')),
     );
-    unawaited(_syncService.processCloudSync(businessId: 'demo-business', deviceId: 'mobile-device', userId: 'demo-owner'));
+    unawaited(_syncService.processCloudSync(
+        businessId: 'demo-business',
+        deviceId: 'mobile-device',
+        userId: 'demo-owner'));
   }
 
   int _daysOutstanding(CreditAccount account) {
@@ -9039,10 +13105,11 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
 
   String _lastTransactionLabel(CreditAccount account) {
     final ledgerEntry = _ledger.cast<Map<String, dynamic>?>().firstWhere(
-      (entry) => entry?['customerId'] == account.customerId,
-      orElse: () => null,
-    );
-    final value = ledgerEntry?['createdAt'] as String? ?? account.lastTransactionAt;
+          (entry) => entry?['customerId'] == account.customerId,
+          orElse: () => null,
+        );
+    final value =
+        ledgerEntry?['createdAt'] as String? ?? account.lastTransactionAt;
     if (value == null) return 'No payments recorded';
     final date = DateTime.tryParse(value);
     if (date == null) return 'Recent transaction';
@@ -9056,7 +13123,9 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
   }
 
   Widget _focusedAccountView(CreditAccount account) {
-    final entries = _ledger.where((entry) => entry['customerId'] == account.customerId).toList();
+    final entries = _ledger
+        .where((entry) => entry['customerId'] == account.customerId)
+        .toList();
     return Container(
       color: const Color(0xFFF5F7FA),
       child: Column(
@@ -9064,16 +13133,22 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(16, 52, 16, 22),
-            decoration: const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+            decoration: const BoxDecoration(
+                gradient: LinearGradient(colors: [ink, navy])),
             child: Row(
               children: [
                 IconButton(
                   onPressed: widget.onBack,
                   icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.12)),
+                  style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.12)),
                 ),
                 const SizedBox(width: 10),
-                const Text('Credit Ledger Profile', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+                const Text('Credit Ledger Profile',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -9083,22 +13158,33 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
               children: [
                 Container(
                   padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16)),
                   child: Row(
                     children: [
                       CircleAvatar(
                         radius: 28,
                         backgroundColor: Color(account.colorValue),
-                        child: Text(account.initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                        child: Text(account.initials,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800)),
                       ),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(account.customer, style: const TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+                            Text(account.customer,
+                                style: const TextStyle(
+                                    color: ink,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800)),
                             const SizedBox(height: 3),
-                            Text(account.phone, style: const TextStyle(color: muted, fontSize: 12)),
+                            Text(account.phone,
+                                style: const TextStyle(
+                                    color: muted, fontSize: 12)),
                           ],
                         ),
                       ),
@@ -9108,31 +13194,60 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(color: const Color(0xFFFFF8E1), borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFFFE082))),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8E1),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFFFE082))),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Outstanding Balance', style: TextStyle(color: Color(0xFF8D6E63), fontSize: 12, fontWeight: FontWeight.w700)),
+                      const Text('Outstanding Balance',
+                          style: TextStyle(
+                              color: Color(0xFF8D6E63),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
                       const SizedBox(height: 4),
-                      Text('KSh ${account.balance.toStringAsFixed(0)}', style: TextStyle(color: _balanceColor(account.balance), fontSize: 28, fontWeight: FontWeight.w900)),
+                      Text('KSh ${account.balance.toStringAsFixed(0)}',
+                          style: TextStyle(
+                              color: _balanceColor(account.balance),
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900)),
                       const SizedBox(height: 3),
-                      Text('${account.transactionCount} credit transactions', style: const TextStyle(color: Color(0xFF8D6E63), fontSize: 11)),
+                      Text('${account.transactionCount} credit transactions',
+                          style: const TextStyle(
+                              color: Color(0xFF8D6E63), fontSize: 11)),
                     ],
                   ),
                 ),
                 const SizedBox(height: 18),
-                const Text('Ledger History', style: TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
+                const Text('Ledger History',
+                    style: TextStyle(
+                        color: ink, fontSize: 14, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 8),
                 if (entries.isEmpty)
-                  const Text('No ledger entries recorded yet.', style: TextStyle(color: muted, fontSize: 12))
+                  const Text('No ledger entries recorded yet.',
+                      style: TextStyle(color: muted, fontSize: 12))
                 else
                   ...entries.map(
                     (entry) => ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: Icon(entry['type'] == 'SALE' ? Icons.receipt_long : Icons.payments_outlined, color: entry['type'] == 'SALE' ? const Color(0xFFF9A825) : const Color(0xFF2E7D32)),
-                      title: Text(entry['type'] == 'SALE' ? 'Credit sale' : 'Repayment', style: const TextStyle(color: ink, fontWeight: FontWeight.w700)),
-                      subtitle: Text(entry['createdAt']?.toString() ?? '', style: const TextStyle(color: muted, fontSize: 11)),
-                      trailing: Text('KSh ${(entry['amount'] as num?)?.toStringAsFixed(0) ?? '0'}', style: const TextStyle(color: ink, fontWeight: FontWeight.w800)),
+                      leading: Icon(
+                          entry['type'] == 'SALE'
+                              ? Icons.receipt_long
+                              : Icons.payments_outlined,
+                          color: entry['type'] == 'SALE'
+                              ? const Color(0xFFF9A825)
+                              : const Color(0xFF2E7D32)),
+                      title: Text(
+                          entry['type'] == 'SALE' ? 'Credit sale' : 'Repayment',
+                          style: const TextStyle(
+                              color: ink, fontWeight: FontWeight.w700)),
+                      subtitle: Text(entry['createdAt']?.toString() ?? '',
+                          style: const TextStyle(color: muted, fontSize: 11)),
+                      trailing: Text(
+                          'KSh ${(entry['amount'] as num?)?.toStringAsFixed(0) ?? '0'}',
+                          style: const TextStyle(
+                              color: ink, fontWeight: FontWeight.w800)),
                     ),
                   ),
               ],
@@ -9150,9 +13265,9 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
     final initialCustomerId = widget.initialCustomerId;
     if (!_loading && initialCustomerId != null) {
       final account = _accounts.cast<CreditAccount?>().firstWhere(
-        (item) => item?.customerId == initialCustomerId,
-        orElse: () => null,
-      );
+            (item) => item?.customerId == initialCustomerId,
+            orElse: () => null,
+          );
       if (account != null) return _focusedAccountView(account);
     }
 
@@ -9176,7 +13291,8 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                   children: [
                     IconButton(
                       onPressed: widget.onBack,
-                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: Colors.white70),
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                          size: 18, color: Colors.white70),
                       splashRadius: 20,
                       padding: EdgeInsets.zero,
                     ),
@@ -9194,10 +13310,12 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                 const SizedBox(height: 16),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.08),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.12)),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Column(
@@ -9237,131 +13355,155 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
             child: Column(
               children: _loading
-                  ? [const Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: navy))]
+                  ? [
+                      const Padding(
+                          padding: EdgeInsets.all(32),
+                          child: CircularProgressIndicator(color: navy))
+                    ]
                   : _accounts.isEmpty
-                      ? [const Padding(padding: EdgeInsets.all(32), child: Text('No local credit accounts found.', style: TextStyle(color: muted, fontSize: 14)))]
+                      ? [
+                          const Padding(
+                              padding: EdgeInsets.all(32),
+                              child: Text('No local credit accounts found.',
+                                  style: TextStyle(color: muted, fontSize: 14)))
+                        ]
                       : _accounts.map((account) {
-                final daysOld = _daysOutstanding(account);
-                final hasOutstanding = account.balance > 0;
-                        final balanceColor = _balanceColor(account.balance);
-                return Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x0F000000),
-                        blurRadius: 8,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 46,
-                        height: 46,
-                        decoration: BoxDecoration(
-                          color: Color(account.colorValue),
-                          borderRadius: BorderRadius.circular(23),
-                        ),
-                        child: Center(
-                          child: Text(
-                            account.initials,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              account.customer,
-                              style: const TextStyle(
-                                color: ink,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${account.phone} · ${account.transactionCount} transactions',
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 11,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              daysOld == 0
-                                  ? 'Added today'
-                                  : '${daysOld}d outstanding',
-                              style: TextStyle(
-                                color: hasOutstanding ? balanceColor : const Color(0xFF2E7D32),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                          final daysOld = _daysOutstanding(account);
+                          final hasOutstanding = account.balance > 0;
+                          final balanceColor = _balanceColor(account.balance);
+                          return Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                              color: hasOutstanding ? balanceColor.withValues(alpha: 0.12) : const Color(0xFFE8F5E9),
-                              borderRadius: BorderRadius.circular(8),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x0F000000),
+                                  blurRadius: 8,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
-                            child: Text(
-                              'KSh ${account.balance.toStringAsFixed(0)}',
-                              style: TextStyle(
-                                color: balanceColor,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                              ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 46,
+                                  height: 46,
+                                  decoration: BoxDecoration(
+                                    color: Color(account.colorValue),
+                                    borderRadius: BorderRadius.circular(23),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      account.initials,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        account.customer,
+                                        style: const TextStyle(
+                                          color: ink,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${account.phone} · ${account.transactionCount} transactions',
+                                        style: const TextStyle(
+                                          color: muted,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        daysOld == 0
+                                            ? 'Added today'
+                                            : '${daysOld}d outstanding',
+                                        style: TextStyle(
+                                          color: hasOutstanding
+                                              ? balanceColor
+                                              : const Color(0xFF2E7D32),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: hasOutstanding
+                                            ? balanceColor.withValues(
+                                                alpha: 0.12)
+                                            : const Color(0xFFE8F5E9),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'KSh ${account.balance.toStringAsFixed(0)}',
+                                        style: TextStyle(
+                                          color: balanceColor,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _lastTransactionLabel(account),
+                                      style: const TextStyle(
+                                        color: muted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    if (hasOutstanding) ...[
+                                      const SizedBox(height: 8),
+                                      TextButton(
+                                        onPressed: () =>
+                                            _showRepaymentSheet(account),
+                                        style: TextButton.styleFrom(
+                                          backgroundColor: navy,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 6),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(8)),
+                                        ),
+                                        child: const Text('Receive Repayment',
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w800)),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _lastTransactionLabel(account),
-                            style: const TextStyle(
-                              color: muted,
-                              fontSize: 11,
-                            ),
-                          ),
-                          if (hasOutstanding) ...[
-                            const SizedBox(height: 8),
-                            TextButton(
-                              onPressed: () => _showRepaymentSheet(account),
-                              style: TextButton.styleFrom(
-                                backgroundColor: navy,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                minimumSize: Size.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              ),
-                              child: const Text('Receive Repayment', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
+                          );
+                        }).toList(),
             ),
           ),
         ],
@@ -9384,8 +13526,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
   ReportsData? _reportData;
   bool _loading = true;
   String? _error;
-  final List<double> months = const [1.8, 2.1, 2.4, 2.0, 2.7, 3.1, 2.9, 3.4, 3.0, 3.6, 3.2, 4.1];
-  final List<String> monthLabels = const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final List<double> months = const [
+    1.8,
+    2.1,
+    2.4,
+    2.0,
+    2.7,
+    3.1,
+    2.9,
+    3.4,
+    3.0,
+    3.6,
+    3.2,
+    4.1
+  ];
+  final List<String> monthLabels = const [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
+  ];
   final List<Map<String, dynamic>> categoryData = const [
     {'name': 'Flour & Grains', 'value': 28, 'color': Color(0xFF123A8F)},
     {'name': 'Dairy', 'value': 22, 'color': Color(0xFFD4AF37)},
@@ -9408,7 +13576,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         _reportData = data;
         _trends = data.trends;
         _loading = false;
-        _error = data.isOffline ? 'Live reports unavailable. Showing offline queue data.' : null;
+        _error = data.isOffline
+            ? 'Live reports unavailable. Showing offline queue data.'
+            : null;
       });
     } on Object catch (error) {
       if (!mounted) return;
@@ -9448,11 +13618,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   const Expanded(
                     child: Text(
                       'Reports & Analytics',
-                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800),
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       color: const Color(0x334CAF50),
                       borderRadius: BorderRadius.circular(999),
@@ -9460,9 +13634,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     child: const Row(
                       children: [
-                        CircleAvatar(radius: 4, backgroundColor: Color(0xFF4CAF50)),
+                        CircleAvatar(
+                            radius: 4, backgroundColor: Color(0xFF4CAF50)),
                         SizedBox(width: 6),
-                        Text('LIVE', style: TextStyle(color: Color(0xFF81C784), fontSize: 10, fontWeight: FontWeight.w800)),
+                        Text('LIVE',
+                            style: TextStyle(
+                                color: Color(0xFF81C784),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800)),
                       ],
                     ),
                   ),
@@ -9472,15 +13651,25 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: EdgeInsets.only(top: 12),
-                  child: Text('Live reporting window · Last 7 days', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  child: Text('Live reporting window · Last 7 days',
+                      style: TextStyle(color: Colors.white60, fontSize: 12)),
                 ),
               ),
               const SizedBox(height: 14),
               Row(
                 children: [
-                  _metricCard("Today's Sales", 'KSh ${_trends.isEmpty ? 0 : (_trends.last.revenue / 1000).round()}K', _trends.isEmpty ? '—' : _formatDate(_trends.last.date)),
-                  _metricCard('Week Sales', 'KSh ${(weekSales / 1000).round()}K', 'COGS ${(report?.totalCostOfGoods ?? 0).round()} · Exp ${(report?.totalExpenses ?? 0).round()}'),
-                  _metricCard('Net Profit', 'KSh ${((report?.netProfit ?? 0) / 1000).round()}K', '${avgMargin.toStringAsFixed(1)}% margin'),
+                  _metricCard(
+                      "Today's Sales",
+                      'KSh ${_trends.isEmpty ? 0 : (_trends.last.revenue / 1000).round()}K',
+                      _trends.isEmpty ? '—' : _formatDate(_trends.last.date)),
+                  _metricCard(
+                      'Week Sales',
+                      'KSh ${(weekSales / 1000).round()}K',
+                      'COGS ${(report?.totalCostOfGoods ?? 0).round()} · Exp ${(report?.totalExpenses ?? 0).round()}'),
+                  _metricCard(
+                      'Net Profit',
+                      'KSh ${((report?.netProfit ?? 0) / 1000).round()}K',
+                      '${avgMargin.toStringAsFixed(1)}% margin'),
                 ],
               ),
             ],
@@ -9505,7 +13694,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               if (_loading) const LinearProgressIndicator(color: gold),
-              if (_error != null) Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(_error!, style: const TextStyle(color: muted, fontSize: 11))),
+              if (_error != null)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text(_error!,
+                        style: const TextStyle(color: muted, fontSize: 11))),
               if (tab == 0) _daily(),
               if (tab == 1) _monthly(),
               if (tab == 2) _profit(),
@@ -9551,25 +13744,37 @@ class _ReportsScreenState extends State<ReportsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: const TextStyle(color: Colors.white60, fontSize: 9, fontWeight: FontWeight.w600)),
+              Text(label,
+                  style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
-              Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+              Text(value,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800)),
               const SizedBox(height: 2),
-              Text(sub, style: const TextStyle(color: Colors.white54, fontSize: 9)),
+              Text(sub,
+                  style: const TextStyle(color: Colors.white54, fontSize: 9)),
             ],
           ),
         ),
       );
 
-  String _formatDate(DateTime date) => '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
+  String _formatDate(DateTime date) =>
+      '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
 
   double get _chartMaxY {
-    final maximum = _trends.fold<double>(0, (value, item) => item.revenue > value ? item.revenue : value);
+    final maximum = _trends.fold<double>(
+        0, (value, item) => item.revenue > value ? item.revenue : value);
     return maximum <= 0 ? 1 : maximum * 1.2;
   }
 
   double get _profitMaxY {
-    final maximum = _trends.fold<double>(0, (value, item) => item.profit > value ? item.profit : value);
+    final maximum = _trends.fold<double>(
+        0, (value, item) => item.profit > value ? item.profit : value);
     return maximum <= 0 ? 1 : maximum * 1.2;
   }
 
@@ -9585,28 +13790,48 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     children: [
                       LineChart(
                         LineChartData(
-                      minY: 0,
-                      maxY: _chartMaxY,
-                      gridData: const FlGridData(show: true, drawVerticalLine: false),
-                      titlesData: FlTitlesData(
-                        leftTitles: AxisTitles(
-                          sideTitles: SideTitles(showTitles: true, reservedSize: 46, getTitlesWidget: (value, meta) => Text('${(value / 1000).round()}K', style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10))),
-                        ),
-                        bottomTitles: AxisTitles(
-                          sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
-                            final index = value.toInt();
-                            if (index < 0 || index >= _trends.length) return const Text('');
-                            final label = _formatDate(_trends[index].date);
-                            return Text(label, style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10));
-                          }),
-                        ),
-                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                      ),
-                      borderData: FlBorderData(show: false),
+                          minY: 0,
+                          maxY: _chartMaxY,
+                          gridData: const FlGridData(
+                              show: true, drawVerticalLine: false),
+                          titlesData: FlTitlesData(
+                            leftTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                  showTitles: true,
+                                  reservedSize: 46,
+                                  getTitlesWidget: (value, meta) => Text(
+                                      '${(value / 1000).round()}K',
+                                      style: const TextStyle(
+                                          color: Color(0xFF6B7A99),
+                                          fontSize: 10))),
+                            ),
+                            bottomTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                  showTitles: true,
+                                  reservedSize: 22,
+                                  getTitlesWidget: (value, meta) {
+                                    final index = value.toInt();
+                                    if (index < 0 || index >= _trends.length)
+                                      return const Text('');
+                                    final label =
+                                        _formatDate(_trends[index].date);
+                                    return Text(label,
+                                        style: const TextStyle(
+                                            color: Color(0xFF6B7A99),
+                                            fontSize: 10));
+                                  }),
+                            ),
+                            rightTitles: const AxisTitles(
+                                sideTitles: SideTitles(showTitles: false)),
+                            topTitles: const AxisTitles(
+                                sideTitles: SideTitles(showTitles: false)),
+                          ),
+                          borderData: FlBorderData(show: false),
                           lineBarsData: [
-                            _line(_trends.map((item) => item.revenue).toList(), navy),
-                            _line(_trends.map((item) => item.profit).toList(), gold),
+                            _line(_trends.map((item) => item.revenue).toList(),
+                                navy),
+                            _line(_trends.map((item) => item.profit).toList(),
+                                gold),
                           ],
                         ),
                       ),
@@ -9614,7 +13839,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         const Positioned.fill(
                           child: ColoredBox(
                             color: Color(0xB3FFFFFF),
-                            child: Center(child: CircularProgressIndicator(color: navy)),
+                            child: Center(
+                                child: CircularProgressIndicator(color: navy)),
                           ),
                         ),
                     ],
@@ -9641,18 +13867,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Widget _legend(Color color, String label, {bool dash = false}) => Row(
         children: [
-          Container(width: 14, height: 3, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+          Container(
+              width: 14,
+              height: 3,
+              decoration: BoxDecoration(
+                  color: color, borderRadius: BorderRadius.circular(2))),
           const SizedBox(width: 6),
-          Text(label, style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 11)),
+          Text(label,
+              style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 11)),
         ],
       );
 
   LineChartBarData _line(List<double> values, Color color) => LineChartBarData(
-        spots: values.asMap().entries.map((entry) => FlSpot(entry.key.toDouble(), entry.value)).toList(),
+        spots: values
+            .asMap()
+            .entries
+            .map((entry) => FlSpot(entry.key.toDouble(), entry.value))
+            .toList(),
         isCurved: true,
         color: color,
         barWidth: 2,
-        belowBarData: BarAreaData(show: true, color: color.withValues(alpha: 0.12)),
+        belowBarData:
+            BarAreaData(show: true, color: color.withValues(alpha: 0.12)),
         dotData: const FlDotData(show: false),
       );
 
@@ -9667,7 +13903,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 children: [
-                  SizedBox(width: 44, child: Text(label, style: TextStyle(color: index == _trends.length - 1 ? navy : const Color(0xFF6B7A99), fontSize: 11, fontWeight: index == _trends.length - 1 ? FontWeight.w800 : FontWeight.w600))),
+                  SizedBox(
+                      width: 44,
+                      child: Text(label,
+                          style: TextStyle(
+                              color: index == _trends.length - 1
+                                  ? navy
+                                  : const Color(0xFF6B7A99),
+                              fontSize: 11,
+                              fontWeight: index == _trends.length - 1
+                                  ? FontWeight.w800
+                                  : FontWeight.w600))),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Stack(
@@ -9745,12 +13991,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       children: [
-                        Container(width: 10, height: 10, decoration: BoxDecoration(color: item['color'], borderRadius: BorderRadius.circular(3))),
+                        Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                                color: item['color'],
+                                borderRadius: BorderRadius.circular(3))),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             '${item['name']}  ${item['value']}%',
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF0D1B3D), height: 1.4),
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF0D1B3D),
+                                height: 1.4),
                           ),
                         ),
                       ],
@@ -9773,20 +14027,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 BarChartData(
                   maxY: 5,
                   borderData: FlBorderData(show: false),
-                  gridData: const FlGridData(show: true, drawVerticalLine: false),
+                  gridData:
+                      const FlGridData(show: true, drawVerticalLine: false),
                   titlesData: FlTitlesData(
                     leftTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 36, getTitlesWidget: (value, meta) => Text('${value.toInt()}M', style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10))),
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 36,
+                          getTitlesWidget: (value, meta) => Text(
+                              '${value.toInt()}M',
+                              style: const TextStyle(
+                                  color: Color(0xFF6B7A99), fontSize: 10))),
                     ),
                     bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, getTitlesWidget: (value, meta) {
-                        final index = value.toInt();
-                        if (index < 0 || index >= monthLabels.length) return const Text('');
-                        return Text(monthLabels[index], style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10));
-                      }, reservedSize: 20),
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (value, meta) {
+                            final index = value.toInt();
+                            if (index < 0 || index >= monthLabels.length)
+                              return const Text('');
+                            return Text(monthLabels[index],
+                                style: const TextStyle(
+                                    color: Color(0xFF6B7A99), fontSize: 10));
+                          },
+                          reservedSize: 20),
                     ),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
                   ),
                   barGroups: months.asMap().entries.map((entry) {
                     return BarChartGroupData(
@@ -9796,7 +14065,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           toY: entry.value,
                           color: entry.key == 8 ? gold : navy,
                           width: 14,
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(4)),
                         ),
                       ],
                     );
@@ -9815,11 +14085,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Row(
                     children: [
-                      SizedBox(width: 34, child: Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7A99), fontWeight: FontWeight.w700))),
+                      SizedBox(
+                          width: 34,
+                          child: Text(label,
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF6B7A99),
+                                  fontWeight: FontWeight.w700))),
                       Expanded(
                         child: Text(
                           'KSh ${value.toStringAsFixed(1)}M',
-                          style: const TextStyle(fontSize: 11, color: Color(0xFF0D1B3D), fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF0D1B3D),
+                              fontWeight: FontWeight.w700),
                         ),
                       ),
                     ],
@@ -9841,20 +14120,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 BarChartData(
                   maxY: _profitMaxY,
                   borderData: FlBorderData(show: false),
-                  gridData: const FlGridData(show: true, drawVerticalLine: false),
+                  gridData:
+                      const FlGridData(show: true, drawVerticalLine: false),
                   titlesData: FlTitlesData(
                     leftTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 42, getTitlesWidget: (value, meta) => Text('${(value / 1000).round()}K', style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10))),
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 42,
+                          getTitlesWidget: (value, meta) => Text(
+                              '${(value / 1000).round()}K',
+                              style: const TextStyle(
+                                  color: Color(0xFF6B7A99), fontSize: 10))),
                     ),
                     bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
-                        final index = value.toInt();
-                        if (index < 0 || index >= _trends.length) return const Text('');
-                        return Text(_formatDate(_trends[index].date), style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 10));
-                      }),
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 22,
+                          getTitlesWidget: (value, meta) {
+                            final index = value.toInt();
+                            if (index < 0 || index >= _trends.length)
+                              return const Text('');
+                            return Text(_formatDate(_trends[index].date),
+                                style: const TextStyle(
+                                    color: Color(0xFF6B7A99), fontSize: 10));
+                          }),
                     ),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
                   ),
                   barGroups: _trends.asMap().entries.map((entry) {
                     return BarChartGroupData(
@@ -9864,7 +14158,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           toY: entry.value.profit,
                           color: entry.key == 3 ? gold : Colors.green,
                           width: 20,
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(5)),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(5)),
                         ),
                       ],
                     );
@@ -9878,15 +14173,24 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
                     color: const Color(0xFFEAF8EE),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Text('KSh 181,650', style: TextStyle(color: Color(0xFF1B5E20), fontSize: 16, fontWeight: FontWeight.w800)),
+                  child: const Text('KSh 181,650',
+                      style: TextStyle(
+                          color: Color(0xFF1B5E20),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800)),
                 ),
                 const SizedBox(width: 12),
-                const Text('26.0% margin', style: TextStyle(color: Color(0xFF2E7D32), fontSize: 12, fontWeight: FontWeight.w700)),
+                const Text('26.0% margin',
+                    style: TextStyle(
+                        color: Color(0xFF2E7D32),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
               ],
             ),
           ),
@@ -9898,5 +14202,22 @@ class Metric extends StatelessWidget {
   const Metric(this.label, this.value, this.sub);
   final String label, value, sub;
   @override
-  Widget build(BuildContext context) => Expanded(child: Container(margin: const EdgeInsets.only(right: 6), padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(10)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white60, fontSize: 9)), Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)), Text(sub, style: const TextStyle(color: Colors.white54, fontSize: 9))])));
+  Widget build(BuildContext context) => Expanded(
+      child: Container(
+          margin: const EdgeInsets.only(right: 6),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+              color: Colors.white12, borderRadius: BorderRadius.circular(10)),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(color: Colors.white60, fontSize: 9)),
+            Text(value,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13)),
+            Text(sub,
+                style: const TextStyle(color: Colors.white54, fontSize: 9))
+          ])));
 }

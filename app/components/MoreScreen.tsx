@@ -29,19 +29,45 @@ const menuItems = [
 
 export default function MoreScreen({ onLogout, onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [businessInfo, setBusinessInfo] = useState({ name: 'Business', branch: 'Branch' })
+  const [userInfo, setUserInfo] = useState({
+    name: session?.user.name ?? '',
+    email: '',
+    role: session?.user.role ?? '',
+  })
 
   useEffect(() => {
-    const session = getClientSession()
     if (!session) return
     apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
       .then(response => setUnreadNotifications(response.unreadCount))
       .catch(() => setUnreadNotifications(0))
-    apiFetch<{ profile: { business: { name: string; branch: string | null } } }>('/api/profile')
-      .then(response => setBusinessInfo({ name: response.profile.business.name, branch: response.profile.business.branch ?? 'Branch' }))
+    apiFetch<{
+      profile: {
+        name: string
+        email: string | null
+        role: string
+        business: { name: string; branch: string | null }
+      }
+    }>('/api/profile')
+      .then(response => {
+        setUserInfo({
+          name: response.profile.name,
+          email: response.profile.email ?? '',
+          role: response.profile.role,
+        })
+        setBusinessInfo({ name: response.profile.business.name, branch: response.profile.business.branch ?? 'Branch' })
+      })
       .catch(() => undefined)
   }, [])
+
+  const roleLabel = userInfo.role
+    .toLowerCase()
+    .replace('_', ' ')
+    .replace(/\b\w/g, character => character.toUpperCase())
+  const avatarInitial = userInfo.name.trim().charAt(0).toUpperCase()
+
   return (
     <div className="screen" style={{ background: c.bg }}>
       {/* Header */}
@@ -52,11 +78,11 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
             background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 22, fontWeight: 800, color: '#0D1B3D'
-          }}>A</div>
+          }}>{avatarInitial}</div>
           <div>
-            <div style={{ color: 'white', fontSize: 17, fontWeight: 800 }}>Admin User</div>
-            <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>admin@mobiduka.co.ke</div>
-            <span className="badge badge-gold" style={{ marginTop: 4 }}>Store Manager</span>
+            <div style={{ color: 'white', fontSize: 17, fontWeight: 800 }}>{userInfo.name}</div>
+            <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>{userInfo.email}</div>
+            <span className="badge badge-gold" style={{ marginTop: 4 }}>{roleLabel}</span>
           </div>
           <button className="btn" onClick={() => onNavigate('profile')} style={{ marginLeft: 'auto', width: 36, height: 36, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>

@@ -371,28 +371,6 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
               ),
             ),
           ),
-          const Positioned(
-            bottom: 24,
-            left: 20,
-            right: 20,
-            child: IgnorePointer(
-              child: Column(
-                children: [
-                  Text(
-                    'MobiDuka POS · Interactive Prototype',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0x59FFFFFF), fontSize: 12, fontWeight: FontWeight.w500, letterSpacing: 0.5),
-                  ),
-                  SizedBox(height: 2),
-                  Text(
-                    '25+ screens · Android UI · Material Design 3',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0x33FFFFFF), fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-          ),
         ],
         ),
       ),
