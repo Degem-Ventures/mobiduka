@@ -30,7 +30,8 @@ class RemoteNotification {
       type: json['type']?.toString() ?? 'info',
       title: json['title']?.toString() ?? 'Notification',
       body: json['body']?.toString() ?? '',
-      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
+      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
+          DateTime.now(),
       read: json['read'] == true,
       icon: json['icon']?.toString() ?? '📦',
     );
@@ -38,27 +39,64 @@ class RemoteNotification {
 }
 
 class NotificationService {
-  NotificationService({http.Client? client}) : _client = client ?? http.Client();
+  NotificationService({http.Client? client})
+      : _client = client ?? http.Client();
 
   final http.Client _client;
 
   Future<List<RemoteNotification>> fetch(AuthSession session) async {
     final response = await _client.get(
-      Uri.parse('${ApiConfig.apiBase}/notifications?businessId=${Uri.encodeQueryComponent(session.user['businessId']?.toString() ?? '')}'),
+      Uri.parse(
+          '${ApiConfig.apiBase}/notifications?businessId=${Uri.encodeQueryComponent(session.user['businessId']?.toString() ?? '')}'),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
     final payload = _decode(response);
     final records = payload['notifications'];
     if (records is! List) return const [];
-    return records.whereType<Map<String, dynamic>>().map(RemoteNotification.fromJson).toList();
+    return records
+        .whereType<Map<String, dynamic>>()
+        .map(RemoteNotification.fromJson)
+        .toList();
   }
 
-  Future<void> markRead(AuthSession session, {String? id, bool all = false}) async {
-    final body = all ? {'markAllAsRead': true} : {'notificationId': id};
+  Future<int> unreadCount(AuthSession session) async {
+    final response = await _client.get(
+      Uri.parse(
+          '${ApiConfig.apiBase}/notifications?businessId=${Uri.encodeQueryComponent(session.user['businessId']?.toString() ?? '')}&limit=1'),
+      headers: {'Authorization': 'Bearer ${session.token}'},
+    );
+    final payload = _decode(response);
+    final count = payload['unreadCount'];
+    return count is num
+        ? count.toInt()
+        : int.tryParse(count?.toString() ?? '') ?? 0;
+  }
+
+  Future<void> markRead(AuthSession session,
+      {String? id, bool all = false}) async {
+    final businessId = session.user['businessId']?.toString();
+    final body = all
+        ? {'businessId': businessId, 'markAllRead': true}
+        : {'businessId': businessId, 'id': id};
     final response = await _client.patch(
       Uri.parse('${ApiConfig.apiBase}/notifications'),
-      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${session.token}'},
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${session.token}'
+      },
       body: jsonEncode(body),
+    );
+    _decode(response);
+  }
+
+  Future<void> delete(AuthSession session, String id) async {
+    final response = await _client.delete(
+      Uri.parse('${ApiConfig.apiBase}/notifications'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${session.token}'
+      },
+      body: jsonEncode({'businessId': session.user['businessId'], 'id': id}),
     );
     _decode(response);
   }
@@ -66,7 +104,9 @@ class NotificationService {
   Map<String, dynamic> _decode(http.Response response) {
     final payload = jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception(payload is Map<String, dynamic> ? payload['error'] ?? 'Notification request failed.' : 'Notification request failed.');
+      throw Exception(payload is Map<String, dynamic>
+          ? payload['error'] ?? 'Notification request failed.'
+          : 'Notification request failed.');
     }
     return payload is Map<String, dynamic> ? payload : <String, dynamic>{};
   }

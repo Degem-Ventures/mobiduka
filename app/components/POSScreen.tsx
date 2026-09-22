@@ -21,6 +21,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [cart, setCart] = useState<CartItem[]>([])
+  const [productView, setProductView] = useState<'grid' | 'details'>('grid')
   const [view, setView] = useState<'pos' | 'cart' | 'payment' | 'receipt'>('pos')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'credit'>('cash')
   const [mpesaPhone, setMpesaPhone] = useState('254')
@@ -547,14 +548,17 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               }} />
           </div>
           <button className="btn" type="button" onClick={() => onNavigate('scan')} aria-label="Open SmartScan" title="Open SmartScan" style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.12)', border: '1.5px solid rgba(255,255,255,0.2)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', fontSize: 19 }}>
-            📷
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2" />
+              <path d="M8 9h8M8 12h8M8 15h5" />
+            </svg>
           </button>
           <button className="btn" onClick={() => setView('cart')} style={{
             width: 44, height: 44, background: '#D4AF37', border: 'none',
             borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0, cursor: 'pointer', position: 'relative'
           }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0D1B3D" strokeWidth="2.5"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#0D1B3D" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3h2l2.4 11.2a2 2 0 0 0 2 1.6h7.9a2 2 0 0 0 1.9-1.4L21 7H6"/><circle cx="10" cy="20" r="1"/><circle cx="18" cy="20" r="1"/></svg>
             {cartCount > 0 && <div style={{ position: 'absolute', top: -4, right: -4, width: 18, height: 18, background: '#D32F2F', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: 'white' }}>{cartCount}</div>}
           </button>
         </div>
@@ -570,33 +574,64 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             }}>{cat.emoji ? `${cat.emoji} ${cat.name}` : cat.name}</button>
           ))}
         </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 12 }}>
+          {[
+            { label: 'Items', value: String(cartCount), color: 'white' },
+            { label: 'Subtotal', value: `KSh ${subtotal.toLocaleString()}`, color: '#E0C35B' },
+            { label: 'Total', value: `KSh ${total.toLocaleString()}`, color: '#B8F0C3' },
+          ].map(metric => (
+            <div key={metric.label} style={{ minWidth: 0, padding: '9px 8px', borderRadius: 12, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.12)' }}>
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: metric.color, fontSize: 12, fontWeight: 800 }}>{metric.value}</div>
+              <div style={{ marginTop: 3, color: 'rgba(255,255,255,0.68)', fontSize: 10 }}>{metric.label}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Product grid */}
+      {/* Product grid / details view. Both use the same loaded catalogue and cart. */}
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-          {filtered.map(p => {
-            const inCart = cart.find(x => x.id === p.id)
-            const lowStock = p.stock <= 5
-            return (
-              <button key={p.id} className="btn card" onClick={() => addToCart(p)} style={{
-                padding: '12px 10px', cursor: 'pointer', border: 'none',
-                position: 'relative', fontFamily: 'inherit', textAlign: 'left',
-                outline: inCart ? '2px solid #123A8F' : 'none',
-                outlineOffset: inCart ? '-2px' : '0'
-              }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <div style={{ display: 'flex', padding: 3, gap: 2, background: c.isDark ? '#162B5A' : '#F0F3F9', borderRadius: 10 }}>
+            <button className="btn" type="button" aria-label="Grid product view" title="Grid view" onClick={() => setProductView('grid')} style={{ width: 32, height: 30, borderRadius: 8, background: productView === 'grid' ? '#123A8F' : 'transparent', color: productView === 'grid' ? 'white' : c.muted }}>
+              ▦
+            </button>
+            <button className="btn" type="button" aria-label="Product details view" title="Details view" onClick={() => setProductView('details')} style={{ width: 32, height: 30, borderRadius: 8, background: productView === 'details' ? '#123A8F' : 'transparent', color: productView === 'details' ? 'white' : c.muted }}>
+              ☷
+            </button>
+          </div>
+        </div>
+        {productView === 'grid' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
+            {filtered.map(p => {
+              const inCart = cart.find(x => x.id === p.id)
+              const lowStock = p.stock <= 5
+              return <button key={p.id} className="btn card" onClick={() => addToCart(p)} style={{ minHeight: 140, padding: '10px', cursor: 'pointer', border: 'none', position: 'relative', fontFamily: 'inherit', textAlign: 'left', outline: inCart ? '2px solid #123A8F' : 'none', outlineOffset: inCart ? '-2px' : '0' }}>
                 {lowStock && <div style={{ position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: '50%', background: '#F9A825' }} />}
-                {inCart && <div style={{ position: 'absolute', top: 6, left: 6 }}>
-                  <span className="badge badge-blue" style={{ fontSize: 9 }}>×{inCart.qty}</span>
-                </div>}
+                {inCart && <div style={{ position: 'absolute', top: 6, left: 6 }}><span className="badge badge-blue" style={{ fontSize: 9 }}>×{inCart.qty}</span></div>}
                 <div style={{ fontSize: 28, marginBottom: 6, textAlign: 'center' }}>{p.emoji}</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: c.text, lineHeight: 1.3, marginBottom: 4 }}>{p.name}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: c.text, lineHeight: 1.3, marginBottom: 3 }}>{p.name}</div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: '#123A8F' }}>KSh {p.price}</div>
                 <div style={{ fontSize: 10, color: lowStock ? '#F9A825' : c.muted, marginTop: 2, fontWeight: lowStock ? 600 : 400 }}>{lowStock ? `Low: ${p.stock}` : `${p.stock} in stock`}</div>
               </button>
-            )
-          })}
-        </div>
+            })}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {filtered.map(p => {
+              const inCart = cart.find(x => x.id === p.id)
+              const lowStock = p.stock <= 5
+              return <div key={p.id} className="card" style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 12, border: inCart ? '2px solid #123A8F' : c.divider }}>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: c.iconBg, display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>{p.emoji}</div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: c.text, fontSize: 13, fontWeight: 800 }}>{p.name}</div>
+                  <div style={{ marginTop: 3, color: c.muted, fontSize: 11 }}>{p.category} · <span style={{ color: lowStock ? '#F9A825' : c.muted, fontWeight: lowStock ? 700 : 400 }}>{lowStock ? `Low: ${p.stock}` : `${p.stock} in stock`}</span></div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}><div style={{ color: '#123A8F', fontSize: 13, fontWeight: 800 }}>KSh {p.price}</div>{inCart && <div style={{ marginTop: 3, color: '#123A8F', fontSize: 10, fontWeight: 700 }}>×{inCart.qty} in cart</div>}</div>
+                <button className="btn" type="button" onClick={() => addToCart(p)} style={{ flexShrink: 0, padding: '8px 10px', borderRadius: 10, background: '#123A8F', color: 'white', fontSize: 11, fontWeight: 800 }}>Add</button>
+              </div>
+            })}
+          </div>
+        )}
       </div>
 
       {/* Bottom cart summary */}
