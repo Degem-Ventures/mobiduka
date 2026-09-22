@@ -28,9 +28,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-      - name: Install Latest Vercel CLI Toolchain
-        run: pnpm add --global vercel@latest
-
-      # 🌟 DIRECT FLAG MATCHING: Bypasses volatile environment parsing completely
+      # 🌟 HARDENED: Pin explicitly to the last verified stable version (578k+ downloads)
+      # This bypasses the broken latest package trees entirely.
       - name: Compile and Deploy Production Application
-        run: vercel deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_ORG_ID }}" --project="${{ secrets.VERCEL_PROJECT_ID }}"
+        run: npx vercel@59.23.2 deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_ORG_ID }}" --project="${{ secrets.VERCEL_PROJECT_ID }}"
