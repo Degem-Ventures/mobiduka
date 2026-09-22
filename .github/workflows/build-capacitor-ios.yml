@@ -6,7 +6,7 @@ on:
     branches: [dev]
 
 jobs:
-  build-ios:
+  build-capacitor-ios:
     runs-on: macos-latest
     steps:
       - name: Checkout
