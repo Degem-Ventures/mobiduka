@@ -24,7 +24,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          flutter-version: '3.47.5'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -101,9 +101,18 @@ jobs:
           flutter pub get
 
       - name: Build Release APK
+        env:
+          # Public endpoint: set this as a GitHub Actions repository variable.
+          MOBIDUKA_API_ORIGIN: ${{ vars.MOBIDUKA_API_ORIGIN }}
+          # DSNs are safe to embed in clients, but keep the value in Actions secrets.
+          SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          SENTRY_ENVIRONMENT: production
         run: |
           cd flutter_app
-          flutter build apk --release
+          flutter build apk --release \
+            --dart-define=MOBIDUKA_API_ORIGIN="$MOBIDUKA_API_ORIGIN" \
+            --dart-define=SENTRY_DSN="$SENTRY_DSN" \
+            --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
