@@ -1,138 +1,137 @@
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:http/http.dart' as http;
 
+import 'api_config.dart';
+import 'auth_service.dart';
+
+class PurchaseOrderSupplier {
+  const PurchaseOrderSupplier({required this.id, required this.name});
+  final String id;
+  final String name;
+}
+
+class PurchaseOrderProduct {
+  const PurchaseOrderProduct({
+    required this.id,
+    required this.name,
+    required this.unit,
+    required this.costPrice,
+  });
+  final String id;
+  final String name;
+  final String unit;
+  final num costPrice;
+}
+
+/// API client shared by the mobile and web purchase-order workflows.
 class PurchaseOrderService {
-  PurchaseOrderService._();
+  PurchaseOrderService({http.Client? client, AuthService? authService})
+      : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService();
 
-  static final PurchaseOrderService instance = PurchaseOrderService._();
-
-  static Database? _database;
-
-  Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDatabase();
-    return _database!;
-  }
-
-  Future<Database> _initDatabase() async {
-    String documentsPath;
-    try {
-      final documentsDirectory = await getApplicationDocumentsDirectory();
-      documentsPath = documentsDirectory.path;
-    } on Object {
-      documentsPath = Directory.systemTemp.path;
-    }
-
-    final path = join(documentsPath, 'mobiduka_purchase_orders.db');
-
-    return openDatabase(
-      path,
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE local_purchase_orders (
-            id TEXT PRIMARY KEY,
-            supplierName TEXT,
-            supplierId TEXT,
-            status TEXT,
-            action TEXT,
-            notes TEXT,
-            expectedDeliveryDate TEXT,
-            items TEXT,
-            total INTEGER,
-            createdAt TEXT,
-            updatedAt TEXT,
-            receivedAt TEXT
-          )
-        ''');
-      },
-    );
-  }
+  final http.Client _client;
+  final AuthService _authService;
 
   Future<List<Map<String, dynamic>>> loadPurchaseOrders() async {
-    final db = await database;
-    final rows = await db.query(
-      'local_purchase_orders',
-      orderBy: 'createdAt DESC',
-    );
-
-    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+    final data = await _request('GET', '/api/purchase-orders');
+    if (data is! List) throw Exception('Unable to load purchase orders.');
+    return data
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
   }
 
-  Future<Map<String, dynamic>> createOfflinePurchaseOrder({
-    required String supplierName,
-    String? supplierId,
-    required List<Map<String, dynamic>> items,
-    String? notes,
-    String? expectedDeliveryDate,
+  Future<List<PurchaseOrderSupplier>> loadSuppliers() async {
+    final data = await _request('GET', '/api/suppliers');
+    if (data is! List) throw Exception('Unable to load suppliers.');
+    return data
+        .whereType<Map>()
+        .map((row) {
+          final supplier = Map<String, dynamic>.from(row);
+          return PurchaseOrderSupplier(
+            id: supplier['id']?.toString() ?? '',
+            name: supplier['name']?.toString() ?? '',
+          );
+        })
+        .where((supplier) => supplier.id.isNotEmpty && supplier.name.isNotEmpty)
+        .toList();
+  }
+
+  Future<List<PurchaseOrderProduct>> loadProducts() async {
+    final data = await _request('GET', '/api/products');
+    if (data is! List) throw Exception('Unable to load products.');
+    return data
+        .whereType<Map>()
+        .map((row) {
+          final product = Map<String, dynamic>.from(row);
+          return PurchaseOrderProduct(
+            id: product['id']?.toString() ?? '',
+            name: product['name']?.toString() ?? '',
+            unit: product['unit']?.toString() ?? 'units',
+            costPrice: _number(product['costPrice']),
+          );
+        })
+        .where((product) => product.id.isNotEmpty && product.name.isNotEmpty)
+        .toList();
+  }
+
+  Future<void> createPurchaseOrder({
+    required String supplierId,
+    required String dueDate,
+    required List<Map<String, Object?>> items,
   }) async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
-    final orderId = 'PO-${DateTime.now().millisecondsSinceEpoch}';
-    final total = items.fold<int>(0, (sum, item) {
-      final qty = item['qty'] is num
-          ? (item['qty'] as num).toInt()
-          : int.tryParse(item['qty']?.toString() ?? '') ?? 0;
-      final cost = item['cost'] is num
-          ? (item['cost'] as num).toInt()
-          : int.tryParse(item['cost']?.toString() ?? '') ?? 0;
-      return sum + (qty * cost);
-    });
-
-    final record = {
-      'id': orderId,
-      'supplierName': supplierName,
-      'supplierId': supplierId ?? 'supplier-${DateTime.now().millisecondsSinceEpoch}',
-      'status': 'REQUESTED',
+    final total = items.fold<num>(
+        0,
+        (sum, item) =>
+            sum + _number(item['quantity']) * _number(item['costPrice']));
+    final suffix = DateTime.now().millisecondsSinceEpoch.toString();
+    await _request('POST', '/api/purchase-orders', body: {
       'action': 'CREATE',
-      'notes': notes ?? '',
-      'expectedDeliveryDate': expectedDeliveryDate ?? DateTime.now().add(const Duration(days: 5)).toIso8601String(),
-      'items': jsonEncode(items),
-      'total': total,
-      'createdAt': now,
-      'updatedAt': now,
-      'receivedAt': null,
-    };
-
-    await db.insert(
-      'local_purchase_orders',
-      record,
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-
-    return record;
+      'supplierId': supplierId,
+      'orderNo':
+          'PO-${DateTime.now().year}-${suffix.substring(suffix.length - 6)}',
+      'dueDate': dueDate.isEmpty ? null : dueDate,
+      'totalCost': total,
+      'items': items,
+    });
   }
 
-  Future<Map<String, dynamic>> markPurchaseOrderReceived(String orderId) async {
-    final db = await database;
-    final rows = await db.query(
-      'local_purchase_orders',
-      where: 'id = ?',
-      whereArgs: [orderId],
-    );
+  Future<void> markPurchaseOrderReceived(String orderId) async {
+    await _request('POST', '/api/purchase-orders', body: {
+      'action': 'RECEIVE',
+      'orderId': orderId,
+    });
+  }
 
-    if (rows.isEmpty) {
-      return {};
+  Future<Object?> _request(String method, String path,
+      {Map<String, Object?>? body}) async {
+    final session = await _authService.readSession();
+    final businessId = session?.user['businessId']?.toString();
+    if (session == null || businessId == null || businessId.isEmpty) {
+      throw Exception('Please sign in to manage purchase orders.');
     }
-
-    final now = DateTime.now().toIso8601String();
-    final record = Map<String, dynamic>.from(rows.first);
-    record['status'] = 'RECEIVED';
-    record['action'] = 'RECEIVE';
-    record['updatedAt'] = now;
-    record['receivedAt'] = now;
-
-    await db.update(
-      'local_purchase_orders',
-      record,
-      where: 'id = ?',
-      whereArgs: [orderId],
+    final uri = Uri.parse('${ApiConfig.origin}$path').replace(
+      queryParameters: method == 'GET' ? {'businessId': businessId} : null,
     );
-
-    return record;
+    final response = method == 'GET'
+        ? await _client
+            .get(uri, headers: {'Authorization': 'Bearer ${session.token}'})
+        : await _client.post(uri,
+            headers: {
+              'Authorization': 'Bearer ${session.token}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({...?body, 'businessId': businessId}));
+    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(decoded is Map
+          ? decoded['error']?.toString() ?? 'Purchase order request failed.'
+          : 'Purchase order request failed.');
+    }
+    return decoded;
   }
+
+  static num _number(Object? value) =>
+      value is num ? value : num.tryParse(value?.toString() ?? '') ?? 0;
 }

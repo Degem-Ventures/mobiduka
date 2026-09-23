@@ -3,10 +3,10 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/mobi_ink" />
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+    <!-- Use the generated MobiDuka launcher foreground PNG while Flutter starts. -->
+    <item>
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+            android:src="@drawable/ic_launcher_foreground" />
+    </item>
 </layer-list>

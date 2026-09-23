@@ -1,118 +1,116 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-import 'package:sqflite/sqflite.dart';
 
 import 'api_config.dart';
-import 'sync_service.dart';
+import 'auth_service.dart';
 
+/// Authenticated API client for the shared web/mobile staff and shift flows.
 class EmployeeRepository {
-  EmployeeRepository({SyncService? syncService}) : _syncService = syncService ?? SyncService();
+  EmployeeRepository({http.Client? client, AuthService? authService})
+      : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService();
 
-  final SyncService _syncService;
-  final http.Client _client = http.Client();
-  static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  final http.Client _client;
+  final AuthService _authService;
 
-  Future<void> ensureSchema() async {
-    final db = await _syncService.database;
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS local_employees (
-        id TEXT PRIMARY KEY,
-        businessId TEXT NOT NULL,
-        fullName TEXT NOT NULL,
-        email TEXT,
-        phone TEXT,
-        role TEXT NOT NULL,
-        status TEXT NOT NULL,
-        pinSet INTEGER NOT NULL DEFAULT 0,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      )
-    ''');
+  Future<List<Map<String, dynamic>>> loadEmployees() async {
+    final response = await _request('GET', '/api/employees');
+    if (response is! Map || response['employees'] is! List) {
+      throw Exception('Unable to load employees.');
+    }
+    return (response['employees'] as List)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
   }
 
-  Future<List<Map<String, dynamic>>> loadEmployees({String businessId = 'demo-business'}) async {
-    await ensureSchema();
-    final db = await _syncService.database;
-    return db.query('local_employees', where: 'businessId = ?', whereArgs: [businessId], orderBy: 'fullName ASC');
-  }
-
-  Future<Map<String, dynamic>> saveEmployee({
-    required String businessId,
+  Future<void> saveEmployee({
     String? id,
     required String fullName,
-    String? email,
-    String? phone,
+    required String email,
+    required String phone,
     required String role,
+    required String shift,
+    required num salary,
     String? pin,
-    bool active = true,
-  }) async {
-    final normalizedPin = pin?.trim();
-    if (normalizedPin != null && !RegExp(r'^\d{4}$').hasMatch(normalizedPin)) {
-      throw const FormatException('PIN must contain exactly 4 digits.');
-    }
+    required bool active,
+    String? startDate,
+  }) =>
+      _request('POST', '/api/employees', body: {
+        if (id != null) 'id': id,
+        'name': fullName,
+        'email': email,
+        'phone': phone,
+        'role': role,
+        'shift': shift,
+        'salary': salary,
+        'isActive': active,
+        if (pin != null && pin.isNotEmpty) 'pin': pin,
+        if (startDate != null && startDate.isNotEmpty) 'startDate': startDate,
+      });
 
-    var employeeId = id ?? 'employee-${DateTime.now().microsecondsSinceEpoch}';
-    var synced = false;
-    final token = await _storage.read(key: 'mobiduka.auth.jwt');
-    if (token != null && token.isNotEmpty) {
-      try {
-        final response = await _client.post(
-          Uri.parse('${ApiConfig.apiBase}/employees'),
-          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
-          body: jsonEncode({
-            if (id != null) 'id': id,
-            'businessId': businessId,
-            'fullName': fullName.trim(),
-            'email': email?.trim(),
-            'phone': phone?.trim(),
-            'role': role.toUpperCase(),
-            if (normalizedPin != null && normalizedPin.isNotEmpty) 'pin': normalizedPin,
-            'isActive': active,
-          }),
-        ).timeout(const Duration(seconds: 10));
-        if (response.statusCode >= 200 && response.statusCode < 300) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-          employeeId = body['employeeId']?.toString() ?? employeeId;
-          synced = true;
-        }
-      } on Object {
-        // Persist locally and leave the record available for a later sync attempt.
-      }
-    }
-
-    await ensureSchema();
-    final db = await _syncService.database;
-    final now = DateTime.now().toIso8601String();
-    final record = <String, dynamic>{
-      'id': employeeId,
-      'businessId': businessId,
-      'fullName': fullName.trim(),
-      'email': email?.trim() ?? '',
-      'phone': phone?.trim() ?? '',
-      'role': role.toUpperCase(),
-      'status': active ? 'ACTIVE' : 'INACTIVE',
-      'pinSet': normalizedPin == null || normalizedPin.isEmpty ? 0 : 1,
-      'createdAt': now,
-      'updatedAt': now,
-    };
-
-    await db.insert('local_employees', record, conflictAlgorithm: ConflictAlgorithm.replace);
-    if (!synced) {
-      await _syncService.queueChange(
-        id: 'sync-$employeeId',
-        entityName: 'Employee',
-        operation: id == null ? 'CREATE' : 'UPDATE',
-        payload: {...record},
-      );
-    }
-    return {...record, 'synced': synced};
+  Future<List<Map<String, dynamic>>> loadShiftTypes() async {
+    final response = await _request('GET', '/api/shift-types');
+    if (response is! Map || response['shiftTypes'] is! List) return const [];
+    return (response['shiftTypes'] as List)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
   }
 
-  Future<void> syncPending({required String userId}) => _syncService.processCloudSync(
-        businessId: 'demo-business',
-        deviceId: 'mobile-device',
-        userId: userId,
-      );
+  Future<List<Map<String, dynamic>>> loadCashSessions() async {
+    final response = await _request('GET', '/api/cash/session');
+    if (response is! Map || response['sessions'] is! List) return const [];
+    return (response['sessions'] as List)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
+  Future<void> openShift(
+          {required String employeeId, required String shiftTypeId}) =>
+      _request('POST', '/api/cash/session', body: {
+        'action': 'OPEN',
+        'userId': employeeId,
+        'shiftTypeId': shiftTypeId,
+        'openingCash': 0,
+      });
+
+  Future<void> closeShift(
+          {required String employeeId, required String sessionId}) =>
+      _request('POST', '/api/cash/session', body: {
+        'action': 'CLOSE',
+        'userId': employeeId,
+        'sessionId': sessionId,
+        'closingCash': 0,
+      });
+
+  Future<dynamic> _request(String method, String path,
+      {Map<String, Object?>? body}) async {
+    final session = await _authService.readSession();
+    final businessId = session?.user['businessId']?.toString();
+    if (session == null || businessId == null || businessId.isEmpty) {
+      throw Exception('Please sign in to manage employees.');
+    }
+    final uri = Uri.parse('${ApiConfig.origin}$path').replace(
+      queryParameters: method == 'GET' ? {'businessId': businessId} : null,
+    );
+    final response = method == 'GET'
+        ? await _client
+            .get(uri, headers: {'Authorization': 'Bearer ${session.token}'})
+        : await _client.post(uri,
+            headers: {
+              'Authorization': 'Bearer ${session.token}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({...?body, 'businessId': businessId}));
+    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(decoded is Map
+          ? decoded['error']?.toString() ?? 'Employee request failed.'
+          : 'Employee request failed.');
+    }
+    return decoded;
+  }
 }

@@ -1,9 +1,9 @@
-import 'dart:io';
+import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
-import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:http/http.dart' as http;
+
+import 'api_config.dart';
+import 'auth_service.dart';
 
 class CreditAccount {
   const CreditAccount({
@@ -26,250 +26,130 @@ class CreditAccount {
   final String initials;
   final int colorValue;
 
-  CreditAccount copyWith({double? balance, String? lastTransactionAt, int? transactionCount}) {
-    return CreditAccount(
-      customerId: customerId,
-      customer: customer,
-      phone: phone,
-      balance: balance ?? this.balance,
-      lastTransactionAt: lastTransactionAt ?? this.lastTransactionAt,
-      transactionCount: transactionCount ?? this.transactionCount,
-      initials: initials,
-      colorValue: colorValue,
-    );
-  }
+  CreditAccount copyWith({
+    double? balance,
+    String? lastTransactionAt,
+    int? transactionCount,
+  }) =>
+      CreditAccount(
+        customerId: customerId,
+        customer: customer,
+        phone: phone,
+        balance: balance ?? this.balance,
+        lastTransactionAt: lastTransactionAt ?? this.lastTransactionAt,
+        transactionCount: transactionCount ?? this.transactionCount,
+        initials: initials,
+        colorValue: colorValue,
+      );
 }
 
 class CreditService {
-  CreditService._();
+  CreditService({http.Client? client, AuthService? authService})
+      : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService();
 
-  static final CreditService instance = CreditService._();
-  static Database? _database;
-
-  final List<CreditAccount> _webAccounts = <CreditAccount>[
-    const CreditAccount(
-      customerId: 'web-credit-jane',
-      customer: 'Jane Wanjiku',
-      phone: '0712 345 678',
-      balance: 15600,
-      lastTransactionAt: '2026-09-15T09:30:00.000',
-      transactionCount: 4,
-      initials: 'JW',
-      colorValue: 0xFF123A8F,
-    ),
-    const CreditAccount(
-      customerId: 'web-credit-kevin',
-      customer: 'Kevin Otieno',
-      phone: '0722 909 120',
-      balance: 8400,
-      lastTransactionAt: '2026-09-14T16:42:00.000',
-      transactionCount: 3,
-      initials: 'KO',
-      colorValue: 0xFFD4AF37,
-    ),
-    const CreditAccount(
-      customerId: 'web-credit-mary',
-      customer: 'Mary Njeri',
-      phone: '0733 112 890',
-      balance: 0,
-      lastTransactionAt: '2026-09-12T08:20:00.000',
-      transactionCount: 2,
-      initials: 'MN',
-      colorValue: 0xFF2E7D32,
-    ),
+  static final CreditService instance = CreditService();
+  static const _avatarColors = <int>[
+    0xFF123A8F,
+    0xFF2E7D32,
+    0xFFD32F2F,
+    0xFFD4AF37,
+    0xFF7B1FA2,
+    0xFFF57C00,
+    0xFF00796B,
   ];
 
-  final List<Map<String, dynamic>> _webLedger = <Map<String, dynamic>>[
-    {'id': 'web-ledger-1', 'customerId': 'web-credit-jane', 'type': 'SALE', 'amount': 8500, 'createdAt': '2026-09-15T09:30:00.000'},
-    {'id': 'web-ledger-2', 'customerId': 'web-credit-jane', 'type': 'PAYMENT', 'amount': 2500, 'createdAt': '2026-09-13T12:00:00.000'},
-    {'id': 'web-ledger-3', 'customerId': 'web-credit-kevin', 'type': 'SALE', 'amount': 6200, 'createdAt': '2026-09-14T16:42:00.000'},
-    {'id': 'web-ledger-4', 'customerId': 'web-credit-kevin', 'type': 'PAYMENT', 'amount': 1100, 'createdAt': '2026-09-12T11:50:00.000'},
-    {'id': 'web-ledger-5', 'customerId': 'web-credit-mary', 'type': 'SALE', 'amount': 4300, 'createdAt': '2026-09-12T08:20:00.000'},
-  ];
-
-  Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDatabase();
-    return _database!;
-  }
-
-  Future<Database> _initDatabase() async {
-    String documentsPath;
-    try {
-      final documentsDirectory = await getApplicationDocumentsDirectory();
-      documentsPath = documentsDirectory.path;
-    } on Object {
-      documentsPath = Directory.systemTemp.path;
-    }
-
-    return openDatabase(
-      join(documentsPath, 'mobiduka_credit.db'),
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE local_credit_accounts (
-            customerId TEXT PRIMARY KEY,
-            customer TEXT NOT NULL,
-            phone TEXT,
-            balance REAL NOT NULL DEFAULT 0,
-            lastTransactionAt TEXT,
-            transactionCount INTEGER NOT NULL DEFAULT 0,
-            initials TEXT NOT NULL,
-            colorValue INTEGER NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE local_credit_ledger (
-            id TEXT PRIMARY KEY,
-            customerId TEXT NOT NULL,
-            type TEXT NOT NULL,
-            amount REAL NOT NULL,
-            createdAt TEXT NOT NULL
-          )
-        ''');
-      },
-    );
-  }
+  final http.Client _client;
+  final AuthService _authService;
 
   Future<List<CreditAccount>> loadCreditAccounts() async {
-    if (kIsWeb) return List<CreditAccount>.unmodifiable(_webAccounts);
-
-    final db = await database;
-    final rows = await db.query('local_credit_accounts', orderBy: 'balance DESC');
-    return rows.map((row) => CreditAccount(
-      customerId: row['customerId'] as String,
-      customer: row['customer'] as String,
-      phone: row['phone'] as String? ?? '',
-      balance: (row['balance'] as num?)?.toDouble() ?? 0,
-      lastTransactionAt: row['lastTransactionAt'] as String?,
-      transactionCount: row['transactionCount'] as int? ?? 0,
-      initials: row['initials'] as String? ?? 'CU',
-      colorValue: row['colorValue'] as int? ?? 0xFF123A8F,
-    )).toList();
+    final response = await _request('GET', '/api/customers');
+    if (response is! List) throw Exception('Unable to load credit accounts.');
+    return response
+        .whereType<Map>()
+        .toList()
+        .asMap()
+        .entries
+        .map((entry) => _accountFromCustomer(
+              Map<String, dynamic>.from(entry.value),
+              entry.key,
+            ))
+        .where((account) => account.balance > 0)
+        .toList();
   }
 
-  Future<List<Map<String, dynamic>>> loadCreditLedger({String? customerId}) async {
-    if (kIsWeb) {
-      if (customerId == null) {
-        return List<Map<String, dynamic>>.from(_webLedger);
-      }
-      return List<Map<String, dynamic>>.from(_webLedger.where((entry) => entry['customerId'] == customerId));
-    }
+  Future<CreditAccount> loadCreditAccount(String customerId,
+      {int colorIndex = 0}) async {
+    final response = await _request('GET', '/api/customers',
+        query: {'customerId': customerId});
+    if (response is! Map) throw Exception('Unable to load credit history.');
+    return _accountFromCustomer(
+        Map<String, dynamic>.from(response), colorIndex);
+  }
 
-    final db = await database;
-    return db.query(
-      'local_credit_ledger',
-      where: customerId == null ? null : 'customerId = ?',
-      whereArgs: customerId == null ? null : [customerId],
-      orderBy: 'createdAt DESC',
-    );
+  Future<List<Map<String, dynamic>>> loadCreditLedger(
+      {String? customerId}) async {
+    if (customerId == null) return const [];
+    final response = await _request('GET', '/api/customers',
+        query: {'customerId': customerId});
+    if (response is! Map) throw Exception('Unable to load credit history.');
+    final customer = Map<String, dynamic>.from(response);
+    final sales = (customer['sales'] as List? ?? const [])
+        .whereType<Map>()
+        .map((sale) => <String, dynamic>{
+              'id': sale['id']?.toString() ?? '',
+              'customerId': customerId,
+              'type': 'SALE',
+              'amount': _number(sale['total']),
+              'createdAt': sale['createdAt']?.toString(),
+            });
+    final entries = (customer['creditEntries'] as List? ?? const [])
+        .whereType<Map>()
+        .map((entry) => <String, dynamic>{
+              'id': entry['id']?.toString() ?? '',
+              'customerId': customerId,
+              'type': entry['type']?.toString() ?? 'CHARGE',
+              'amount': _number(entry['amount']),
+              'paymentMethod': entry['paymentMethod']?.toString(),
+              'createdAt': entry['createdAt']?.toString(),
+            });
+    final ledger = [...sales, ...entries];
+    ledger.sort((a, b) => (b['createdAt']?.toString() ?? '')
+        .compareTo(a['createdAt']?.toString() ?? ''));
+    return ledger;
   }
 
   Future<CreditAccount?> findByCustomerId(String customerId) async {
-    if (kIsWeb) {
-      for (final account in _webAccounts) {
-        if (account.customerId == customerId) return account;
-      }
+    try {
+      return await loadCreditAccount(customerId);
+    } on Object {
       return null;
     }
-
-    final db = await database;
-    final rows = await db.query(
-      'local_credit_accounts',
-      where: 'customerId = ?',
-      whereArgs: [customerId],
-      limit: 1,
-    );
-    return rows.isEmpty ? null : _accountFromRow(rows.first);
   }
 
   Future<void> saveCreditAccount(CreditAccount account) async {
-    final db = await database;
-    await db.insert(
-      'local_credit_accounts',
-      {
-        'customerId': account.customerId,
-        'customer': account.customer,
-        'phone': account.phone,
-        'balance': account.balance,
-        'lastTransactionAt': account.lastTransactionAt,
-        'transactionCount': account.transactionCount,
-        'initials': account.initials,
-        'colorValue': account.colorValue,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _request('POST', '/api/customers', body: {
+      'id': account.customerId,
+      'name': account.customer,
+      'phone': account.phone,
+    });
   }
 
   Future<CreditAccount?> recordOfflinePayment({
     required String customerId,
     required double amount,
+    String paymentMethod = 'CASH',
   }) async {
     if (amount <= 0) return null;
-
-    if (kIsWeb) {
-      final index = _webAccounts.indexWhere((account) => account.customerId == customerId);
-      if (index == -1) return null;
-      final account = _webAccounts[index];
-      if (amount > account.balance) return null;
-
-      final now = DateTime.now().toIso8601String();
-      final updated = account.copyWith(
-        balance: account.balance - amount,
-        lastTransactionAt: now,
-        transactionCount: account.transactionCount + 1,
-      );
-      _webAccounts[index] = updated;
-      _webLedger.insert(0, {
-        'id': 'credit-payment-${DateTime.now().microsecondsSinceEpoch}',
-        'customerId': customerId,
-        'type': 'PAYMENT',
-        'amount': amount,
-        'createdAt': now,
-      });
-      return updated;
-    }
-
-    final db = await database;
-    final rows = await db.query(
-      'local_credit_accounts',
-      where: 'customerId = ?',
-      whereArgs: [customerId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-
-    final account = _accountFromRow(rows.first);
-    if (amount > account.balance) return null;
-
-    final now = DateTime.now().toIso8601String();
-    final updated = account.copyWith(
-      balance: account.balance - amount,
-      lastTransactionAt: now,
-      transactionCount: account.transactionCount + 1,
-    );
-
-    await db.transaction((transaction) async {
-      await transaction.update(
-        'local_credit_accounts',
-        {
-          'balance': updated.balance,
-          'lastTransactionAt': now,
-          'transactionCount': updated.transactionCount,
-        },
-        where: 'customerId = ?',
-        whereArgs: [customerId],
-      );
-      await transaction.insert('local_credit_ledger', {
-        'id': 'credit-payment-${DateTime.now().microsecondsSinceEpoch}',
-        'customerId': customerId,
-        'type': 'PAYMENT',
-        'amount': amount,
-        'createdAt': now,
-      });
+    final session = await _session();
+    await _request('POST', '/api/customers/credit', body: {
+      'action': 'RECORD_PAYMENT',
+      'customerId': customerId,
+      'amount': amount,
+      'userId': session.user['id']?.toString(),
+      'paymentMethod': paymentMethod,
     });
-
-    return updated;
+    return loadCreditAccount(customerId);
   }
 
   Future<CreditAccount?> recordOfflineCreditSale({
@@ -278,76 +158,84 @@ class CreditService {
     required String invoiceNo,
   }) async {
     if (amount <= 0) return null;
-
-    if (kIsWeb) {
-      final index = _webAccounts.indexWhere((account) => account.customerId == customerId);
-      if (index == -1) return null;
-      final account = _webAccounts[index];
-      final now = DateTime.now().toIso8601String();
-      final updated = account.copyWith(
-        balance: account.balance + amount,
-        lastTransactionAt: now,
-        transactionCount: account.transactionCount + 1,
-      );
-      _webAccounts[index] = updated;
-      _webLedger.insert(0, {
-        'id': 'credit-sale-$invoiceNo',
-        'customerId': customerId,
-        'type': 'SALE',
-        'amount': amount,
-        'createdAt': now,
-      });
-      return updated;
-    }
-
-    final db = await database;
-    final rows = await db.query(
-      'local_credit_accounts',
-      where: 'customerId = ?',
-      whereArgs: [customerId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-
-    final account = _accountFromRow(rows.first);
-    final now = DateTime.now().toIso8601String();
-    final updated = account.copyWith(
-      balance: account.balance + amount,
-      lastTransactionAt: now,
-      transactionCount: account.transactionCount + 1,
-    );
-
-    await db.transaction((transaction) async {
-      await transaction.update(
-        'local_credit_accounts',
-        {
-          'balance': updated.balance,
-          'lastTransactionAt': now,
-          'transactionCount': updated.transactionCount,
-        },
-        where: 'customerId = ?',
-        whereArgs: [customerId],
-      );
-      await transaction.insert('local_credit_ledger', {
-        'id': 'credit-sale-$invoiceNo',
-        'customerId': customerId,
-        'type': 'SALE',
-        'amount': amount,
-        'createdAt': now,
-      });
+    await _request('POST', '/api/customers/credit', body: {
+      'action': 'CHARGE_CREDIT',
+      'customerId': customerId,
+      'amount': amount,
+      'creditBookId': 'credit-sale-$invoiceNo',
     });
-
-    return updated;
+    return loadCreditAccount(customerId);
   }
 
-  CreditAccount _accountFromRow(Map<String, dynamic> row) => CreditAccount(
-    customerId: row['customerId'] as String,
-    customer: row['customer'] as String,
-    phone: row['phone'] as String? ?? '',
-    balance: (row['balance'] as num?)?.toDouble() ?? 0,
-    lastTransactionAt: row['lastTransactionAt'] as String?,
-    transactionCount: row['transactionCount'] as int? ?? 0,
-    initials: row['initials'] as String? ?? 'CU',
-    colorValue: row['colorValue'] as int? ?? 0xFF123A8F,
-  );
+  CreditAccount _accountFromCustomer(Map<String, dynamic> row, int index) {
+    final name = row['name']?.toString().trim();
+    final normalizedName = name == null || name.isEmpty ? 'Customer' : name;
+    final account = row['creditAccount'];
+    final entries = row['creditEntries'] as List? ?? const [];
+    final sales = row['sales'] as List? ?? const [];
+    final latest = entries.isNotEmpty
+        ? entries.first as Map?
+        : sales.isNotEmpty
+            ? sales.first as Map?
+            : null;
+    final counts = row['_count'] as Map?;
+    return CreditAccount(
+      customerId: row['id']?.toString() ?? '',
+      customer: normalizedName,
+      phone: row['phone']?.toString() ?? '',
+      balance: _number(account is Map ? account['balance'] : 0),
+      lastTransactionAt: latest?['createdAt']?.toString(),
+      transactionCount:
+          _integer(counts?['sales']) + _integer(counts?['creditEntries']),
+      initials: normalizedName
+          .split(RegExp(r'\s+'))
+          .where((part) => part.isNotEmpty)
+          .take(2)
+          .map((part) => part[0])
+          .join()
+          .toUpperCase(),
+      colorValue: _avatarColors[index % _avatarColors.length],
+    );
+  }
+
+  Future<AuthSession> _session() async {
+    final session = await _authService.readSession();
+    final businessId = session?.user['businessId']?.toString();
+    if (session == null || businessId == null || businessId.isEmpty) {
+      throw Exception('Please sign in to manage credit accounts.');
+    }
+    return session;
+  }
+
+  Future<Object?> _request(String method, String path,
+      {Map<String, String>? query, Map<String, Object?>? body}) async {
+    final session = await _session();
+    final businessId = session.user['businessId']!.toString();
+    final uri = Uri.parse('${ApiConfig.origin}$path').replace(
+      queryParameters:
+          method == 'GET' ? {'businessId': businessId, ...?query} : null,
+    );
+    final response = method == 'GET'
+        ? await _client
+            .get(uri, headers: {'Authorization': 'Bearer ${session.token}'})
+        : await _client.post(uri,
+            headers: {
+              'Authorization': 'Bearer ${session.token}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({...?body, 'businessId': businessId}));
+    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(decoded is Map
+          ? decoded['error']?.toString() ?? 'Credit request failed.'
+          : 'Credit request failed.');
+    }
+    return decoded;
+  }
+
+  static double _number(Object? value) => value is num
+      ? value.toDouble()
+      : double.tryParse(value?.toString() ?? '') ?? 0;
+  static int _integer(Object? value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '') ?? 0;
 }
