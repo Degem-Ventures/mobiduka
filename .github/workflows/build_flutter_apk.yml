@@ -60,8 +60,11 @@ jobs:
 
               const source = fs.readFileSync(gradleFile, 'utf8');
               const updated = source
-                .replace(/compileSdkVersion\s+\S+/g, 'compileSdkVersion 36')
-                .replace(/compileSdk\s*=\s*\S+/g, 'compileSdk = 36');
+                // Only replace hard-coded legacy SDK levels. Variable-based
+                // declarations (for example, flutter.compileSdkVersion) must
+                // remain intact for their plugin's Gradle DSL.
+                .replace(/compileSdkVersion\s+(?:31|32|33)\b/g, 'compileSdkVersion 36')
+                .replace(/compileSdk\s*=\s*(?:31|32|33)\b/g, 'compileSdk = 36');
               if (updated !== source) {
                 fs.writeFileSync(gradleFile, updated);
                 patched += 1;
