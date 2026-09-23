@@ -46,26 +46,34 @@ jobs:
           cd flutter_app
           flutter pub get
 
-      - name: Align legacy printer plugin SDK
+      - name: Align Android plugin SDKs
         run: |
-          plugin_path="$(node -e '
-            const fs = require("fs");
-            const plugins = JSON.parse(fs.readFileSync("./flutter_app/.flutter-plugins-dependencies", "utf8"));
-            const plugin = plugins.plugins.android.find((item) => item.name === "bluetooth_print_plus");
-            process.stdout.write(plugin?.path ?? "");
-          ')"
-          plugin_gradle="$plugin_path/android/build.gradle"
-          if [ -z "$plugin_path" ] || [ ! -f "$plugin_gradle" ]; then
-            echo "bluetooth_print_plus Android Gradle file was not found."
-            exit 1
-          fi
-          # bluetooth_print_plus 2.4.6 pins API 31, while its AndroidX
-          # dependencies require API 34+. Patch it before Gradle evaluates it.
-          sed -i -E \
-            -e 's/compileSdkVersion[[:space:]]+[^[:space:]]+/compileSdkVersion 36/' \
-            -e 's/compileSdk[[:space:]]*=[[:space:]]*[^[:space:]]+/compileSdk = 36/' \
-            "$plugin_gradle"
-          grep -q -E 'compileSdkVersion[[:space:]]+36|compileSdk[[:space:]]*=[[:space:]]*36' "$plugin_gradle"
+          node <<'NODE'
+          const fs = require('fs');
+          const registry = JSON.parse(fs.readFileSync('flutter_app/.flutter-plugins-dependencies', 'utf8'));
+          let patched = 0;
+
+          for (const plugin of registry.plugins.android ?? []) {
+            for (const filename of ['android/build.gradle', 'android/build.gradle.kts']) {
+              const gradleFile = `${plugin.path}/${filename}`;
+              if (!fs.existsSync(gradleFile)) continue;
+
+              const source = fs.readFileSync(gradleFile, 'utf8');
+              const updated = source
+                .replace(/compileSdkVersion\s+\S+/g, 'compileSdkVersion 36')
+                .replace(/compileSdk\s*=\s*\S+/g, 'compileSdk = 36');
+              if (updated !== source) {
+                fs.writeFileSync(gradleFile, updated);
+                patched += 1;
+                console.log(`Aligned ${plugin.name} to compileSdk 36.`);
+              }
+            }
+          }
+
+          if (patched === 0) {
+            throw new Error('No Android plugin compileSdk declarations were found to align.');
+          }
+          NODE
 
       - name: Build Release APK
         env:
