@@ -37,6 +37,7 @@ import 'services/sync_service.dart';
 import 'services/supplier_service.dart';
 import 'services/expense_service.dart';
 import 'services/settings_service.dart';
+import 'services/profile_service.dart';
 import 'widgets/barcode_scanner_view.dart';
 import 'widgets/smart_scan_screen.dart';
 
@@ -8991,7 +8992,7 @@ class _UnreadNotificationBadgeState extends State<UnreadNotificationBadge> {
   }
 }
 
-class MoreScreen extends StatelessWidget {
+class MoreScreen extends StatefulWidget {
   const MoreScreen(
       {required this.onOpen,
       required this.role,
@@ -9004,13 +9005,36 @@ class MoreScreen extends StatelessWidget {
   final VoidCallback onLogout;
   final VoidCallback onCloseShift;
 
+  @override
+  State<MoreScreen> createState() => _MoreScreenState();
+}
+
+class _MoreScreenState extends State<MoreScreen> {
+  final ProfileService _profileService = ProfileService();
+  Map<String, dynamic>? _profile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final profile = await _profileService.load();
+      if (mounted) setState(() => _profile = profile);
+    } on Object {
+      // Keep the menu usable while a profile refresh is temporarily unavailable.
+    }
+  }
+
   Color get pageBackground =>
-      isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
+      widget.isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
   Color get panelBackground =>
-      isDarkMode ? const Color(0xFF192235) : Colors.white;
-  Color get primaryText => isDarkMode ? Colors.white : ink;
+      widget.isDarkMode ? const Color(0xFF192235) : Colors.white;
+  Color get primaryText => widget.isDarkMode ? Colors.white : ink;
   Color get dividerColor =>
-      isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
+      widget.isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
 
   final List<Map<String, dynamic>> _menuSections = const [
     {
@@ -9097,212 +9121,241 @@ class MoreScreen extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => Container(
-        color: pageBackground,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(colors: [ink, navy]),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const CircleAvatar(
-                        radius: 28,
-                        backgroundColor: gold,
-                        child: Text('A',
-                            style: TextStyle(
-                                color: ink,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 20)),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Admin User',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w800)),
-                            SizedBox(height: 2),
-                            Text('owner@mobiduka.com',
-                                style: TextStyle(
-                                    color: Colors.white60, fontSize: 12)),
-                            SizedBox(height: 6),
-                            DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: Color(0x40D4AF37),
-                                borderRadius:
-                                    BorderRadius.all(Radius.circular(999)),
-                              ),
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                child: Text('Store Manager',
-                                    style: TextStyle(
-                                        color: Color(0xFFF4D46A),
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700)),
-                              ),
+  Widget build(BuildContext context) {
+    final profile = _profile;
+    final business = profile?['business'] as Map? ?? const {};
+    final name = profile?['name']?.toString().trim();
+    final email = profile?['email']?.toString().trim();
+    final apiRole = profile?['role']?.toString() ?? widget.role;
+    final roleLabel = apiRole
+        .toLowerCase()
+        .split('_')
+        .map((part) => part.isEmpty
+            ? part
+            : '${part[0].toUpperCase()}${part.substring(1)}')
+        .join(' ');
+    final initials = (name?.isNotEmpty == true ? name! : 'User')
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part[0])
+        .join()
+        .toUpperCase();
+
+    return Container(
+      color: pageBackground,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy]),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: gold,
+                      child: Text(initials,
+                          style: const TextStyle(
+                              color: ink,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 20)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name?.isNotEmpty == true ? name! : 'User',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 2),
+                          Text(email?.isNotEmpty == true ? email! : '-',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 12)),
+                          const SizedBox(height: 6),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Color(0x40D4AF37),
+                              borderRadius:
+                                  BorderRadius.all(Radius.circular(999)),
                             ),
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              child: Text(roleLabel,
+                                  style: TextStyle(
+                                      color: Color(0xFFF4D46A),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => widget.onOpen('User Profile'),
+                      icon: const Icon(Icons.edit, color: Colors.white),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white.withValues(alpha: 0.12),
+                        fixedSize: const Size(36, 36),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('Store',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 10)),
+                            SizedBox(height: 2),
+                            Text(business['name']?.toString() ?? '-',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
                           ],
                         ),
                       ),
-                      IconButton(
-                        onPressed: () => onOpen('User Profile'),
-                        icon: const Icon(Icons.edit, color: Colors.white),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.white.withValues(alpha: 0.12),
-                          fixedSize: const Size(36, 36),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('Branch',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 10)),
+                            SizedBox(height: 2),
+                            Text(business['branch']?.toString() ?? '-',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('Shift',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 10)),
+                            SizedBox(height: 2),
+                            Text('Morning',
+                                style: TextStyle(
+                                    color: gold,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Store',
-                                  style: TextStyle(
-                                      color: Colors.white60, fontSize: 10)),
-                              SizedBox(height: 2),
-                              Text('MobiDuka Store',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Branch',
-                                  style: TextStyle(
-                                      color: Colors.white60, fontSize: 10)),
-                              SizedBox(height: 2),
-                              Text('Nairobi CBD',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Shift',
-                                  style: TextStyle(
-                                      color: Colors.white60, fontSize: 10)),
-                              SizedBox(height: 2),
-                              Text('Morning',
-                                  style: TextStyle(
-                                      color: gold,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            ..._menuSections.map((section) {
-              final items = (section['items'] as List<Map<String, dynamic>>)
-                  .where((item) {
-                final screen = item['screen'];
-                if (role == 'OWNER' || role == 'ADMIN') return true;
-                if (role == 'CASHIER')
-                  return screen == 'Expense Tracking' ||
-                      screen == 'Credit Book';
-                if (role == 'SUPERVISOR')
-                  return screen != 'Reports & Analytics' &&
-                      screen != 'Settings' &&
-                      screen != 'Backup & Cloud Sync';
-                if (role == 'ACCOUNTANT')
-                  return screen == 'Reports & Analytics' ||
-                      screen == 'Credit Book' ||
-                      screen == 'Expense Tracking' ||
-                      screen == 'User Profile';
-                return false;
-              }).toList();
-              return items.isEmpty
-                  ? null
-                  : _menuSection(section['section'] as String, items);
-            }).whereType<Widget>(),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: onCloseShift,
-              icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
-              label: const Text('Close Shift Session',
-                  style: TextStyle(
-                      color: Color(0xFF2E7D32),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700)),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFE8F5E9),
-                foregroundColor: const Color(0xFF2E7D32),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: const BorderSide(color: Color(0xFFC8E6C9)),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 10),
-            TextButton.icon(
-              onPressed: onLogout,
-              icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
-              label: const Text('Logout',
-                  style: TextStyle(
-                      color: Color(0xFFD32F2F),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700)),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFFFF5F5),
-                foregroundColor: const Color(0xFFD32F2F),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: const BorderSide(color: Color(0xFFFFCDD2)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Center(
-              child: Text(
-                'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
-                textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 12),
+          ..._menuSections.map((section) {
+            final items =
+                (section['items'] as List<Map<String, dynamic>>).where((item) {
+              final screen = item['screen'];
+              if (widget.role == 'OWNER' || widget.role == 'ADMIN') return true;
+              if (widget.role == 'CASHIER')
+                return screen == 'Expense Tracking' || screen == 'Credit Book';
+              if (widget.role == 'SUPERVISOR')
+                return screen != 'Reports & Analytics' &&
+                    screen != 'Settings' &&
+                    screen != 'Backup & Cloud Sync';
+              if (widget.role == 'ACCOUNTANT')
+                return screen == 'Reports & Analytics' ||
+                    screen == 'Credit Book' ||
+                    screen == 'Expense Tracking' ||
+                    screen == 'User Profile';
+              return false;
+            }).toList();
+            return items.isEmpty
+                ? null
+                : _menuSection(section['section'] as String, items);
+          }).whereType<Widget>(),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: widget.onCloseShift,
+            icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
+            label: const Text('Close Shift Session',
                 style: TextStyle(
-                    color: isDarkMode ? const Color(0xFF8290AD) : muted,
-                    fontSize: 11,
-                    height: 1.5),
+                    color: Color(0xFF2E7D32),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700)),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFE8F5E9),
+              foregroundColor: const Color(0xFF2E7D32),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFC8E6C9)),
               ),
             ),
-          ],
-        ),
-      );
+          ),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: widget.onLogout,
+            icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
+            label: const Text('Logout',
+                style: TextStyle(
+                    color: Color(0xFFD32F2F),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700)),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFFFF5F5),
+              foregroundColor: const Color(0xFFD32F2F),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFFFCDD2)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Center(
+            child: Text(
+              'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: widget.isDarkMode ? const Color(0xFF8290AD) : muted,
+                  fontSize: 11,
+                  height: 1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _menuSection(String title, List<Map<String, dynamic>> items) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -9338,7 +9391,7 @@ class MoreScreen extends StatelessWidget {
                 return Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: () => onOpen(item['screen'] as String),
+                    onTap: () => widget.onOpen(item['screen'] as String),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 14),
@@ -9401,11 +9454,13 @@ class SettingsDetailScreen extends StatefulWidget {
     required this.onBack,
     required this.isDarkMode,
     required this.onThemeChanged,
+    this.initialPage = 'settings',
     super.key,
   });
   final VoidCallback onBack;
   final bool isDarkMode;
   final ValueChanged<bool> onThemeChanged;
+  final String initialPage;
 
   @override
   State<SettingsDetailScreen> createState() => _SettingsDetailScreenState();
@@ -9463,6 +9518,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   @override
   void initState() {
     super.initState();
+    _page = widget.initialPage;
     _load();
   }
 
@@ -9789,14 +9845,34 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Scaffold(
         backgroundColor: _background,
         body: Column(children: [
-          _header('Payment Methods', () => setState(() => _page = 'settings')),
+          Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Row(children: [
+                IconButton(
+                    onPressed: () => setState(() => _page = 'settings'),
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    style: IconButton.styleFrom(
+                        backgroundColor: Colors.white24,
+                        fixedSize: const Size(36, 36))),
+                const SizedBox(width: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Payment Methods',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
+                  Text('$active of ${details.length} active',
+                      style:
+                          const TextStyle(color: Colors.white60, fontSize: 12))
+                ])
+              ])),
           Expanded(
               child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
                   children: [
-                Text('$active of ${details.length} active',
-                    style: TextStyle(color: _muted, fontSize: 12)),
-                const SizedBox(height: 12),
                 _section('Accepted Payment Methods'),
                 _card(details.asMap().entries.map((entry) {
                   final item = entry.value;
@@ -9838,16 +9914,27 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                                 () => _paymentMethods[item.$1] = value))
                       ]));
                 }).toList()),
+                const SizedBox(height: 4),
                 Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                         color: navy.withValues(alpha: .08),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: navy.withValues(alpha: .2))),
-                    child: Text(
-                        'Disabled payment methods are hidden from cashiers during checkout. Changes take effect immediately.',
-                        style: TextStyle(
-                            color: _muted, fontSize: 12, height: 1.4))),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Admin note',
+                              style: TextStyle(
+                                  color: Color(0xFF1565C0),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 4),
+                          Text(
+                              'Disabled payment methods will be hidden from cashiers during checkout. Changes take effect immediately.',
+                              style: TextStyle(
+                                  color: _muted, fontSize: 12, height: 1.4))
+                        ])),
                 const SizedBox(height: 18),
                 TextButton(
                     onPressed: () => unawaited(_save({
@@ -9871,7 +9958,30 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Scaffold(
         backgroundColor: _background,
         body: Column(children: [
-          _header('Active Sessions', () => setState(() => _page = 'settings')),
+          Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Row(children: [
+                IconButton(
+                    onPressed: () => setState(() => _page = 'settings'),
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    style: IconButton.styleFrom(
+                        backgroundColor: Colors.white24,
+                        fixedSize: const Size(36, 36))),
+                const SizedBox(width: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Active Sessions',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
+                  Text('${_sessions.length} devices logged in',
+                      style:
+                          const TextStyle(color: Colors.white60, fontSize: 12))
+                ])
+              ])),
           Expanded(
               child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
@@ -9937,7 +10047,12 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                 decoration: BoxDecoration(
                     color: current ? navy : navy.withValues(alpha: .10),
                     borderRadius: BorderRadius.circular(8)),
-                child: Icon(current ? Icons.phone_android : Icons.devices_other,
+                child: Icon(
+                    current
+                        ? Icons.phone_android
+                        : session['id'] == 'desktop'
+                            ? Icons.desktop_windows_outlined
+                            : Icons.tablet_android_outlined,
                     color: current ? Colors.white : navy)),
             const SizedBox(width: 12),
             Expanded(
@@ -9961,8 +10076,20 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                   Text(session['model']!,
                       style: TextStyle(color: _muted, fontSize: 11)),
                   Text(
-                      '${session['location']} · ${current ? 'Active now' : 'Last: ${session['last']}'}',
-                      style: TextStyle(color: _muted, fontSize: 11))
+                      '${session['location']} · ${current ? session['ip'] : 'Last: ${session['last']}'}',
+                      style: TextStyle(color: _muted, fontSize: 11)),
+                  if (current)
+                    const Padding(
+                        padding: EdgeInsets.only(top: 5),
+                        child: Row(children: [
+                          Icon(Icons.circle, color: Color(0xFF2E7D32), size: 8),
+                          SizedBox(width: 5),
+                          Text('Active now',
+                              style: TextStyle(
+                                  color: Color(0xFF2E7D32),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700))
+                        ]))
                 ])),
             if (!current)
               TextButton(
@@ -9987,37 +10114,55 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     return Scaffold(
       backgroundColor: _background,
       body: Column(children: [
-        _header(
-            title,
-            () => setState(() {
-                  if (intro || done) {
-                    _page = 'settings';
-                  } else {
-                    _twoFactorStep = verify ? 'method' : 'intro';
-                  }
-                })),
+        Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+            decoration: const BoxDecoration(
+                gradient: LinearGradient(colors: [ink, navy])),
+            child: Row(children: [
+              IconButton(
+                  onPressed: () => setState(() {
+                        if (intro || done) {
+                          _page = 'settings';
+                        } else {
+                          _twoFactorStep = verify ? 'method' : 'intro';
+                        }
+                      }),
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  style: IconButton.styleFrom(
+                      backgroundColor: Colors.white24,
+                      fixedSize: const Size(36, 36))),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800)),
+                if (intro)
+                  Container(
+                      margin: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: const Color(0x40D32F2F),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: const Color(0x66EF9A9A))),
+                      child: const Text('NOT ENABLED',
+                          style: TextStyle(
+                              color: Color(0xFFFF8A80),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)))
+              ])
+            ])),
         Expanded(
           child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 22, 20, 80),
               children: [
                 if (intro) ...[
-                  Align(
-                      alignment: Alignment.centerLeft,
-                      child: Container(
-                          margin: const EdgeInsets.only(bottom: 20),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                              color: const Color(0xFFFFEBEE),
-                              borderRadius: BorderRadius.circular(999),
-                              border:
-                                  Border.all(color: const Color(0xFFEF9A9A))),
-                          child: const Text('NOT ENABLED',
-                              style: TextStyle(
-                                  color: Color(0xFFD32F2F),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800)))),
-                  const Icon(Icons.shield_outlined, color: navy, size: 60),
+                  const Center(
+                      child:
+                          Icon(Icons.shield_outlined, color: navy, size: 60)),
                   const SizedBox(height: 12),
                   const Center(
                       child: Text('Add Extra Security',
@@ -10059,7 +10204,8 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                       'totp',
                       Icons.lock_outline,
                       'Authenticator App',
-                      'Use Google Authenticator, Authy, or any TOTP app'),
+                      'Use Google Authenticator, Authy, or any TOTP app',
+                      recommended: true),
                 ],
                 if (verify) ...[
                   if (_twoFactorMethod == 'totp')
@@ -10109,10 +10255,105 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                               fontWeight: FontWeight.w900))),
                   const SizedBox(height: 8),
                   Text(
-                      'Your account is now protected with ${_twoFactorMethod == 'sms' ? 'SMS OTP' : 'Authenticator App'}.',
+                      "Your account is now protected with ${_twoFactorMethod == 'sms' ? 'SMS OTP' : 'Authenticator App'}. You'll be asked for a code on each new login.",
                       textAlign: TextAlign.center,
                       style: TextStyle(color: _muted)),
                   const SizedBox(height: 20),
+                  _card([
+                    Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(children: [
+                          Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFE8F5E9),
+                                  borderRadius: BorderRadius.circular(8)),
+                              child: Icon(
+                                  _twoFactorMethod == 'sms'
+                                      ? Icons.phone_android
+                                      : Icons.lock_outline,
+                                  color: const Color(0xFF2E7D32))),
+                          const SizedBox(width: 12),
+                          Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text(
+                                    _twoFactorMethod == 'sms'
+                                        ? 'SMS OTP'
+                                        : 'Authenticator App',
+                                    style: TextStyle(
+                                        color: _text,
+                                        fontWeight: FontWeight.w800)),
+                                const Text('● Active',
+                                    style: TextStyle(
+                                        color: Color(0xFF2E7D32), fontSize: 11))
+                              ])),
+                          Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFE8F5E9),
+                                  borderRadius: BorderRadius.circular(999)),
+                              child: const Text('Enabled',
+                                  style: TextStyle(
+                                      color: Color(0xFF2E7D32),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w800)))
+                        ]))
+                  ]),
+                  Container(
+                      margin: const EdgeInsets.only(bottom: 18),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFFFF8E1),
+                          border: Border.all(color: const Color(0xFFFFE082)),
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Backup codes',
+                                style: TextStyle(
+                                    color: Color(0xFF5D4037),
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 4),
+                            const Text(
+                                'Save these in a safe place - they let you sign in if you lose your authenticator.',
+                                style: TextStyle(
+                                    color: Color(0xFF795548),
+                                    fontSize: 12,
+                                    height: 1.4)),
+                            const SizedBox(height: 10),
+                            GridView.count(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                crossAxisCount: 2,
+                                childAspectRatio: 3.2,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                                children: [
+                                  '7F2K-9PXM',
+                                  '3Q8R-T6WN',
+                                  'BH4J-K2VL',
+                                  'XN9E-5CMR'
+                                ]
+                                    .map((code) => Container(
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                            color: _panel,
+                                            border: Border.all(
+                                                color: const Color(0xFFFFE082)),
+                                            borderRadius:
+                                                BorderRadius.circular(6)),
+                                        child: Text(code,
+                                            style: TextStyle(
+                                                color: _text,
+                                                fontFamily: 'monospace',
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w800))))
+                                    .toList())
+                          ])),
                   TextButton(
                       onPressed: () => setState(() => _twoFactorStep = 'intro'),
                       style: TextButton.styleFrom(
@@ -10153,7 +10394,8 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
           ]));
 
   Widget _twoFactorMethodTile(
-          String key, IconData icon, String title, String sub) =>
+          String key, IconData icon, String title, String sub,
+          {bool recommended = false}) =>
       InkWell(
           onTap: () => setState(() {
                 _twoFactorMethod = key;
@@ -10171,9 +10413,24 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                     child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                      Text(title,
-                          style: TextStyle(
-                              color: _text, fontWeight: FontWeight.w800)),
+                      Row(children: [
+                        Text(title,
+                            style: TextStyle(
+                                color: _text, fontWeight: FontWeight.w800)),
+                        if (recommended)
+                          Container(
+                              margin: const EdgeInsets.only(left: 7),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: navy.withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(999)),
+                              child: const Text('RECOMMENDED',
+                                  style: TextStyle(
+                                      color: navy,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800)))
+                      ]),
                       Text(sub, style: TextStyle(color: _muted, fontSize: 12))
                     ])),
                 const Icon(Icons.chevron_right, color: muted)
@@ -10292,11 +10549,12 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                                                 },
                                                 icon: const Icon(Icons.check,
                                                     size: 16),
-                                                label: const Text('Save Tax PIN'),
+                                                label: const Text(
+                                                    'Save Tax PIN'),
                                                 style: TextButton.styleFrom(
                                                     backgroundColor: navy,
-                                                    foregroundColor:
-                                                        Colors.white,
+                                                    foregroundColor: Colors
+                                                        .white,
                                                     padding: const EdgeInsets
                                                         .symmetric(
                                                         horizontal: 12,
@@ -10383,7 +10641,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                       _section('Security'),
                       _card([
                         _actionRow(Icons.phone_android_outlined, navy,
-                            'Active Sessions', '1 device logged in',
+                            'Active Sessions', '3 devices logged in',
                             onTap: () => setState(() => _page = 'sessions')),
                         _actionRow(
                             Icons.security_outlined,
@@ -10916,6 +11174,8 @@ class _DetailScreenState extends State<DetailScreen> {
       return CreditBookScreen(onBack: widget.onBack);
     if (widget.title == 'Customers')
       return CustomersScreen(onBack: widget.onBack);
+    if (widget.title == 'User Profile')
+      return UserProfileDetailScreen(onBack: widget.onBack);
     if (widget.title == 'Settings')
       return SettingsDetailScreen(
         onBack: widget.onBack,
@@ -11004,8 +11264,6 @@ class _DetailScreenState extends State<DetailScreen> {
               isDarkMode: widget.isDarkMode,
               onThemeChanged: widget.onThemeChanged)
         ];
-      case 'User Profile':
-        return [UserProfileDetailScreen(onBack: widget.onBack)];
       default:
         return [
           Card(
@@ -11032,16 +11290,17 @@ class _DetailScreenState extends State<DetailScreen> {
       }).toList();
 }
 
-class UserProfileDetailScreen extends StatefulWidget {
-  const UserProfileDetailScreen({required this.onBack, super.key});
+class LegacyUserProfileDetailScreen extends StatefulWidget {
+  const LegacyUserProfileDetailScreen({required this.onBack, super.key});
   final VoidCallback onBack;
 
   @override
-  State<UserProfileDetailScreen> createState() =>
-      _UserProfileDetailScreenState();
+  State<LegacyUserProfileDetailScreen> createState() =>
+      _LegacyUserProfileDetailScreenState();
 }
 
-class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
+class _LegacyUserProfileDetailScreenState
+    extends State<LegacyUserProfileDetailScreen> {
   bool editing = false;
   bool changingPin = false;
   bool saved = false;
@@ -11535,6 +11794,533 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
           ),
         ],
       );
+}
+
+class UserProfileDetailScreen extends StatefulWidget {
+  const UserProfileDetailScreen({required this.onBack, super.key});
+  final VoidCallback onBack;
+
+  @override
+  State<UserProfileDetailScreen> createState() =>
+      _UserProfileDetailScreenState();
+}
+
+class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
+  final ProfileService _service = ProfileService();
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  final _email = TextEditingController();
+  final _currentPin = TextEditingController();
+  final _newPin = TextEditingController();
+  final _confirmPin = TextEditingController();
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+  bool _editing = false;
+  bool _changingPin = false;
+  bool _saving = false;
+  bool _pinDone = false;
+  String? _securityPage;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    for (final controller in [
+      _name,
+      _phone,
+      _email,
+      _currentPin,
+      _newPin,
+      _confirmPin
+    ]) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final profile = await _service.load();
+      if (!mounted) return;
+      _apply(profile);
+    } on Object catch (error) {
+      if (mounted)
+        setState(() {
+          _loading = false;
+          _error = error.toString().replaceFirst('Exception: ', '');
+        });
+    }
+  }
+
+  void _apply(Map<String, dynamic> profile) => setState(() {
+        _profile = profile;
+        _name.text = profile['name']?.toString() ?? '';
+        _phone.text = profile['phone']?.toString() ?? '';
+        _email.text = profile['email']?.toString() ?? '';
+        _loading = false;
+        _error = null;
+      });
+
+  Future<void> _saveProfile() async {
+    if (_name.text.trim().isEmpty) {
+      setState(() => _error = 'Full name is required.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final profile = await _service.update(
+          name: _name.text.trim(),
+          phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+          email: _email.text.trim().isEmpty ? null : _email.text.trim());
+      if (!mounted) return;
+      _apply(profile);
+      setState(() => _editing = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          backgroundColor: Color(0xFF2E7D32),
+          content: Text('Profile updated successfully.')));
+    } on Object catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _updatePin() async {
+    final configured = _profile?['pinConfigured'] == true;
+    if (configured && _currentPin.text.length != 4) {
+      setState(() => _error = 'Enter your current 4-digit PIN.');
+      return;
+    }
+    if (!RegExp(r'^\d{4}$').hasMatch(_newPin.text)) {
+      setState(() => _error = 'New PIN must be 4 digits.');
+      return;
+    }
+    if (_newPin.text != _confirmPin.text) {
+      setState(() => _error = 'New PINs do not match.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final profile = await _service.updatePin(
+          currentPin: configured ? _currentPin.text : null,
+          newPin: _newPin.text);
+      if (!mounted) return;
+      _apply(profile);
+      setState(() {
+        _saving = false;
+        _pinDone = true;
+      });
+    } on Object catch (error) {
+      if (mounted)
+        setState(() {
+          _saving = false;
+          _error = error.toString().replaceFirst('Exception: ', '');
+        });
+    }
+  }
+
+  void _openSettings(String page) => setState(() => _securityPage = page);
+  String _initials() {
+    final name = _profile?['name']?.toString() ?? 'User';
+    return name
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .take(2)
+        .map((word) => word[0])
+        .join()
+        .toUpperCase();
+  }
+
+  String _memberSince() {
+    final date = DateTime.tryParse(_profile?['memberSince']?.toString() ?? '');
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December'
+    ];
+    return date == null ? '-' : '${months[date.month - 1]} ${date.year}';
+  }
+
+  Widget _header(String title, VoidCallback onBack, {Widget? action}) =>
+      Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 46, 16, 22),
+          decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy])),
+          child: Row(children: [
+            IconButton(
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                style: IconButton.styleFrom(
+                    backgroundColor: Colors.white24,
+                    fixedSize: const Size(36, 36))),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800))),
+            if (action != null) action
+          ]));
+  Widget _section(String value) => Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(value.toUpperCase(),
+              style: const TextStyle(
+                  color: muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .6))));
+  Widget _card(List<Widget> children) => Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+          ]),
+      child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, children: children));
+  Widget _field(String label, TextEditingController controller,
+          {TextInputType? type, bool editable = true}) =>
+      Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(
+                    color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            editable
+                ? TextField(
+                    controller: controller,
+                    keyboardType: type,
+                    decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 12, vertical: 12)))
+                : Text(controller.text.isEmpty ? '-' : controller.text,
+                    style: const TextStyle(
+                        color: ink, fontSize: 14, fontWeight: FontWeight.w700))
+          ]));
+  Widget _security(IconData icon, String label, String sub, VoidCallback action,
+          {bool last = false}) =>
+      InkWell(
+          onTap: action,
+          child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              decoration: BoxDecoration(
+                  border: Border(
+                      bottom: BorderSide(
+                          color: last
+                              ? Colors.transparent
+                              : const Color(0xFFF0F3F9)))),
+              child: Row(children: [
+                Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFEEF3FF),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Icon(icon, color: navy)),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(label,
+                          style: const TextStyle(
+                              color: ink, fontWeight: FontWeight.w700)),
+                      Text(sub,
+                          style: const TextStyle(color: muted, fontSize: 11))
+                    ])),
+                const Icon(Icons.chevron_right,
+                    color: Color(0xFFB0BAD3), size: 18)
+              ])));
+
+  Widget _pinView() {
+    final configured = _profile?['pinConfigured'] == true;
+    final contents = _pinDone
+        ? <Widget>[
+            const Icon(Icons.lock_outline, size: 52, color: navy),
+            const SizedBox(height: 12),
+            const Text('PIN Updated!',
+                style: TextStyle(
+                    color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            const Text('Your new PIN is active.\nUse it on your next login.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: muted, fontSize: 13)),
+            const SizedBox(height: 22),
+            SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                    onPressed: () => setState(() {
+                          _changingPin = false;
+                          _pinDone = false;
+                          _currentPin.clear();
+                          _newPin.clear();
+                          _confirmPin.clear();
+                        }),
+                    style: TextButton.styleFrom(
+                        backgroundColor: navy,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8))),
+                    child: const Text('Done'))),
+          ]
+        : <Widget>[
+            if (_error != null)
+              Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFFFEBEE),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Text(_error!,
+                      style: const TextStyle(
+                          color: Color(0xFFC62828), fontSize: 12))),
+            if (configured) _pinField('Current PIN', _currentPin),
+            _pinField(configured ? 'New PIN' : 'Create PIN', _newPin),
+            _pinField('Confirm New PIN', _confirmPin),
+            SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                    onPressed: _saving ? null : _updatePin,
+                    style: TextButton.styleFrom(
+                        backgroundColor: navy,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8))),
+                    child: Text(_saving ? 'Updating...' : 'Update PIN',
+                        style: const TextStyle(fontWeight: FontWeight.w800)))),
+          ];
+    return Scaffold(
+        backgroundColor: const Color(0xFFF5F7FA),
+        body: Column(children: [
+          _header(
+              'Change PIN',
+              () => setState(() {
+                    _changingPin = false;
+                    _pinDone = false;
+                    _error = null;
+                  })),
+          Expanded(
+              child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [_card(contents)])),
+        ]));
+  }
+
+  Widget _pinField(String label, TextEditingController controller) => Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(
+                color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        TextField(
+            controller: controller,
+            obscureText: true,
+            maxLength: 4,
+            keyboardType: TextInputType.number,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 28, letterSpacing: 12, fontWeight: FontWeight.w800),
+            decoration: const InputDecoration(
+                hintText: '••••',
+                counterText: '',
+                border: OutlineInputBorder()))
+      ]));
+
+  @override
+  Widget build(BuildContext context) {
+    if (_securityPage != null) {
+      return SettingsDetailScreen(
+          onBack: () => setState(() => _securityPage = null),
+          isDarkMode: Theme.of(context).brightness == Brightness.dark,
+          onThemeChanged: (_) {},
+          initialPage: _securityPage!);
+    }
+    if (_changingPin) return _pinView();
+    final profile = _profile;
+    final business = profile?['business'] as Map? ?? const {};
+    return SizedBox.expand(
+        child: Scaffold(
+            backgroundColor: const Color(0xFFF5F7FA),
+            body: Column(children: [
+              Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 46, 16, 24),
+                  decoration: const BoxDecoration(
+                      gradient: LinearGradient(colors: [ink, navy])),
+                  child: Column(children: [
+                    Row(children: [
+                      IconButton(
+                          onPressed: widget.onBack,
+                          icon:
+                              const Icon(Icons.arrow_back, color: Colors.white),
+                          style: IconButton.styleFrom(
+                              backgroundColor: Colors.white24,
+                              fixedSize: const Size(36, 36))),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                          child: Text('User Profile',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800))),
+                      TextButton(
+                          onPressed: () => setState(() {
+                                _editing = !_editing;
+                                _error = null;
+                              }),
+                          style: TextButton.styleFrom(
+                              backgroundColor: _editing ? gold : Colors.white24,
+                              foregroundColor: _editing ? ink : Colors.white,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8))),
+                          child: Text(_editing ? 'Cancel' : 'Edit')),
+                    ]),
+                    const SizedBox(height: 18),
+                    CircleAvatar(
+                        radius: 40,
+                        backgroundColor: gold,
+                        child: Text(_initials(),
+                            style: const TextStyle(
+                                color: ink,
+                                fontSize: 30,
+                                fontWeight: FontWeight.w800))),
+                    const SizedBox(height: 10),
+                    Text(profile?['name']?.toString() ?? 'Loading profile...',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800)),
+                    Container(
+                        margin: const EdgeInsets.only(top: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: gold.withValues(alpha: .24),
+                            borderRadius: BorderRadius.circular(999)),
+                        child: Text(profile?['role']?.toString() ?? 'User',
+                            style: const TextStyle(
+                                color: gold,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700)))
+                  ])),
+              Expanded(
+                  child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                      children: [
+                    if (_error != null)
+                      Container(
+                          margin: const EdgeInsets.only(bottom: 14),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                              color: const Color(0xFFFFEBEE),
+                              borderRadius: BorderRadius.circular(8)),
+                          child: Text(_error!,
+                              style: const TextStyle(
+                                  color: Color(0xFFC62828), fontSize: 12))),
+                    if (_loading)
+                      const Center(
+                          child: Padding(
+                              padding: EdgeInsets.all(32),
+                              child: CircularProgressIndicator(color: navy))),
+                    if (!_loading) ...[
+                      _section('Personal Information'),
+                      _card([
+                        _field('Full Name', _name, editable: _editing),
+                        _field('Phone Number', _phone,
+                            type: TextInputType.phone, editable: _editing),
+                        _field('Email Address', _email,
+                            type: TextInputType.emailAddress,
+                            editable: _editing),
+                        if (_editing)
+                          SizedBox(
+                              width: double.infinity,
+                              child: TextButton(
+                                  onPressed: _saving ? null : _saveProfile,
+                                  style: TextButton.styleFrom(
+                                      backgroundColor: navy,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(8))),
+                                  child: Text(
+                                      _saving ? 'Saving...' : 'Save Changes')))
+                      ]),
+                      _section('Store Information'),
+                      _card([
+                        _field(
+                            'Store Name',
+                            TextEditingController(
+                                text: business['name']?.toString() ?? ''),
+                            editable: false),
+                        _field(
+                            'Branch',
+                            TextEditingController(
+                                text: business['branch']?.toString() ?? ''),
+                            editable: false)
+                      ]),
+                      _section('Security'),
+                      _card([
+                        _security(
+                            Icons.lock_outline,
+                            'Change PIN',
+                            'Update your 4-digit login PIN',
+                            () => setState(() {
+                                  _changingPin = true;
+                                  _error = null;
+                                })),
+                        _security(
+                            Icons.phone_android_outlined,
+                            'Active Sessions',
+                            '3 devices currently logged in',
+                            () => _openSettings('sessions')),
+                        _security(Icons.security_outlined, 'Two-Factor Auth',
+                            'Not enabled', () => _openSettings('twoFactor'),
+                            last: true)
+                      ]),
+                      Center(
+                          child: Text(
+                              'Member since ${_memberSince()}\nMobiDuka POS · ${profile?['role'] ?? 'User'} · ${business['name'] ?? '-'} · ${business['branch'] ?? '-'}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  color: Color(0xFFB0BAD3),
+                                  fontSize: 12,
+                                  height: 1.5)))
+                    ]
+                  ]))
+            ])));
+  }
 }
 
 class PurchaseOrdersScreen extends StatefulWidget {
@@ -17096,40 +17882,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   ReportsData? _reportData;
   bool _loading = true;
   String? _error;
-  final List<double> months = const [
-    1.8,
-    2.1,
-    2.4,
-    2.0,
-    2.7,
-    3.1,
-    2.9,
-    3.4,
-    3.0,
-    3.6,
-    3.2,
-    4.1
-  ];
-  final List<String> monthLabels = const [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec'
-  ];
-  final List<Map<String, dynamic>> categoryData = const [
-    {'name': 'Flour & Grains', 'value': 28, 'color': Color(0xFF123A8F)},
-    {'name': 'Dairy', 'value': 22, 'color': Color(0xFFD4AF37)},
-    {'name': 'Oils & Fats', 'value': 18, 'color': Color(0xFF2E7D32)},
-    {'name': 'Pharma', 'value': 15, 'color': Color(0xFFD32F2F)},
-    {'name': 'Others', 'value': 17, 'color': Color(0xFF6B7A99)},
+  static const List<Color> _categoryColors = [
+    navy,
+    gold,
+    Color(0xFF2E7D32),
+    Color(0xFFD32F2F),
+    muted,
   ];
 
   @override
@@ -17140,7 +17898,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _loadReports() async {
     try {
-      final data = await _reportsService.load(businessId: 'demo-business');
+      final businessId = await AuthService().getActiveBusinessId();
+      if (businessId == null || businessId.isEmpty) {
+        throw Exception('Please sign in to load reports.');
+      }
+      final data = await _reportsService.load(businessId: businessId);
       if (!mounted) return;
       setState(() {
         _reportData = data;
@@ -17162,8 +17924,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) {
     final report = _reportData;
-    final weekSales = report?.totalRevenue ?? 0;
-    final avgMargin = report?.profitMarginPercentage ?? 0;
+    final weekSales = report?.weekSales ?? 0;
+    final avgMargin = report?.avgMargin ?? 0;
+    final today = _trends
+        .where((trend) => trend.isToday)
+        .cast<ReportTrend?>()
+        .firstWhere((trend) => trend != null,
+            orElse: () => _trends.isEmpty ? null : _trends.last);
 
     return Column(
       children: [
@@ -17221,7 +17988,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: EdgeInsets.only(top: 12),
-                  child: Text('Live reporting window · Last 7 days',
+                  child: Text(
+                      'Week of ${report?.currentMonth ?? ''} ${report?.year ?? DateTime.now().year} · Up to ${today?.day ?? 'Today'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: Colors.white60, fontSize: 12)),
                 ),
               ),
@@ -17230,16 +18000,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 children: [
                   _metricCard(
                       "Today's Sales",
-                      'KSh ${_trends.isEmpty ? 0 : (_trends.last.revenue / 1000).round()}K',
-                      _trends.isEmpty ? '—' : _formatDate(_trends.last.date)),
+                      'KSh ${((report?.todaySales ?? 0) / 1000).round()}K',
+                      today?.day ?? 'Today'),
                   _metricCard(
                       'Week Sales',
                       'KSh ${(weekSales / 1000).round()}K',
-                      'COGS ${(report?.totalCostOfGoods ?? 0).round()} · Exp ${(report?.totalExpenses ?? 0).round()}'),
-                  _metricCard(
-                      'Net Profit',
-                      'KSh ${((report?.netProfit ?? 0) / 1000).round()}K',
-                      '${avgMargin.toStringAsFixed(1)}% margin'),
+                      'Mon - ${today?.day ?? 'Today'}'),
+                  _metricCard('Avg Margin', '${avgMargin.toStringAsFixed(1)}%',
+                      'This week'),
                 ],
               ),
             ],
@@ -17345,8 +18113,49 @@ class _ReportsScreenState extends State<ReportsScreen> {
   double get _profitMaxY {
     final maximum = _trends.fold<double>(
         0, (value, item) => item.profit > value ? item.profit : value);
+    return maximum > 0 ? maximum * 1.2 : 1;
+  }
+
+  double get _profitMinY {
+    final minimum = _trends.fold<double>(
+        0, (value, item) => item.profit < value ? item.profit : value);
+    return minimum < 0 ? minimum * 1.2 : 0;
+  }
+
+  double get _profitAxisInterval {
+    final range = _profitMaxY - _profitMinY;
+    return range <= 4 ? 1 : range / 4;
+  }
+
+  List<ReportMonth> get _months => _reportData?.monthly ?? const [];
+  List<double> get months => _months.map((month) => month.sales).toList();
+  List<String> get monthLabels => _months.map((month) => month.month).toList();
+  List<Map<String, dynamic>> get categoryData =>
+      (_reportData?.categories ?? const [])
+          .asMap()
+          .entries
+          .map((entry) => {
+                'name': entry.value.name,
+                'value': entry.value.percent,
+                'color': _categoryColors[entry.key % _categoryColors.length],
+              })
+          .toList();
+  double get _monthMaxY {
+    final maximum =
+        months.fold<double>(0, (value, sales) => sales > value ? sales : value);
     return maximum <= 0 ? 1 : maximum * 1.2;
   }
+
+  double get _monthSalesPeak {
+    final maximum =
+        months.fold<double>(0, (value, sales) => sales > value ? sales : value);
+    return maximum <= 0 ? 1 : maximum;
+  }
+
+  String _money(double value) => value
+      .round()
+      .toString()
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (match) => ',');
 
   Widget _daily() => Column(
         children: [
@@ -17466,8 +18275,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
         title: 'Daily Breakdown',
         child: Column(
           children: List.generate(_trends.length, (index) {
-            final value = _trends[index].revenue;
-            final label = _formatDate(_trends[index].date);
+            final trend = _trends[index];
+            final value = trend.revenue;
+            final label =
+                trend.day.isEmpty ? _formatDate(trend.date) : trend.day;
             final width = (value / _chartMaxY).clamp(0.0, 1.0);
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -17477,11 +18288,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       width: 44,
                       child: Text(label,
                           style: TextStyle(
-                              color: index == _trends.length - 1
+                              color: trend.isToday
                                   ? navy
-                                  : const Color(0xFF6B7A99),
+                                  : trend.future
+                                      ? const Color(0xFFC8D0E0)
+                                      : const Color(0xFF6B7A99),
                               fontSize: 11,
-                              fontWeight: index == _trends.length - 1
+                              fontWeight: trend.isToday
                                   ? FontWeight.w800
                                   : FontWeight.w600))),
                   const SizedBox(width: 6),
@@ -17497,11 +18310,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           ),
                         ),
                         FractionallySizedBox(
-                          widthFactor: width,
+                          widthFactor: trend.future ? 0 : width,
                           child: Container(
                             height: 7,
                             decoration: BoxDecoration(
-                              color: index == _trends.length - 1 ? gold : navy,
+                              color: trend.isToday ? gold : navy,
                               borderRadius: BorderRadius.circular(4),
                             ),
                           ),
@@ -17513,7 +18326,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   SizedBox(
                     width: 58,
                     child: Text(
-                      'KSh ${(value / 1000).round()}K',
+                      trend.future ? '—' : 'KSh ${(value / 1000).round()}K',
                       textAlign: TextAlign.right,
                       style: TextStyle(
                         color: const Color(0xFF0D1B3D),
@@ -17590,12 +18403,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget _monthly() => Column(
         children: [
           Section(
-            title: 'Monthly Sales 2026',
+            title: 'Monthly Sales ${_reportData?.year ?? DateTime.now().year}',
             child: SizedBox(
               height: 210,
               child: BarChart(
                 BarChartData(
-                  maxY: 5,
+                  maxY: _monthMaxY,
                   borderData: FlBorderData(show: false),
                   gridData:
                       const FlGridData(show: true, drawVerticalLine: false),
@@ -17605,7 +18418,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           showTitles: true,
                           reservedSize: 36,
                           getTitlesWidget: (value, meta) => Text(
-                              '${value.toInt()}M',
+                              '${(value / 1000).round()}K',
                               style: const TextStyle(
                                   color: Color(0xFF6B7A99), fontSize: 10))),
                     ),
@@ -17633,7 +18446,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       barRods: [
                         BarChartRodData(
                           toY: entry.value,
-                          color: entry.key == 8 ? gold : navy,
+                          color: _months[entry.key].future
+                              ? const Color(0xFFEDF0F7)
+                              : _months[entry.key].isNow
+                                  ? gold
+                                  : navy,
                           width: 14,
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(4)),
@@ -17650,25 +18467,64 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Column(
               children: List.generate(monthLabels.length, (index) {
                 final label = monthLabels[index];
-                final value = months[index];
+                final month = _months[index];
+                final value = month.sales;
+                final ratio = (value / _monthSalesPeak).clamp(0.0, 1.0);
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.only(bottom: 10),
                   child: Row(
                     children: [
                       SizedBox(
-                          width: 34,
-                          child: Text(label,
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Color(0xFF6B7A99),
-                                  fontWeight: FontWeight.w700))),
+                          width: 38,
+                          child: Row(children: [
+                            Text(label,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: month.future
+                                        ? const Color(0xFFC8D0E0)
+                                        : month.isNow
+                                            ? gold
+                                            : muted,
+                                    fontWeight: month.isNow
+                                        ? FontWeight.w800
+                                        : FontWeight.w700)),
+                            if (month.isNow)
+                              const Padding(
+                                  padding: EdgeInsets.only(left: 3),
+                                  child:
+                                      Icon(Icons.circle, size: 5, color: gold))
+                          ])),
+                      const SizedBox(width: 4),
                       Expanded(
+                        child:
+                            Stack(alignment: Alignment.centerLeft, children: [
+                          Container(
+                              height: 6,
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFF0F3F9),
+                                  borderRadius: BorderRadius.circular(3))),
+                          if (!month.future)
+                            FractionallySizedBox(
+                                widthFactor: ratio,
+                                child: Container(
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                        color: month.isNow ? gold : navy,
+                                        borderRadius:
+                                            BorderRadius.circular(3))))
+                        ]),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 74,
                         child: Text(
-                          'KSh ${value.toStringAsFixed(1)}M',
-                          style: const TextStyle(
+                          month.future ? '—' : 'KSh ${_money(value)}',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
                               fontSize: 11,
-                              color: Color(0xFF0D1B3D),
-                              fontWeight: FontWeight.w700),
+                              color:
+                                  month.future ? const Color(0xFFC8D0E0) : ink,
+                              fontWeight: FontWeight.w800),
                         ),
                       ),
                     ],
@@ -17677,8 +18533,77 @@ class _ReportsScreenState extends State<ReportsScreen> {
               }),
             ),
           ),
+          ..._monthlySummary(),
         ],
       );
+
+  List<Widget> _monthlySummary() {
+    final report = _reportData;
+    final ytd = _months.fold<double>(0, (sum, month) => sum + month.sales);
+    final daysLeft = (report?.daysInMonth ?? 0) - (report?.currentDay ?? 0);
+    final items = [
+      (
+        'Best Month (so far)',
+        report?.bestMonth ?? '-',
+        'Database revenue leader',
+        Icons.emoji_events_outlined,
+        gold
+      ),
+      (
+        'YTD Revenue',
+        'KSh ${_money(ytd)}',
+        'Current calendar year',
+        Icons.trending_up_outlined,
+        const Color(0xFF2E7D32)
+      ),
+      (
+        'Days left in ${report?.currentMonth ?? 'month'}',
+        '$daysLeft days',
+        '${report?.currentDay ?? 0} of ${report?.daysInMonth ?? 0} elapsed',
+        Icons.calendar_today_outlined,
+        navy
+      ),
+    ];
+    return items
+        .map((item) => Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Color(0x0F000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 2))
+                ]),
+            child: Row(children: [
+              Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                      color: item.$5.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Icon(item.$4, color: item.$5, size: 22)),
+              const SizedBox(width: 14),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(item.$1,
+                        style: const TextStyle(color: muted, fontSize: 11)),
+                    const SizedBox(height: 2),
+                    Text(item.$2,
+                        style: TextStyle(
+                            color: item.$5,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800)),
+                    Text(item.$3,
+                        style: const TextStyle(color: muted, fontSize: 11))
+                  ]))
+            ])))
+        .toList();
+  }
 
   Widget _profit() => Column(
         children: [
@@ -17688,15 +18613,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
               height: 190,
               child: BarChart(
                 BarChartData(
+                  minY: _profitMinY,
                   maxY: _profitMaxY,
                   borderData: FlBorderData(show: false),
-                  gridData:
-                      const FlGridData(show: true, drawVerticalLine: false),
+                  gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      horizontalInterval: _profitAxisInterval),
                   titlesData: FlTitlesData(
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
                           showTitles: true,
                           reservedSize: 42,
+                          interval: _profitAxisInterval,
                           getTitlesWidget: (value, meta) => Text(
                               '${(value / 1000).round()}K',
                               style: const TextStyle(
@@ -17726,7 +18655,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       barRods: [
                         BarChartRodData(
                           toY: entry.value.profit,
-                          color: entry.key == 3 ? gold : Colors.green,
+                          color: _trends[entry.key].future
+                              ? const Color(0xFFEDF0F7)
+                              : _trends[entry.key].isToday
+                                  ? gold
+                                  : const Color(0xFF2E7D32),
                           width: 20,
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(5)),
@@ -17738,34 +18671,109 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             ),
           ),
-          Section(
-            title: 'Net Profit (week to date)',
-            child: Row(
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEAF8EE),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text('KSh 181,650',
-                      style: TextStyle(
-                          color: Color(0xFF1B5E20),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800)),
-                ),
-                const SizedBox(width: 12),
-                const Text('26.0% margin',
-                    style: TextStyle(
-                        color: Color(0xFF2E7D32),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700)),
-              ],
-            ),
-          ),
+          ..._profitSummary(),
+          _monthlyProfit(),
         ],
       );
+
+  List<Widget> _profitSummary() {
+    final report = _reportData;
+    final sales = report?.weekSales ?? 0;
+    final gross = report?.weekProfit ?? 0;
+    final expenses = report?.weekExpenses ?? 0;
+    final net = gross - expenses;
+    final rows = [
+      (
+        'Gross Profit (week to date)',
+        gross,
+        sales == 0 ? 0 : gross / sales * 100,
+        const Color(0xFF2E7D32)
+      ),
+      (
+        'Operating Expenses',
+        expenses,
+        sales == 0 ? 0 : expenses / sales * 100,
+        const Color(0xFFD32F2F)
+      ),
+      (
+        'Net Profit (week to date)',
+        net,
+        sales == 0 ? 0 : net / sales * 100,
+        navy
+      ),
+    ];
+    return rows
+        .map((row) => Section(
+            title: row.$1,
+            child: Row(children: [
+              Expanded(
+                  child: Text('KSh ${_money(row.$2)}',
+                      style: TextStyle(
+                          color: row.$4,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800))),
+              Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                      color: row.$4.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(999)),
+                  child: Text('${row.$3.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                          color: row.$4,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800)))
+            ])))
+        .toList();
+  }
+
+  Widget _monthlyProfit() => Section(
+      title: 'Monthly Profit ${_reportData?.year ?? DateTime.now().year}',
+      child: SizedBox(
+          height: 170,
+          child: LineChart(LineChartData(
+              minY: 0,
+              maxY: _months.fold<double>(
+                          0,
+                          (max, item) =>
+                              item.profit > max ? item.profit : max) *
+                      1.2 +
+                  1,
+              gridData: const FlGridData(show: true, drawVerticalLine: false),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 42,
+                          getTitlesWidget: (value, meta) => Text(
+                              '${(value / 1000).round()}K',
+                              style: const TextStyle(
+                                  color: muted, fontSize: 10)))),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 22,
+                          getTitlesWidget: (value, meta) {
+                            final index = value.toInt();
+                            if (index < 0 || index >= _months.length) {
+                              return const SizedBox.shrink();
+                            }
+                            return Text(_months[index].month,
+                                style: const TextStyle(
+                                    color: muted, fontSize: 10));
+                          }))),
+              lineBarsData: [
+                _line(
+                    _months
+                        .map((month) => month.future ? 0.0 : month.profit)
+                        .toList(),
+                    const Color(0xFF2E7D32))
+              ]))));
 }
 
 class Metric extends StatelessWidget {
