@@ -55,7 +55,7 @@ jobs:
           SENTRY_ENVIRONMENT: production
         run: |
           cd flutter_app
-          flutter build apk --release \
+          flutter build apk --release --verbose \
             --dart-define=MOBIDUKA_API_ORIGIN="$MOBIDUKA_API_ORIGIN" \
             --dart-define=SENTRY_DSN="$SENTRY_DSN" \
             --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT"
