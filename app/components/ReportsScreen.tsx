@@ -63,22 +63,36 @@ export default function ReportsScreen({ onNavigate }: Props) {
   const [tab, setTab] = useState<'daily' | 'monthly' | 'profit'>('daily')
   const [report, setReport] = useState<ReportsData | null>(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
   const c = useColors()
 
   useEffect(() => {
+    let active = true
     const session = getClientSession()
-    if (!session) { setError('Please sign in to load reports.'); return }
-    apiFetch<ReportsData>(`/api/reports/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(setReport)
-      .catch(reason => setError(reason instanceof Error ? reason.message : 'Unable to load reports.'))
+    if (!session) {
+      setError('Please sign in to load reports.')
+      setLoading(false)
+      return () => { active = false }
+    }
+    apiFetch<ReportsData>(`/api/reports/summary?businessId=${encodeURIComponent(session.user.businessId)}`, { cache: 'no-store' })
+      .then(response => {
+        if (!active) return
+        setReport(response)
+        setError('')
+      })
+      .catch(reason => {
+        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load reports.')
+      })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [])
 
   const weekData = report?.trends ?? []
   const monthData = report?.monthly ?? []
   const categoryData: CategoryPoint[] = (report?.categories ?? []).map((category, index) => ({ ...category, color: ['#123A8F', '#D4AF37', '#2E7D32', '#D32F2F', '#6B7A99'][index % 5] }))
-  const todayLabel = weekData.find(d => d.isToday)?.day ?? 'Today'
-  const curMonthLabel = report?.summary.currentMonth ?? 'Current month'
-  const year = report?.summary.year ?? new Date().getFullYear()
+  const todayLabel = weekData.find(d => d.isToday)?.day ?? ''
+  const curMonthLabel = report?.summary.currentMonth ?? ''
+  const year = report?.summary.year ?? 0
   const todaySales = report?.summary.todaySales ?? 0
   const weekSales = report?.summary.weekSales ?? 0
   const weekProfit = report?.summary.weekProfit ?? 0
@@ -88,8 +102,6 @@ export default function ReportsScreen({ onNavigate }: Props) {
   const weekExpenses = report?.summary.weekExpenses ?? 0
   const maxWeekSales = Math.max(...weekData.map(day => day.sales), 1)
   const maxMonthSales = Math.max(...monthData.map(month => month.sales), 1)
-
-  if (error) return <div className="screen" style={{ background: c.bg, padding: 24, color: '#D32F2F' }}>{error}</div>
 
   return (
     <div className="screen" style={{ background: c.bg }}>
@@ -106,7 +118,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
           <div style={{ flex: 1 }}>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Reports & Analytics</div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 1 }}>
-              Week of {curMonthLabel} {year} · Up to {todayLabel}
+              {report ? `Week of ${curMonthLabel} ${year} · Up to ${todayLabel}` : 'Loading live store data...'}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(46,125,50,0.28)', borderRadius: 100, padding: '4px 10px', border: '1px solid rgba(76,175,80,0.4)' }}>
@@ -117,9 +129,9 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
         <div style={{ display: 'flex', gap: 8 }}>
           {[
-            { label: "Today's Sales",  value: `KSh ${(todaySales / 1000).toFixed(0)}K`,  color: 'white',    sub: todayLabel },
-            { label: 'Week Sales',     value: `KSh ${(weekSales  / 1000).toFixed(0)}K`,  color: '#D4AF37',  sub: `Mon – ${todayLabel}` },
-            { label: 'Avg Margin',     value: `${avgMargin}%`,                            color: '#4CAF50',  sub: 'This week' },
+            { label: "Today's Sales",  value: report ? `KSh ${(todaySales / 1000).toFixed(0)}K` : '—',  color: 'white',    sub: todayLabel || 'Live data' },
+            { label: 'Week Sales',     value: report ? `KSh ${(weekSales  / 1000).toFixed(0)}K` : '—',  color: '#D4AF37',  sub: todayLabel ? `Mon – ${todayLabel}` : 'Live data' },
+            { label: 'Avg Margin',     value: report ? `${avgMargin}%` : '—',             color: '#4CAF50',  sub: 'This week' },
           ].map((s, i) => (
             <div key={i} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', borderRadius: 12, padding: '10px' }}>
               <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', marginBottom: 3 }}>{s.label}</div>
@@ -143,8 +155,20 @@ export default function ReportsScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
 
+        {loading && (
+          <div className="card" style={{ padding: 24, textAlign: 'center', color: c.muted, fontSize: 13 }}>
+            Loading live sales, expense, and inventory data...
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="card" style={{ padding: 16, color: '#D32F2F', fontSize: 13 }}>
+            {error}
+          </div>
+        )}
+
         {/* ══ DAILY ══ */}
-        {tab === 'daily' && (
+        {!loading && !error && tab === 'daily' && (
           <>
             {/* Weekly area chart */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
@@ -253,7 +277,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
         )}
 
         {/* ══ MONTHLY ══ */}
-        {tab === 'monthly' && (
+        {!loading && !error && tab === 'monthly' && (
           <>
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 4 }}>Monthly Sales {year}</div>
@@ -337,7 +361,7 @@ export default function ReportsScreen({ onNavigate }: Props) {
         )}
 
         {/* ══ PROFIT ══ */}
-        {tab === 'profit' && (
+        {!loading && !error && tab === 'profit' && (
           <>
             {/* Weekly profit bars */}
             <div className="card" style={{ padding: '16px', marginBottom: 16 }}>
