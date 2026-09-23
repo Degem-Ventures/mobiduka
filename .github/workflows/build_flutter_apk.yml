@@ -48,15 +48,24 @@ jobs:
 
       - name: Align legacy printer plugin SDK
         run: |
-          plugin_gradle="$(find "${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev" -path '*/bluetooth_print_plus-*/android/build.gradle' -print -quit)"
-          if [ -z "$plugin_gradle" ]; then
+          plugin_path="$(node -e '
+            const fs = require("fs");
+            const plugins = JSON.parse(fs.readFileSync("./flutter_app/.flutter-plugins-dependencies", "utf8"));
+            const plugin = plugins.plugins.android.find((item) => item.name === "bluetooth_print_plus");
+            process.stdout.write(plugin?.path ?? "");
+          ')"
+          plugin_gradle="$plugin_path/android/build.gradle"
+          if [ -z "$plugin_path" ] || [ ! -f "$plugin_gradle" ]; then
             echo "bluetooth_print_plus Android Gradle file was not found."
             exit 1
           fi
           # bluetooth_print_plus 2.4.6 pins API 31, while its AndroidX
           # dependencies require API 34+. Patch it before Gradle evaluates it.
-          sed -i -E 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 36/' "$plugin_gradle"
-          grep -q 'compileSdkVersion 36' "$plugin_gradle"
+          sed -i -E \
+            -e 's/compileSdkVersion[[:space:]]+[^[:space:]]+/compileSdkVersion 36/' \
+            -e 's/compileSdk[[:space:]]*=[[:space:]]*[^[:space:]]+/compileSdk = 36/' \
+            "$plugin_gradle"
+          grep -q -E 'compileSdkVersion[[:space:]]+36|compileSdk[[:space:]]*=[[:space:]]*36' "$plugin_gradle"
 
       - name: Build Release APK
         env:
