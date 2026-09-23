@@ -67,10 +67,26 @@ jobs:
           SENTRY_ENVIRONMENT: production
         run: |
           cd flutter_app
-          flutter build apk --release --verbose \
+          set -o pipefail
+          if ! flutter build apk --release \
             --dart-define=MOBIDUKA_API_ORIGIN="$MOBIDUKA_API_ORIGIN" \
             --dart-define=SENTRY_DSN="$SENTRY_DSN" \
-            --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT"
+            --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
+            2>&1 | tee "$RUNNER_TEMP/flutter-apk-build.log"; then
+            echo "::group::Flutter build failure summary"
+            grep -i -E -C 12 'FAILURE:|What went wrong|Execution failed|BUILD FAILED|error:|Exception|Caused by:' \
+              "$RUNNER_TEMP/flutter-apk-build.log" || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Upload Flutter build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk-build-log
+          path: ${{ runner.temp }}/flutter-apk-build.log
+          if-no-files-found: ignore
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
