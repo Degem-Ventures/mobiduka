@@ -33,7 +33,13 @@ subprojects {
                     method.parameterCount == 1
             }
             if (android != null && setter != null) {
-                setter.invoke(android, 36)
+                val argument: Any =
+                    if (setter.parameterTypes.single() == String::class.java) {
+                        "36"
+                    } else {
+                        36
+                    }
+                setter.invoke(android, argument)
             }
         }
     }
