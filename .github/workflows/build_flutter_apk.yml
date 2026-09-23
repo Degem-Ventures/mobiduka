@@ -46,6 +46,18 @@ jobs:
           cd flutter_app
           flutter pub get
 
+      - name: Align legacy printer plugin SDK
+        run: |
+          plugin_gradle="$(find "${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev" -path '*/bluetooth_print_plus-*/android/build.gradle' -print -quit)"
+          if [ -z "$plugin_gradle" ]; then
+            echo "bluetooth_print_plus Android Gradle file was not found."
+            exit 1
+          fi
+          # bluetooth_print_plus 2.4.6 pins API 31, while its AndroidX
+          # dependencies require API 34+. Patch it before Gradle evaluates it.
+          sed -i -E 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 36/' "$plugin_gradle"
+          grep -q 'compileSdkVersion 36' "$plugin_gradle"
+
       - name: Build Release APK
         env:
           # Public endpoint: set this as a GitHub Actions repository variable.
