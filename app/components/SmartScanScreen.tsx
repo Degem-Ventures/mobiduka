@@ -7,6 +7,7 @@ type ScannedProduct = { name: string; barcode: string; category: string | null; 
 type ScanLog = { name: string; barcode: string; action: string; time: string; emoji: string }
 type ScanResponse = { found?: boolean; product: ScannedProduct | null; status: string }
 type CartItemSeed = { id: string; name: string; price: number; emoji: string }
+type CategoryItem = { id: string; name: string; emoji: string | null }
 
 interface Props { onNavigate: (s: string, options?: { barcode?: string; productId?: string; cartItem?: CartItemSeed }) => void }
 
@@ -24,6 +25,10 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   const [scanLog, setScanLog]           = useState<ScanLog[]>([])
   const [scanCounts, setScanCounts]     = useState<Record<string, number>>({})
   const [error, setError]               = useState('')
+  const [categories, setCategories]     = useState<CategoryItem[]>([])
+  const [addProductForm, setAddProductForm] = useState({ name: '', price: '', stock: '', categoryId: '', emoji: '📦' })
+  const [savingProduct, setSavingProduct] = useState(false)
+  const [addProductError, setAddProductError] = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const handledCameraScanRef = useRef(false)
@@ -36,8 +41,12 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       setError('Please sign in to use SmartScan.')
       return
     }
-    apiFetch<{ scanActivity: { counts: Record<string, number>; recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(response => {
+    Promise.all([
+      apiFetch<{ scanActivity: { counts: Record<string, number>; recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<CategoryItem[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
+    ]).then(([response, categoryRows]) => {
+        setCategories(categoryRows)
+        setAddProductForm(form => ({ ...form, categoryId: form.categoryId || categoryRows[0]?.id || '' }))
         setScanCounts(response.scanActivity.counts)
         setScanLog(response.scanActivity.recent.map(scan => ({
           name: scan.name,
@@ -166,7 +175,47 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     }
   }
 
-  const reset = () => { setMode('idle'); setScanned(''); setProduct(null); setAddedToCart(false) }
+  const saveMissingProduct = async () => {
+    const name = addProductForm.name.trim()
+    const price = Number(addProductForm.price)
+    const stock = Number(addProductForm.stock || 0)
+    const session = getClientSession()
+    if (!session || !name || !addProductForm.categoryId || !Number.isFinite(price) || price < 0 || !Number.isFinite(stock) || stock < 0) return
+    setSavingProduct(true)
+    setAddProductError('')
+    try {
+      await apiFetch('/api/products', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessId: session.user.businessId,
+          name,
+          barcode: scanned,
+          categoryId: addProductForm.categoryId,
+          costPrice: 0,
+          sellingPrice: price,
+          stock,
+          minimumStock: 0,
+          emoji: addProductForm.emoji,
+        }),
+      })
+      setAddProductForm({ name: '', price: '', stock: '', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+      await lookup(scanned)
+    } catch (reason) {
+      setAddProductError(reason instanceof Error ? reason.message : 'Unable to add product.')
+    } finally {
+      setSavingProduct(false)
+    }
+  }
+
+  const reset = () => {
+    setMode('idle')
+    setScanned('')
+    setProduct(null)
+    setAddedToCart(false)
+    setSavingProduct(false)
+    setAddProductError('')
+    setAddProductForm({ name: '', price: '', stock: '', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+  }
 
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current) }, [])
 
@@ -362,14 +411,39 @@ export default function SmartScanScreen({ onNavigate }: Props) {
         {/* ── Unknown product ── */}
         {mode === 'unknown' && (
           <div style={{ padding: '16px', background: c.bg }}>
-            <div className="card" style={{ padding: '20px', marginBottom: 12, textAlign: 'center' }}>
+            <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
               <div style={{ fontSize: 40, marginBottom: 8 }}>❓</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: c.text, marginBottom: 4 }}>Product Not Found</div>
               <div style={{ fontSize: 12, color: c.muted, fontFamily: 'monospace', background: c.cardAlt, borderRadius: 8, padding: '6px 12px', marginBottom: 16, display: 'inline-block' }}>{scanned}</div>
-              <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>This barcode isn't in your inventory yet.</div>
+              <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>Add this barcode to your inventory.</div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name *</label>
+                <input className="input" placeholder="e.g. Unga Jogoo 2kg" value={addProductForm.name} onChange={e => setAddProductForm(form => ({ ...form, name: e.target.value }))} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
+                <select className="input" value={addProductForm.categoryId} onChange={e => setAddProductForm(form => ({ ...form, categoryId: e.target.value }))}>
+                  <option value="">Select category</option>
+                  {categories.map(category => <option key={category.id} value={category.id}>{category.emoji ?? '📦'} {category.name}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Selling Price (KSh) *</label>
+                  <input className="input" type="number" min="0" placeholder="0" value={addProductForm.price} onChange={e => setAddProductForm(form => ({ ...form, price: e.target.value }))} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Opening Stock</label>
+                  <input className="input" type="number" min="0" placeholder="0" value={addProductForm.stock} onChange={e => setAddProductForm(form => ({ ...form, stock: e.target.value }))} />
+                </div>
+              </div>
+              {addProductError && <div style={{ color: '#C62828', fontSize: 12, marginBottom: 12 }}>{addProductError}</div>}
+              {!categories.length && <div style={{ color: c.muted, fontSize: 12, marginBottom: 12 }}>No product categories are available yet. Add a category in Inventory first.</div>}
               <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn" onClick={() => onNavigate('inventory', { barcode: scanned })} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Add Product</button>
                 <button className="btn" onClick={reset} style={{ flex: 1, padding: '12px', background: c.cardAlt, border: c.divider, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Dismiss</button>
+                <button className="btn" onClick={() => void saveMissingProduct()} disabled={savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.price.trim()} style={{ flex: 1, padding: '12px', background: savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.price.trim() ? c.cardAlt : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.price.trim() ? c.faint : 'white', cursor: savingProduct ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                  {savingProduct ? 'Saving...' : 'Add Product'}
+                </button>
               </div>
             </div>
           </div>

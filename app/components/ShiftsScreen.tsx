@@ -7,7 +7,7 @@ type ShiftType = { id: string; code: string; name: string; scheduledStart: strin
 interface ShiftRecord {
   id: string; cashierId: string | null; cashier: string; initials: string
   type: string; label: string; icon: string; color: string
-  start: string; end: string | null; sales: number; amount: number; date: string
+  start: string; end: string | null; openedAt: string; sales: number; amount: number; date: string
 }
 
 interface Props { onNavigate: (s: string) => void }
@@ -66,8 +66,8 @@ export default function ShiftsScreen({ onNavigate }: Props) {
       if (!selectedStaff && staff[0]) setSelectedStaff(staff[0].id)
       const mappedSessions = operationalSessions.map(item => {
         const type = item.shift ?? shiftTypeResponse.shiftTypes.find(shift => shift.code === item.shiftType) ?? shiftTypeResponse.shiftTypes[0]
-        return { id: item.id, cashierId: item.cashier?.id ?? null, cashier: item.cashier?.fullName ?? 'Unknown', initials: item.cashier?.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() ?? '??', type: type?.code ?? item.shiftType, label: type?.name ?? item.shiftType, icon: type?.icon ?? '🕐', color: type?.color ?? '#123A8F', start: new Date(item.openedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), end: item.closedAt ? new Date(item.closedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null, sales: item.sales, amount: Number(item.amount), date: new Date(item.openedAt).toLocaleDateString() }
-      })
+        return { id: item.id, cashierId: item.cashier?.id ?? null, cashier: item.cashier?.fullName ?? 'Unknown', initials: item.cashier?.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() ?? '??', type: type?.code ?? item.shiftType, label: type?.name ?? item.shiftType, icon: type?.icon ?? '🕐', color: type?.color ?? '#123A8F', start: new Date(item.openedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), end: item.closedAt ? new Date(item.closedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null, openedAt: item.openedAt, sales: item.sales, amount: Number(item.amount), date: new Date(item.openedAt).toLocaleDateString() }
+      }).sort((left, right) => new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime())
       setPastShifts(mappedSessions)
       const active = operationalSessions.find(item => !item.closedAt)
       if (active) setActiveShift(mappedSessions.find(shift => shift.id === active.id) ?? null)
@@ -188,13 +188,14 @@ export default function ShiftsScreen({ onNavigate }: Props) {
   if (view === 'active' && activeShift) {
     return (
       <div className="screen" style={{ background: c.bg }}>
+        <style>{`@keyframes shift-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.38; } } .live-shift-badge { animation: shift-live-pulse 1.2s ease-in-out infinite; }`}</style>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setView('list')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Active Shift</div>
-            <span style={{ marginLeft: 'auto', background: 'rgba(46,125,50,0.3)', border: '1px solid rgba(46,125,50,0.5)', borderRadius: 100, padding: '4px 12px', fontSize: 11, fontWeight: 700, color: '#A5D6A7' }}>● LIVE</span>
+            <span className="live-shift-badge" style={{ marginLeft: 'auto', background: 'rgba(46,125,50,0.3)', border: '1px solid rgba(46,125,50,0.5)', borderRadius: 100, padding: '4px 12px', fontSize: 11, fontWeight: 700, color: '#A5D6A7' }}>● LIVE</span>
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
@@ -251,6 +252,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
 
   return (
     <div className="screen" style={{ background: c.bg }}>
+      <style>{`@keyframes shift-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.38; } } .live-shift-badge { animation: shift-live-pulse 1.2s ease-in-out infinite; }`}</style>
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <button className="btn" onClick={() => onNavigate('employees')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -317,7 +319,7 @@ export default function ShiftsScreen({ onNavigate }: Props) {
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>KSh {s.amount.toLocaleString()}</div>
-                    <span className={s.end ? 'badge badge-success' : 'badge'} style={{ fontSize: 10, marginTop: 4, color: s.end ? undefined : '#2E7D32', background: s.end ? undefined : '#E8F5E9' }}>{s.end ? 'Closed' : 'In Progress'}</span>
+                    <span className={s.end ? 'badge badge-success' : 'badge live-shift-badge'} style={{ fontSize: 10, marginTop: 4, color: s.end ? undefined : '#2E7D32', background: s.end ? undefined : '#E8F5E9' }}>{s.end ? 'Closed' : '● In Progress'}</span>
                   </div>
                 </div>
               </div>
