@@ -16303,8 +16303,11 @@ class ShiftManagementScreen extends StatefulWidget {
   State<ShiftManagementScreen> createState() => _ShiftManagementScreenState();
 }
 
-class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
+class _ShiftManagementScreenState extends State<ShiftManagementScreen>
+    with SingleTickerProviderStateMixin {
   final EmployeeRepository _repository = EmployeeRepository();
+  late final AnimationController _liveController;
+  late final Animation<double> _liveOpacity;
   List<Map<String, dynamic>> _employees = const [];
   List<Map<String, dynamic>> _types = const [];
   List<Map<String, dynamic>> _sessions = const [];
@@ -16318,7 +16321,20 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
   @override
   void initState() {
     super.initState();
+    _liveController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+      lowerBound: .38,
+      upperBound: 1,
+    )..repeat(reverse: true);
+    _liveOpacity = _liveController;
     _load();
+  }
+
+  @override
+  void dispose() {
+    _liveController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -16329,10 +16345,22 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
         _repository.loadCashSessions()
       ]);
       if (!mounted) return;
+      final sessions = (data[2] as List<Map<String, dynamic>>).toList()
+        ..sort((left, right) => _openedAt(right).compareTo(_openedAt(left)));
       setState(() {
-        _employees = data[0] as List<Map<String, dynamic>>;
-        _types = data[1] as List<Map<String, dynamic>>;
-        _sessions = data[2] as List<Map<String, dynamic>>;
+        _employees = (data[0] as List<Map<String, dynamic>>)
+            .where((employee) => const {'CASHIER', 'SUPERVISOR'}
+                .contains(employee['role']?.toString().toUpperCase()))
+            .toList();
+        _types = (data[1] as List<Map<String, dynamic>>).toList()
+          ..sort((left, right) {
+            final start = _minutes(left['scheduledStart']?.toString());
+            final otherStart = _minutes(right['scheduledStart']?.toString());
+            if (start != otherStart) return start - otherStart;
+            return (left['name']?.toString() ?? '')
+                .compareTo(right['name']?.toString() ?? '');
+          });
+        _sessions = sessions;
         _selectedEmployee = _selectedEmployee.isNotEmpty
             ? _selectedEmployee
             : (_availableEmployees.isEmpty
@@ -16387,20 +16415,20 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
   }
 
   bool _availableNow(Map<String, dynamic> type) {
-    int minutes(String raw) {
-      final parts = raw.split(':');
-      return (int.tryParse(parts.first) ?? 0) * 60 +
-          (parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0);
-    }
-
     final now = TimeOfDay.now();
     final current = now.hour * 60 + now.minute;
-    final start = minutes(type['scheduledStart']?.toString() ?? '00:00');
-    final end = minutes(type['scheduledEnd']?.toString() ?? '00:00');
+    final start = _minutes(type['scheduledStart']?.toString());
+    final end = _minutes(type['scheduledEnd']?.toString());
     return start == end ||
         (start < end
             ? current >= start && current < end
             : current >= start || current < end);
+  }
+
+  int _minutes(String? raw) {
+    final parts = (raw ?? '00:00').split(':');
+    return (int.tryParse(parts.first) ?? 0) * 60 +
+        (parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0);
   }
 
   Future<void> _start() async {
@@ -16443,6 +16471,10 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
         ? '--:--'
         : '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
+
+  DateTime _openedAt(Map<String, dynamic> session) =>
+      DateTime.tryParse(session['openedAt']?.toString() ?? '') ??
+      DateTime.fromMillisecondsSinceEpoch(0);
 
   String _name(Map? row) => row?['fullName']?.toString() ?? 'Unknown employee';
   Widget _header(String title, {Widget? action}) => Container(
@@ -16556,11 +16588,14 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
           backgroundColor: const Color(0xFFF5F7FA),
           body: Column(children: [
             _header('Active Shift',
-                action: const Chip(
-                    label: Text('LIVE'),
-                    backgroundColor: Color(0x55388E3C),
-                    labelStyle: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w800))),
+                action: FadeTransition(
+                    opacity: _liveOpacity,
+                    child: const Chip(
+                        label: Text('LIVE'),
+                        backgroundColor: Color(0x55388E3C),
+                        labelStyle: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800)))),
             Expanded(
                 child: ListView(padding: const EdgeInsets.all(16), children: [
               _card(
@@ -16593,23 +16628,35 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
             ]))
           ]));
     }
-    final history = _sessions
-        .where((session) => session['closedAt'] != null)
-        .toList()
-        .reversed;
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final session in _sessions) {
+      final date = _date(session['openedAt']);
+      grouped.putIfAbsent(date, () => []).add(session);
+    }
+    final today = _date(DateTime.now());
+    final todaySessions = grouped[today] ?? const [];
+    final todaySales = todaySessions.fold<int>(0,
+        (total, session) => total + ((session['sales'] as num?)?.toInt() ?? 0));
+    final todayRevenue = todaySessions.fold<num>(
+        0, (total, session) => total + ((session['amount'] as num?) ?? 0));
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       body: Column(children: [
         _header('Shift Management',
-            action: TextButton.icon(
-              onPressed: () {
-                _load();
-                setState(() => _view = active == null ? 'start' : 'active');
+            action: TextButton(
+              onPressed: () async {
+                await _load();
+                if (mounted) setState(() => _view = 'start');
               },
-              icon: const Icon(Icons.add, color: ink),
-              label: const Text('Start',
-                  style: TextStyle(color: ink, fontWeight: FontWeight.w800)),
-              style: TextButton.styleFrom(backgroundColor: gold),
+              style: TextButton.styleFrom(
+                  backgroundColor: gold,
+                  foregroundColor: ink,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              child: const Text('+ Start',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
             )),
         Expanded(
             child: ListView(padding: const EdgeInsets.all(16), children: [
@@ -16624,38 +16671,204 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
                     child: CircularProgressIndicator()))
           else ...[
             if (active == null)
-              _card(
-                  child: const ListTile(
-                      leading: Icon(Icons.schedule, color: Color(0xFFF9A825)),
-                      title: Text('No Active Shift'),
-                      subtitle:
-                          Text('Start a shift to track cashier performance')))
-            else
-              _card(
-                  child: ListTile(
-                      onTap: () => setState(() => _view = 'active'),
-                      leading: const Icon(Icons.play_circle_fill,
-                          color: Color(0xFF2E7D32)),
-                      title: const Text('Shift in progress'),
-                      subtitle: Text(
-                          '${_name(active['cashier'] as Map?)} · ${_time(active['openedAt'])}'))),
-            const Text('Shift History',
-                style: TextStyle(
-                    color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 10),
-            ...history.map((session) => _card(
-                child: ListTile(
-                    leading: const Icon(Icons.history, color: navy),
-                    title: Text(_name(session['cashier'] as Map?)),
-                    subtitle: Text(
-                        '${session['shiftType'] ?? 'Shift'} · ${_time(session['openedAt'])} - ${_time(session['closedAt'])}'),
-                    trailing: Text('KSh ${session['amount'] ?? 0}',
-                        style: const TextStyle(
-                            color: navy, fontWeight: FontWeight.w800))))),
+              Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8E1),
+                      border: Border.all(color: const Color(0xFFFFE082)),
+                      borderRadius: BorderRadius.circular(14)),
+                  child: Row(children: [
+                    const Text('⏰', style: TextStyle(fontSize: 24)),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                          Text('No Active Shift',
+                              style: TextStyle(
+                                  color: Color(0xFF5D4037),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800)),
+                          SizedBox(height: 2),
+                          Text('Start a shift to track cashier performance',
+                              style: TextStyle(
+                                  color: Color(0xFF8D6E63), fontSize: 12)),
+                        ])),
+                    TextButton(
+                        onPressed: () => setState(() => _view = 'start'),
+                        style: TextButton.styleFrom(
+                            backgroundColor: gold, foregroundColor: ink),
+                        child: const Text('Start',
+                            style: TextStyle(fontWeight: FontWeight.w800)))
+                  ])),
+            Row(children: [
+              _summaryCard('Today Shifts', '${todaySessions.length}'),
+              const SizedBox(width: 10),
+              _summaryCard('Today Sales', '$todaySales'),
+              const SizedBox(width: 10),
+              _summaryCard('Today Revenue', 'KSh ${_money(todayRevenue)}'),
+            ]),
+            const SizedBox(height: 16),
+            ...grouped.entries.map((entry) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                            padding: const EdgeInsets.only(left: 4, bottom: 8),
+                            child: Text(entry.key.toUpperCase(),
+                                style: const TextStyle(
+                                    color: muted,
+                                    fontSize: 11,
+                                    letterSpacing: .6,
+                                    fontWeight: FontWeight.w800))),
+                        ...entry.value.map((session) {
+                          final isOpen = session['closedAt'] == null;
+                          final shift = session['shift'] as Map?;
+                          final shiftColor = _shiftColor(shift?['color']);
+                          return _card(
+                              child: InkWell(
+                                  onTap: isOpen
+                                      ? () => setState(() => _view = 'active')
+                                      : null,
+                                  child: Row(children: [
+                                    CircleAvatar(
+                                        radius: 22,
+                                        backgroundColor: navy,
+                                        child: Text(
+                                            _initials(
+                                                session['cashier'] as Map?),
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w800))),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                        child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                          Row(children: [
+                                            Flexible(
+                                                child: Text(
+                                                    _name(session['cashier']
+                                                        as Map?),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                        color: ink,
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w800))),
+                                            const SizedBox(width: 8),
+                                            Flexible(
+                                                child: Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 3),
+                                                    decoration: BoxDecoration(
+                                                        color: shiftColor
+                                                            .withValues(
+                                                                alpha: .12),
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(999)),
+                                                    child: Text(
+                                                        '${shift?['icon'] ?? '🕐'} ${shift?['name'] ?? session['shiftType'] ?? 'Shift'}',
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                            color: shiftColor,
+                                                            fontSize: 10,
+                                                            fontWeight:
+                                                                FontWeight
+                                                                    .w800))))
+                                          ]),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                              '${_time(session['openedAt'])} → ${isOpen ? 'In progress' : _time(session['closedAt'])} · ${session['sales'] ?? 0} sales',
+                                              style: const TextStyle(
+                                                  color: muted, fontSize: 11))
+                                        ])),
+                                    const SizedBox(width: 8),
+                                    Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                              'KSh ${_money(session['amount'] as num? ?? 0)}',
+                                              style: const TextStyle(
+                                                  color: ink,
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w800)),
+                                          const SizedBox(height: 4),
+                                          isOpen
+                                              ? FadeTransition(
+                                                  opacity: _liveOpacity,
+                                                  child: const Text(
+                                                      '● In Progress',
+                                                      style: TextStyle(
+                                                          color:
+                                                              Color(0xFF2E7D32),
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w700)))
+                                              : const Text('Closed',
+                                                  style: TextStyle(
+                                                      color: muted,
+                                                      fontSize: 10,
+                                                      fontWeight:
+                                                          FontWeight.w700))
+                                        ])
+                                  ])));
+                        })
+                      ]),
+                )),
           ],
         ])),
       ]),
     );
+  }
+
+  Widget _summaryCard(String label, String value) => Expanded(
+          child: _card(
+              child: Column(children: [
+        Text(value,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: ink, fontSize: 15, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text(label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: muted, fontSize: 10))
+      ])));
+
+  String _date(Object? raw) {
+    final value =
+        raw is DateTime ? raw : DateTime.tryParse(raw?.toString() ?? '');
+    if (value == null) return 'Unknown date';
+    return '${value.day}/${value.month}/${value.year}';
+  }
+
+  String _initials(Map? cashier) {
+    final name = _name(cashier);
+    return name
+        .split(' ')
+        .where((part) => part.isNotEmpty)
+        .map((part) => part[0])
+        .take(2)
+        .join()
+        .toUpperCase();
+  }
+
+  String _money(num value) => value.round().toString();
+
+  Color _shiftColor(Object? raw) {
+    final hex = raw?.toString().replaceFirst('#', '');
+    final value = hex == null ? null : int.tryParse('FF$hex', radix: 16);
+    return value == null ? navy : Color(value);
   }
 
   Widget _metric(String label, String value) => Expanded(
