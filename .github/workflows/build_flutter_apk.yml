@@ -24,7 +24,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          flutter-version: '3.47.5'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -41,69 +41,72 @@ jobs:
             flutter create --platforms=android .
           fi
 
-          # 1. Force the main mobile application module properties up to SDK 36
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts
-          elif [ -f android/app/build.gradle ]; then
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/' android/app/build.gradle
-          fi
-
-          # 2. Inject a lifecycle-safe global SDK override hook into the root Gradle script.
-          # Bypasses the phase-crash by executing property overrides immediately if already evaluated.
-          if [ -f android/build.gradle.kts ]; then
-            cat >> android/build.gradle.kts <<'EOF'
-          subprojects {
-              val configureProject = Action<Project> {
-                  if (plugins.hasPlugin("com.android.application") || plugins.hasPlugin("com.android.library")) {
-                      val androidExt = extensions.findByName("android") as? com.android.build.gradle.BaseExtension
-                      androidExt?.let {
-                          it.compileSdkVersion(36)
-                          it.buildToolsVersion("36.0.0")
-                          it.defaultConfig.targetSdkVersion(36)
-                      }
-                  }
-              }
-
-              if (state.executed) {
-                  configureProject.execute(this)
-              } else {
-                  afterEvaluate { configureProject.execute(this) }
-              }
-          }
-          EOF
-                    else
-                      cat >> android/build.gradle <<'EOF'
-          subprojects {
-              def configureProject = { project ->
-                  if (project.plugins.hasPlugin('com.android.application') || project.plugins.hasPlugin('com.android.library')) {
-                      project.android {
-                          compileSdkVersion 36
-                          buildToolsVersion "36.0.0"
-                          defaultConfig {
-                              targetSdkVersion 36
-                          }
-                      }
-                  }
-              }
-
-              if (project.state.executed) {
-                  configureProject(project)
-              } else {
-                  project.afterEvaluate { configureProject(project) }
-              }
-          }
-          EOF
-          fi
-
       - name: Install Dependencies
         run: |
           cd flutter_app
           flutter pub get
 
+      - name: Align Android plugin SDKs
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const registry = JSON.parse(fs.readFileSync('flutter_app/.flutter-plugins-dependencies', 'utf8'));
+          let patched = 0;
+
+          for (const plugin of registry.plugins.android ?? []) {
+            for (const filename of ['android/build.gradle', 'android/build.gradle.kts']) {
+              const gradleFile = `${plugin.path}/${filename}`;
+              if (!fs.existsSync(gradleFile)) continue;
+
+              const source = fs.readFileSync(gradleFile, 'utf8');
+              const updated = source
+                // Only replace hard-coded legacy SDK levels. Variable-based
+                // declarations (for example, flutter.compileSdkVersion) must
+                // remain intact for their plugin's Gradle DSL.
+                .replace(/compileSdkVersion\s+(?:31|32|33)\b/g, 'compileSdkVersion 36')
+                .replace(/compileSdk\s*=\s*(?:31|32|33)\b/g, 'compileSdk = 36');
+              if (updated !== source) {
+                fs.writeFileSync(gradleFile, updated);
+                patched += 1;
+                console.log(`Aligned ${plugin.name} to compileSdk 36.`);
+              }
+            }
+          }
+
+          if (patched === 0) {
+            throw new Error('No Android plugin compileSdk declarations were found to align.');
+          }
+          NODE
+
       - name: Build Release APK
+        env:
+          # Public endpoint: set this as a GitHub Actions repository variable.
+          MOBIDUKA_API_ORIGIN: ${{ vars.MOBIDUKA_API_ORIGIN }}
+          # DSNs are safe to embed in clients, but keep the value in Actions secrets.
+          SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          SENTRY_ENVIRONMENT: production
         run: |
           cd flutter_app
-          flutter build apk --release
+          set -o pipefail
+          if ! flutter build apk --release \
+            --dart-define=MOBIDUKA_API_ORIGIN="$MOBIDUKA_API_ORIGIN" \
+            --dart-define=SENTRY_DSN="$SENTRY_DSN" \
+            --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
+            2>&1 | tee "$RUNNER_TEMP/flutter-apk-build.log"; then
+            echo "::group::Flutter build failure summary"
+            grep -i -E -C 12 'FAILURE:|What went wrong|Execution failed|BUILD FAILED|error:|Exception|Caused by:' \
+              "$RUNNER_TEMP/flutter-apk-build.log" || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Upload Flutter build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk-build-log
+          path: ${{ runner.temp }}/flutter-apk-build.log
+          if-no-files-found: ignore
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4

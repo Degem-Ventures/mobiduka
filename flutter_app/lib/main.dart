@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:fl_chart/fl_chart.dart';
@@ -17,6 +16,7 @@ import 'package:sentry_flutter/sentry_flutter.dart';
 import 'services/cash_service.dart';
 import 'services/credit_service.dart';
 import 'services/customer_service.dart';
+import 'services/customer_api_service.dart';
 import 'services/auth_service.dart';
 import 'services/employee_repository.dart';
 import 'services/reports_service.dart';
@@ -34,6 +34,10 @@ import 'services/printer_service.dart';
 import 'services/receipt_pdf_downloader.dart';
 import 'services/sms_watcher_service.dart';
 import 'services/sync_service.dart';
+import 'services/supplier_service.dart';
+import 'services/expense_service.dart';
+import 'services/settings_service.dart';
+import 'services/profile_service.dart';
 import 'widgets/barcode_scanner_view.dart';
 import 'widgets/smart_scan_screen.dart';
 
@@ -56,20 +60,20 @@ Future<void> main() async {
 
   // Render the first screen before optional telemetry initialization.
   runApp(const MobiDukaApp());
-  unawaited(SentryFlutter.init(
-    (options) {
-      const dsn = String.fromEnvironment('SENTRY_DSN');
-      if (dsn.isNotEmpty) {
-        options.dsn = dsn;
+  const sentryDsn = String.fromEnvironment('SENTRY_DSN');
+  if (sentryDsn.isNotEmpty) {
+    unawaited(SentryFlutter.init(
+      (options) {
+        options.dsn = sentryDsn;
         options.environment = const String.fromEnvironment(
           'SENTRY_ENVIRONMENT',
           defaultValue: 'production',
         );
         options.tracesSampleRate = 0.1;
         options.reportPackages = true;
-      }
-    },
-  ));
+      },
+    ));
+  }
 }
 
 String? _lastFlutterError;
@@ -78,6 +82,15 @@ const navy = Color(0xFF123A8F);
 const ink = Color(0xFF0D1B3D);
 const gold = Color(0xFFD4AF37);
 const muted = Color(0xFF6B7A99);
+
+class ActiveShiftNotice {
+  const ActiveShiftNotice({required this.count, required this.employeeName});
+  final int count;
+  final String employeeName;
+}
+
+/// Updated by Shift Management and rendered by the app shell above every view.
+final ValueNotifier<ActiveShiftNotice?> activeShiftNotice = ValueNotifier(null);
 
 class Product {
   const Product(
@@ -144,6 +157,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   int tab = 0;
   bool loggedIn = false;
   bool showingSmartScan = false;
+  bool showingGlobalShiftManagement = false;
   bool isDarkMode = false;
   String activeRole = 'CASHIER';
   String? detail;
@@ -156,6 +170,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       if (!mounted) return;
       unawaited(_loadCatalog());
       unawaited(_loadActiveRole());
+      unawaited(_refreshActiveShiftNotice());
     });
   }
 
@@ -229,6 +244,25 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     setState(() => products = <Product>[]);
   }
 
+  Future<void> _refreshActiveShiftNotice() async {
+    try {
+      final sessions = await EmployeeRepository().loadCashSessions();
+      final active =
+          sessions.where((session) => session['closedAt'] == null).toList();
+      if (active.isEmpty) {
+        activeShiftNotice.value = null;
+        return;
+      }
+      final cashier = active.first['cashier'] as Map?;
+      activeShiftNotice.value = ActiveShiftNotice(
+        count: active.length,
+        employeeName: cashier?['fullName']?.toString() ?? 'Team member',
+      );
+    } catch (_) {
+      // Retain the visible state while the shift API is briefly unavailable.
+    }
+  }
+
   Future<void> _handleLoginAttempt() async {
     if (!mounted) return;
     setState(() {
@@ -236,8 +270,10 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
       tab = 0;
       detail = null;
       activeSessionId = null;
+      showingGlobalShiftManagement = false;
     });
     unawaited(_loadCatalog());
+    unawaited(_refreshActiveShiftNotice());
 
     final role = await _authService.getActiveUserRole();
     if (!mounted) return;
@@ -471,6 +507,10 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     final Widget body;
     if (!loggedIn) {
       body = LoginScreen(onLogin: _handleLoginAttempt);
+    } else if (showingGlobalShiftManagement) {
+      body = ShiftManagementScreen(
+        onBack: () => setState(() => showingGlobalShiftManagement = false),
+      );
     } else if (showingSmartScan) {
       body = SmartScanScreen(
         onProductScanned: _addScannedProductToPos,
@@ -560,18 +600,20 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                   Scaffold(
                     backgroundColor: Colors.transparent,
                     body: body,
-                    bottomNavigationBar:
-                        loggedIn && detail == null && !showingSmartScan
-                            ? BottomAppBar(
-                                shape: const CircularNotchedRectangle(),
-                                notchMargin: 7,
-                                color: const Color(0xFF0A0A0A),
-                                child: SizedBox(
-                                  height: 64,
-                                  child: Row(children: _navigationButtons()),
-                                ),
-                              )
-                            : null,
+                    bottomNavigationBar: loggedIn &&
+                            detail == null &&
+                            !showingSmartScan &&
+                            !showingGlobalShiftManagement
+                        ? BottomAppBar(
+                            shape: const CircularNotchedRectangle(),
+                            notchMargin: 7,
+                            color: const Color(0xFF0A0A0A),
+                            child: SizedBox(
+                              height: 64,
+                              child: Row(children: _navigationButtons()),
+                            ),
+                          )
+                        : null,
                     floatingActionButtonLocation:
                         FloatingActionButtonLocation.centerDocked,
                     floatingActionButton:
@@ -611,6 +653,61 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
                               )
                             : null,
                   ),
+                  if (loggedIn && !showingGlobalShiftManagement)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      top: 42,
+                      child: ValueListenableBuilder<ActiveShiftNotice?>(
+                        valueListenable: activeShiftNotice,
+                        builder: (context, notice, _) {
+                          if (notice == null) return const SizedBox.shrink();
+                          final label =
+                              '${notice.count} ${notice.count == 1 ? 'shift' : 'shifts'} in progress · ${notice.employeeName}';
+                          return Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => setState(
+                                  () => showingGlobalShiftManagement = true),
+                              borderRadius: BorderRadius.circular(10),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 11),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F6634),
+                                  borderRadius: BorderRadius.circular(10),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                        color: Color(0x33000000),
+                                        blurRadius: 10,
+                                        offset: Offset(0, 4))
+                                  ],
+                                ),
+                                child: Row(children: [
+                                  const Icon(Icons.access_time_filled,
+                                      color: Color(0xFFA5D6A7), size: 17),
+                                  const SizedBox(width: 9),
+                                  Expanded(
+                                      child: Text(label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700))),
+                                  const SizedBox(width: 8),
+                                  const Text('Manage ›',
+                                      style: TextStyle(
+                                          color: Color(0xFFA5D6A7),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w800)),
+                                ]),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                   // Keep the device-style top speaker detail above the app shell.
                   Positioned(
                     top: 0,
@@ -640,10 +737,12 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   void _logout() {
     _deactivateNotifications();
     _authService.clearSession();
+    activeShiftNotice.value = null;
     setState(() {
       loggedIn = false;
       detail = null;
       activeSessionId = null;
+      showingGlobalShiftManagement = false;
       activeRole = 'CASHIER';
       tab = 0;
     });
@@ -7366,14 +7465,14 @@ class CustomerTransaction {
   final int items;
 }
 
-class CustomerScreen extends StatefulWidget {
-  const CustomerScreen({super.key});
+class LegacyCustomerScreen extends StatefulWidget {
+  const LegacyCustomerScreen({super.key});
 
   @override
-  State<CustomerScreen> createState() => _CustomerScreenState();
+  State<LegacyCustomerScreen> createState() => _LegacyCustomerScreenState();
 }
 
-class _CustomerScreenState extends State<CustomerScreen> {
+class _LegacyCustomerScreenState extends State<LegacyCustomerScreen> {
   final CustomerService _customerService = CustomerService();
   final SyncService _syncService = SyncService();
   final TextEditingController _searchController = TextEditingController();
@@ -8106,6 +8205,747 @@ class _CustomerScreenState extends State<CustomerScreen> {
       );
 }
 
+class CustomersScreen extends StatefulWidget {
+  const CustomersScreen({required this.onBack, super.key});
+  final VoidCallback onBack;
+
+  @override
+  State<CustomersScreen> createState() => _CustomersScreenState();
+}
+
+class _CustomersScreenState extends State<CustomersScreen> {
+  static const _colors = <Color>[
+    navy,
+    Color(0xFF2E7D32),
+    Color(0xFFD32F2F),
+    gold,
+    Color(0xFF7B1FA2),
+    Color(0xFFF57C00),
+    Color(0xFF00796B)
+  ];
+  final CustomerApiService _service = CustomerApiService();
+  final TextEditingController _search = TextEditingController();
+  final TextEditingController _name = TextEditingController();
+  final TextEditingController _phone = TextEditingController();
+  final TextEditingController _limit = TextEditingController();
+  final TextEditingController _note = TextEditingController();
+  List<Map<String, dynamic>> _customers = const [];
+  Map<String, dynamic>? _selected;
+  List<Map<String, dynamic>> _transactions = const [];
+  String _tab = 'all';
+  String? _error;
+  bool _loading = true;
+  bool _showAdd = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _name.dispose();
+    _phone.dispose();
+    _limit.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final rows = await _service.loadCustomers();
+      if (!mounted) return;
+      setState(() {
+        _customers = rows;
+        _loading = false;
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _openCustomer(Map<String, dynamic> summary) async {
+    try {
+      final detail = await _service.loadCustomer(summary['id'].toString());
+      final items = <Map<String, dynamic>>[];
+      for (final sale
+          in (detail['sales'] as List? ?? const []).whereType<Map>()) {
+        final saleItems = sale['items'] as List? ?? const [];
+        final payments = sale['payments'] as List? ?? const [];
+        final paymentMethod = payments.isNotEmpty && payments.first is Map
+            ? (payments.first as Map)['paymentMethod'] as Map?
+            : null;
+        final method = paymentMethod?['name']?.toString() ?? 'Sale';
+        items.add({
+          'id': sale['id'],
+          'type': 'Sale',
+          'amount': _asDouble(sale['total']),
+          'method': method,
+          'items': saleItems.fold<int>(
+              0, (sum, item) => sum + _asInt((item as Map)['quantity'])),
+          'date': sale['createdAt']
+        });
+      }
+      for (final entry
+          in (detail['creditEntries'] as List? ?? const []).whereType<Map>()) {
+        final payment = entry['type']?.toString() == 'PAYMENT';
+        items.add({
+          'id': entry['id'],
+          'type': payment ? 'Payment' : 'Credit',
+          'amount': payment
+              ? -_asDouble(entry['amount'])
+              : _asDouble(entry['amount']),
+          'method': payment ? 'Credit payment' : 'Credit',
+          'items': 0,
+          'date': entry['createdAt']
+        });
+      }
+      items.sort((a, b) =>
+          (b['date']?.toString() ?? '').compareTo(a['date']?.toString() ?? ''));
+      if (!mounted) return;
+      setState(() {
+        _selected = {...summary, ...detail};
+        _transactions = items;
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Future<void> _saveCustomer() async {
+    final name = _name.text.trim();
+    final limit = double.tryParse(_limit.text.trim()) ?? 0;
+    if (name.isEmpty || limit < 0) {
+      setState(
+          () => _error = 'Enter a customer name and a valid credit limit.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await _service.createCustomer(
+          name: name,
+          phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+          initialCreditLimit: limit);
+      if (!mounted) return;
+      setState(() {
+        _showAdd = false;
+        _saving = false;
+        _name.clear();
+        _phone.clear();
+        _limit.clear();
+        _note.clear();
+      });
+      await _load();
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Customer added successfully.')));
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _payment() async {
+    final customer = _selected;
+    if (customer == null) return;
+    final controller = TextEditingController();
+    final amount = await showDialog<double>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+              title: const Text('Record Payment'),
+              content: TextField(
+                  controller: controller,
+                  autofocus: true,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                      labelText: 'Payment amount',
+                      prefixText: 'KSh ',
+                      border: OutlineInputBorder())),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(
+                        dialogContext, double.tryParse(controller.text)),
+                    child: const Text('Record'))
+              ],
+            ));
+    controller.dispose();
+    final credit = _creditOf(customer);
+    if (amount == null || amount <= 0 || amount > credit) return;
+    setState(() => _saving = true);
+    try {
+      await _service.recordPayment(
+          customerId: customer['id'].toString(), amount: amount);
+      await _load();
+      await _openCustomer(customer);
+      if (mounted) setState(() => _saving = false);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  double _creditOf(Map row) =>
+      _asDouble((row['creditAccount'] as Map?)?['balance']);
+  int _purchasesOf(Map row) => _asInt((row['_count'] as Map?)?['sales']);
+  double _asDouble(Object? value) => value is num
+      ? value.toDouble()
+      : double.tryParse(value?.toString() ?? '') ?? 0;
+  int _asInt(Object? value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '') ?? 0;
+  String _money(double value) => value
+      .toStringAsFixed(0)
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+  String _initials(Map row) {
+    final name = row['name']?.toString().trim() ?? '';
+    return name.isEmpty
+        ? '?'
+        : name
+            .split(RegExp(r'\s+'))
+            .take(2)
+            .map((word) => word[0])
+            .join()
+            .toUpperCase();
+  }
+
+  String _date(Object? value) {
+    final date = DateTime.tryParse(value?.toString() ?? '');
+    return date == null
+        ? 'No visits'
+        : '${date.day}/${date.month}/${date.year}';
+  }
+
+  double _thisMonthSpend(Map customer) {
+    final now = DateTime.now();
+    return (customer['sales'] as List? ?? const [])
+        .whereType<Map>()
+        .where((sale) {
+      final date = DateTime.tryParse(sale['createdAt']?.toString() ?? '');
+      return date?.year == now.year && date?.month == now.month;
+    }).fold<double>(0, (sum, sale) => sum + _asDouble(sale['total']));
+  }
+
+  Widget _header(String title, {Widget? action}) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 46, 16, 16),
+        decoration:
+            const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+        child: Row(children: [
+          IconButton(
+              onPressed: widget.onBack,
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              style: IconButton.styleFrom(
+                  backgroundColor: Colors.white24,
+                  fixedSize: const Size(36, 36))),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text(title,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800))),
+          if (action != null) action
+        ]),
+      );
+
+  Widget _addView() => Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: Column(children: [
+        _header('Add Customer', action: null),
+        Expanded(
+            child: ListView(padding: const EdgeInsets.all(16), children: [
+          if (_error != null) _errorBox(),
+          Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                  color: Colors.white, borderRadius: BorderRadius.circular(8)),
+              child: Column(children: [
+                Container(
+                    width: 72,
+                    height: 72,
+                    alignment: Alignment.center,
+                    decoration: const BoxDecoration(
+                        color: navy, shape: BoxShape.circle),
+                    child: Text(
+                        _name.text.trim().isEmpty
+                            ? '?'
+                            : _initials({'name': _name.text}),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800))),
+                const SizedBox(height: 20),
+                _field('Full Name *', _name, 'e.g. Jane Mwangi',
+                    onChanged: (_) => setState(() {})),
+                _field('Phone Number', _phone, 'e.g. 0712 345 678',
+                    keyboard: TextInputType.phone),
+                _field('Credit Limit (KSh)', _limit, '0',
+                    keyboard:
+                        const TextInputType.numberWithOptions(decimal: true)),
+                _field('Note (optional)', _note,
+                    'e.g. Regular customer, prefer M-Pesa'),
+                const SizedBox(height: 6),
+                SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                        onPressed: _saving ? null : _saveCustomer,
+                        style: TextButton.styleFrom(
+                            backgroundColor: navy,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8))),
+                        child: Text(_saving ? 'Saving...' : 'Save Customer',
+                            style: const TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w800)))),
+              ])),
+        ])),
+      ]));
+
+  Widget _field(String label, TextEditingController controller, String hint,
+          {TextInputType? keyboard, ValueChanged<String>? onChanged}) =>
+      Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(
+                    color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            TextField(
+                controller: controller,
+                keyboardType: keyboard,
+                onChanged: onChanged,
+                decoration: InputDecoration(
+                    hintText: hint,
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12)))
+          ]));
+  Widget _errorBox() => Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFEBEE),
+          borderRadius: BorderRadius.circular(8)),
+      child: Text(_error!,
+          style: const TextStyle(color: Color(0xFFC62828), fontSize: 12)));
+
+  Widget _profileView(Map customer) {
+    final credit = _creditOf(customer);
+    final purchases = _purchasesOf(customer);
+    final thisMonth = _thisMonthSpend(customer);
+    final color = _colors[_customers
+            .indexWhere((row) => row['id'] == customer['id'])
+            .clamp(0, _colors.length - 1) %
+        _colors.length];
+    return Scaffold(
+        backgroundColor: const Color(0xFFF5F7FA),
+        body: Column(children: [
+          Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 46, 16, 22),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Column(children: [
+                Row(children: [
+                  IconButton(
+                      onPressed: () => setState(() => _selected = null),
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      style: IconButton.styleFrom(
+                          backgroundColor: Colors.white24,
+                          fixedSize: const Size(36, 36))),
+                  const SizedBox(width: 10),
+                  const Text('Customer Profile',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800))
+                ]),
+                const SizedBox(height: 18),
+                Row(children: [
+                  CircleAvatar(
+                      radius: 30,
+                      backgroundColor: color,
+                      child: Text(_initials(customer),
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800))),
+                  const SizedBox(width: 14),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Text(customer['name']?.toString() ?? 'Customer',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800)),
+                        Text(
+                            customer['phone']?.toString().isEmpty == false
+                                ? customer['phone'].toString()
+                                : 'No phone number',
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 13)),
+                        Text(
+                            'Last visit: ${_date((customer['sales'] as List?)?.isEmpty == false ? ((customer['sales'] as List).first as Map)['createdAt'] : null)}',
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 11))
+                      ]))
+                ])
+              ])),
+          Expanded(
+              child: ListView(padding: const EdgeInsets.all(16), children: [
+            Row(children: [
+              _stat(
+                  'Credit',
+                  'KSh ${_money(credit)}',
+                  credit > 0
+                      ? const Color(0xFFD32F2F)
+                      : const Color(0xFF2E7D32)),
+              const SizedBox(width: 8),
+              _stat('Purchases', '$purchases', navy),
+              const SizedBox(width: 8),
+              _stat('This Month', 'KSh ${_money(thisMonth)}', gold)
+            ]),
+            if (credit > 0) ...[
+              const SizedBox(height: 14),
+              Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFFFEBEE),
+                      border: Border.all(color: const Color(0xFFEF9A9A)),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Row(children: [
+                    Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                          const Text('Outstanding Balance',
+                              style: TextStyle(
+                                  color: Color(0xFFB71C1C),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13)),
+                          Text('KSh ${_money(credit)}',
+                              style: const TextStyle(
+                                  color: Color(0xFFD32F2F),
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900))
+                        ])),
+                    TextButton(
+                        onPressed: _saving ? null : _payment,
+                        style: TextButton.styleFrom(
+                            backgroundColor: const Color(0xFFD32F2F),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8))),
+                        child: const Text('Record Payment'))
+                  ]))
+            ],
+            const SizedBox(height: 16),
+            Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8)),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Transaction History',
+                          style: TextStyle(
+                              color: ink,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 12),
+                      if (_transactions.isEmpty)
+                        const Text('No transactions yet.',
+                            style: TextStyle(color: muted, fontSize: 12)),
+                      ..._transactions.map(_transaction)
+                    ])),
+          ])),
+        ]));
+  }
+
+  Widget _stat(String label, String value, Color color) => Expanded(
+      child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+          decoration: BoxDecoration(
+              color: Colors.white, borderRadius: BorderRadius.circular(8)),
+          child: Column(children: [
+            Text(label, style: const TextStyle(color: muted, fontSize: 10)),
+            const SizedBox(height: 4),
+            Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: color, fontSize: 13, fontWeight: FontWeight.w800))
+          ])));
+  Widget _transaction(Map<String, dynamic> item) {
+    final payment = _asDouble(item['amount']) < 0;
+    final credit = item['method'] == 'Credit';
+    return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(children: [
+          CircleAvatar(
+              radius: 18,
+              backgroundColor: payment
+                  ? const Color(0xFFE8F5E9)
+                  : credit
+                      ? const Color(0xFFFFEBEE)
+                      : const Color(0xFFEEF3FF),
+              child: Icon(
+                  payment
+                      ? Icons.check
+                      : credit
+                          ? Icons.receipt_long
+                          : Icons.payments_outlined,
+                  size: 18,
+                  color: payment
+                      ? const Color(0xFF2E7D32)
+                      : credit
+                          ? const Color(0xFFD32F2F)
+                          : navy)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(
+                    '${item['type']}${_asInt(item['items']) > 0 ? ' · ${item['items']} items' : ''}',
+                    style: const TextStyle(
+                        color: ink, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(_date(item['date']),
+                    style: const TextStyle(color: muted, fontSize: 11))
+              ])),
+          Text(
+              '${payment ? '-' : ''}KSh ${_money(_asDouble(item['amount']).abs())}',
+              style: TextStyle(
+                  color: payment ? const Color(0xFF2E7D32) : ink,
+                  fontWeight: FontWeight.w800))
+        ]));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showAdd) return _addView();
+    if (_selected != null) return _profileView(_selected!);
+    final query = _search.text.toLowerCase();
+    final filtered = _customers
+        .where((row) =>
+            (row['name']?.toString().toLowerCase().contains(query) ?? false) &&
+            (_tab == 'all' || _creditOf(row) > 0))
+        .toList();
+    final total =
+        _customers.fold<double>(0, (sum, row) => sum + _creditOf(row));
+    return SizedBox.expand(
+        child: Column(children: [
+      Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+          decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy])),
+          child: Column(children: [
+            Row(children: [
+              IconButton(
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  style: IconButton.styleFrom(
+                      backgroundColor: Colors.white24,
+                      fixedSize: const Size(32, 32))),
+              const SizedBox(width: 8),
+              const Expanded(
+                  child: Text('Customers',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800))),
+              TextButton(
+                  onPressed: () => setState(() {
+                        _showAdd = true;
+                        _error = null;
+                      }),
+                  style: TextButton.styleFrom(
+                      backgroundColor: gold,
+                      foregroundColor: ink,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8))),
+                  child: const Text('+ Add Customer',
+                      style: TextStyle(fontWeight: FontWeight.w800)))
+            ]),
+            const SizedBox(height: 12),
+            Row(children: [
+              _metric('Total Customers', '${_customers.length}', Colors.white),
+              const SizedBox(width: 7),
+              _metric('Total Credit', 'KSh ${_money(total)}',
+                  const Color(0xFFFF6B6B)),
+              const SizedBox(width: 7),
+              _metric(
+                  'Credit Accounts',
+                  '${_customers.where((row) => _creditOf(row) > 0).length}',
+                  const Color(0xFFFFD93D))
+            ]),
+            const SizedBox(height: 12),
+            TextField(
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                    hintText: 'Search customers...',
+                    hintStyle: const TextStyle(color: Colors.white60),
+                    prefixIcon: const Icon(Icons.search, color: Colors.white60),
+                    filled: true,
+                    fillColor: Colors.white12,
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Colors.white24)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Colors.white24))))
+          ])),
+      Container(
+          color: Colors.white,
+          child: Row(
+              children: ['all', 'credit'].map((value) {
+            final active = _tab == value;
+            return Expanded(
+                child: TextButton(
+                    onPressed: () => setState(() => _tab = value),
+                    style: TextButton.styleFrom(
+                        shape: const RoundedRectangleBorder(),
+                        foregroundColor: active ? navy : muted),
+                    child: Text(
+                        value == 'all' ? 'All Customers' : 'Credit Accounts',
+                        style: TextStyle(
+                            fontWeight:
+                                active ? FontWeight.w800 : FontWeight.w600))));
+          }).toList())),
+      Expanded(
+          child: ListView(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+              children: [
+            if (_error != null) _errorBox(),
+            if (_loading)
+              const Center(
+                  child: Padding(
+                      padding: EdgeInsets.all(28),
+                      child: CircularProgressIndicator(color: navy))),
+            if (!_loading && filtered.isEmpty)
+              const Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Center(
+                      child: Text('No customers found.',
+                          style: TextStyle(color: muted)))),
+            ...filtered.asMap().entries.map((entry) =>
+                _customerCard(entry.value, _colors[entry.key % _colors.length]))
+          ])),
+    ]));
+  }
+
+  Widget _metric(String label, String value, Color color) => Expanded(
+      child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
+          decoration: BoxDecoration(
+              color: Colors.white10, borderRadius: BorderRadius.circular(8)),
+          child: Column(children: [
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white60, fontSize: 9)),
+            const SizedBox(height: 3),
+            Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: color, fontSize: 14, fontWeight: FontWeight.w800))
+          ])));
+  Widget _customerCard(Map<String, dynamic> row, Color color) {
+    final credit = _creditOf(row);
+    return InkWell(
+        onTap: () => _openCustomer(row),
+        child: Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Color(0x0F000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 2))
+                ]),
+            child: Row(children: [
+              CircleAvatar(
+                  radius: 23,
+                  backgroundColor: color,
+                  child: Text(_initials(row),
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w800))),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(row['name']?.toString() ?? 'Customer',
+                        style: const TextStyle(
+                            color: ink,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800)),
+                    Text(
+                        '${row['phone']?.toString().isEmpty == false ? row['phone'] : 'No phone'} · ${_purchasesOf(row)} purchases',
+                        style: const TextStyle(color: muted, fontSize: 11))
+                  ])),
+              credit > 0
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                          Text('KSh ${_money(credit)}',
+                              style: const TextStyle(
+                                  color: Color(0xFFD32F2F),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800)),
+                          const Text('Credit',
+                              style: TextStyle(
+                                  color: Color(0xFFD32F2F),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700))
+                        ])
+                  : Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(999)),
+                      child: const Text('Cleared',
+                          style: TextStyle(
+                              color: Color(0xFF2E7D32),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)))
+            ])));
+  }
+}
+
 class UnreadNotificationBadge extends StatefulWidget {
   const UnreadNotificationBadge({super.key});
 
@@ -8152,7 +8992,7 @@ class _UnreadNotificationBadgeState extends State<UnreadNotificationBadge> {
   }
 }
 
-class MoreScreen extends StatelessWidget {
+class MoreScreen extends StatefulWidget {
   const MoreScreen(
       {required this.onOpen,
       required this.role,
@@ -8165,13 +9005,36 @@ class MoreScreen extends StatelessWidget {
   final VoidCallback onLogout;
   final VoidCallback onCloseShift;
 
+  @override
+  State<MoreScreen> createState() => _MoreScreenState();
+}
+
+class _MoreScreenState extends State<MoreScreen> {
+  final ProfileService _profileService = ProfileService();
+  Map<String, dynamic>? _profile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final profile = await _profileService.load();
+      if (mounted) setState(() => _profile = profile);
+    } on Object {
+      // Keep the menu usable while a profile refresh is temporarily unavailable.
+    }
+  }
+
   Color get pageBackground =>
-      isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
+      widget.isDarkMode ? const Color(0xFF101522) : const Color(0xFFF5F7FA);
   Color get panelBackground =>
-      isDarkMode ? const Color(0xFF192235) : Colors.white;
-  Color get primaryText => isDarkMode ? Colors.white : ink;
+      widget.isDarkMode ? const Color(0xFF192235) : Colors.white;
+  Color get primaryText => widget.isDarkMode ? Colors.white : ink;
   Color get dividerColor =>
-      isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
+      widget.isDarkMode ? const Color(0xFF2C3850) : const Color(0xFFF0F3F9);
 
   final List<Map<String, dynamic>> _menuSections = const [
     {
@@ -8222,7 +9085,7 @@ class MoreScreen extends StatelessWidget {
           'label': 'Customer List',
           'icon': '🙂',
           'color': Color(0xFF0288D1),
-          'screen': 'customers'
+          'screen': 'Customers'
         },
       ],
     },
@@ -8258,212 +9121,241 @@ class MoreScreen extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => Container(
-        color: pageBackground,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(colors: [ink, navy]),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const CircleAvatar(
-                        radius: 28,
-                        backgroundColor: gold,
-                        child: Text('A',
-                            style: TextStyle(
-                                color: ink,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 20)),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Admin User',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w800)),
-                            SizedBox(height: 2),
-                            Text('owner@mobiduka.com',
-                                style: TextStyle(
-                                    color: Colors.white60, fontSize: 12)),
-                            SizedBox(height: 6),
-                            DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: Color(0x40D4AF37),
-                                borderRadius:
-                                    BorderRadius.all(Radius.circular(999)),
-                              ),
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                child: Text('Store Manager',
-                                    style: TextStyle(
-                                        color: Color(0xFFF4D46A),
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700)),
-                              ),
+  Widget build(BuildContext context) {
+    final profile = _profile;
+    final business = profile?['business'] as Map? ?? const {};
+    final name = profile?['name']?.toString().trim();
+    final email = profile?['email']?.toString().trim();
+    final apiRole = profile?['role']?.toString() ?? widget.role;
+    final roleLabel = apiRole
+        .toLowerCase()
+        .split('_')
+        .map((part) => part.isEmpty
+            ? part
+            : '${part[0].toUpperCase()}${part.substring(1)}')
+        .join(' ');
+    final initials = (name?.isNotEmpty == true ? name! : 'User')
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part[0])
+        .join()
+        .toUpperCase();
+
+    return Container(
+      color: pageBackground,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(0, 28, 0, 18),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy]),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: gold,
+                      child: Text(initials,
+                          style: const TextStyle(
+                              color: ink,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 20)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name?.isNotEmpty == true ? name! : 'User',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 2),
+                          Text(email?.isNotEmpty == true ? email! : '-',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 12)),
+                          const SizedBox(height: 6),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Color(0x40D4AF37),
+                              borderRadius:
+                                  BorderRadius.all(Radius.circular(999)),
                             ),
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              child: Text(roleLabel,
+                                  style: TextStyle(
+                                      color: Color(0xFFF4D46A),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => widget.onOpen('User Profile'),
+                      icon: const Icon(Icons.edit, color: Colors.white),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white.withValues(alpha: 0.12),
+                        fixedSize: const Size(36, 36),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('Store',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 10)),
+                            SizedBox(height: 2),
+                            Text(business['name']?.toString() ?? '-',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
                           ],
                         ),
                       ),
-                      IconButton(
-                        onPressed: () => onOpen('User Profile'),
-                        icon: const Icon(Icons.edit, color: Colors.white),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.white.withValues(alpha: 0.12),
-                          fixedSize: const Size(36, 36),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('Branch',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 10)),
+                            SizedBox(height: 2),
+                            Text(business['branch']?.toString() ?? '-',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text('Shift',
+                                style: TextStyle(
+                                    color: Colors.white60, fontSize: 10)),
+                            SizedBox(height: 2),
+                            Text('Morning',
+                                style: TextStyle(
+                                    color: gold,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Store',
-                                  style: TextStyle(
-                                      color: Colors.white60, fontSize: 10)),
-                              SizedBox(height: 2),
-                              Text('MobiDuka Store',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Branch',
-                                  style: TextStyle(
-                                      color: Colors.white60, fontSize: 10)),
-                              SizedBox(height: 2),
-                              Text('Nairobi CBD',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Shift',
-                                  style: TextStyle(
-                                      color: Colors.white60, fontSize: 10)),
-                              SizedBox(height: 2),
-                              Text('Morning',
-                                  style: TextStyle(
-                                      color: gold,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            ..._menuSections.map((section) {
-              final items = (section['items'] as List<Map<String, dynamic>>)
-                  .where((item) {
-                final screen = item['screen'];
-                if (role == 'OWNER' || role == 'ADMIN') return true;
-                if (role == 'CASHIER')
-                  return screen == 'Expense Tracking' ||
-                      screen == 'Credit Book';
-                if (role == 'SUPERVISOR')
-                  return screen != 'Reports & Analytics' &&
-                      screen != 'Settings' &&
-                      screen != 'Backup & Cloud Sync';
-                if (role == 'ACCOUNTANT')
-                  return screen == 'Reports & Analytics' ||
-                      screen == 'Credit Book' ||
-                      screen == 'Expense Tracking' ||
-                      screen == 'User Profile';
-                return false;
-              }).toList();
-              return items.isEmpty
-                  ? null
-                  : _menuSection(section['section'] as String, items);
-            }).whereType<Widget>(),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: onCloseShift,
-              icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
-              label: const Text('Close Shift Session',
-                  style: TextStyle(
-                      color: Color(0xFF2E7D32),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700)),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFE8F5E9),
-                foregroundColor: const Color(0xFF2E7D32),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: const BorderSide(color: Color(0xFFC8E6C9)),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 10),
-            TextButton.icon(
-              onPressed: onLogout,
-              icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
-              label: const Text('Logout',
-                  style: TextStyle(
-                      color: Color(0xFFD32F2F),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700)),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFFFF5F5),
-                foregroundColor: const Color(0xFFD32F2F),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: const BorderSide(color: Color(0xFFFFCDD2)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Center(
-              child: Text(
-                'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
-                textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 12),
+          ..._menuSections.map((section) {
+            final items =
+                (section['items'] as List<Map<String, dynamic>>).where((item) {
+              final screen = item['screen'];
+              if (widget.role == 'OWNER' || widget.role == 'ADMIN') return true;
+              if (widget.role == 'CASHIER')
+                return screen == 'Expense Tracking' || screen == 'Credit Book';
+              if (widget.role == 'SUPERVISOR')
+                return screen != 'Reports & Analytics' &&
+                    screen != 'Settings' &&
+                    screen != 'Backup & Cloud Sync';
+              if (widget.role == 'ACCOUNTANT')
+                return screen == 'Reports & Analytics' ||
+                    screen == 'Credit Book' ||
+                    screen == 'Expense Tracking' ||
+                    screen == 'User Profile';
+              return false;
+            }).toList();
+            return items.isEmpty
+                ? null
+                : _menuSection(section['section'] as String, items);
+          }).whereType<Widget>(),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: widget.onCloseShift,
+            icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
+            label: const Text('Close Shift Session',
                 style: TextStyle(
-                    color: isDarkMode ? const Color(0xFF8290AD) : muted,
-                    fontSize: 11,
-                    height: 1.5),
+                    color: Color(0xFF2E7D32),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700)),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFE8F5E9),
+              foregroundColor: const Color(0xFF2E7D32),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFC8E6C9)),
               ),
             ),
-          ],
-        ),
-      );
+          ),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: widget.onLogout,
+            icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
+            label: const Text('Logout',
+                style: TextStyle(
+                    color: Color(0xFFD32F2F),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700)),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFFFF5F5),
+              foregroundColor: const Color(0xFFD32F2F),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFFFCDD2)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Center(
+            child: Text(
+              'MobiDuka POS v2.4.1\n© 2026 MobiTech Solutions Ltd · Kenya',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: widget.isDarkMode ? const Color(0xFF8290AD) : muted,
+                  fontSize: 11,
+                  height: 1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _menuSection(String title, List<Map<String, dynamic>> items) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -8499,7 +9391,7 @@ class MoreScreen extends StatelessWidget {
                 return Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: () => onOpen(item['screen'] as String),
+                    onTap: () => widget.onOpen(item['screen'] as String),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 14),
@@ -8558,7 +9450,1244 @@ class MoreScreen extends StatelessWidget {
 }
 
 class SettingsDetailScreen extends StatefulWidget {
-  const SettingsDetailScreen(
+  const SettingsDetailScreen({
+    required this.onBack,
+    required this.isDarkMode,
+    required this.onThemeChanged,
+    this.initialPage = 'settings',
+    super.key,
+  });
+  final VoidCallback onBack;
+  final bool isDarkMode;
+  final ValueChanged<bool> onThemeChanged;
+  final String initialPage;
+
+  @override
+  State<SettingsDetailScreen> createState() => _SettingsDetailScreenState();
+}
+
+class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
+  final SettingsService _service = SettingsService();
+  final TextEditingController _taxPinController = TextEditingController();
+  Map<String, dynamic> _business = const {};
+  Map<String, dynamic> _preferences = const {};
+  List<Map<String, dynamic>> _currencies = const [];
+  final Map<String, String> _simulations = {};
+  String _themeMode = 'light';
+  String? _error;
+  bool _loading = true;
+  bool _editingTaxPin = false;
+  bool _showCurrencyPicker = false;
+  String _page = 'settings';
+  String _twoFactorStep = 'intro';
+  String _twoFactorMethod = 'totp';
+  final Map<String, bool> _paymentMethods = {
+    'cash': true,
+    'mpesa': true,
+    'bank': false,
+    'card': false,
+    'credit': true,
+  };
+  List<Map<String, String>> _sessions = [
+    {
+      'id': 'current',
+      'device': 'Android Phone',
+      'model': 'Samsung Galaxy A54',
+      'location': 'Nairobi, Kenya',
+      'last': 'Now',
+      'ip': '197.232.xx.xx',
+    },
+    {
+      'id': 'desktop',
+      'device': 'Desktop Browser',
+      'model': 'Chrome on Windows 11',
+      'location': 'Nairobi, Kenya',
+      'last': '2 days ago',
+      'ip': '197.232.xx.yy',
+    },
+    {
+      'id': 'tablet',
+      'device': 'Android Tablet',
+      'model': 'Samsung Galaxy Tab A8',
+      'location': 'Mombasa, Kenya',
+      'last': '8 days ago',
+      'ip': '105.160.xx.zz',
+    },
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _page = widget.initialPage;
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _taxPinController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final result = await _service.load();
+      if (!mounted) return;
+      _apply(result);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  void _apply(Map<String, dynamic> result) {
+    final business = result['business'] as Map? ?? const {};
+    final preferences = result['preferences'] as Map? ?? const {};
+    final theme = preferences['themeMode']?.toString() ?? 'light';
+    setState(() {
+      _business = Map<String, dynamic>.from(business);
+      _preferences = Map<String, dynamic>.from(preferences);
+      _currencies = (result['currencyOptions'] as List? ?? const [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      _themeMode = theme;
+      final paymentConfig = _preferences['paymentConfig'] as Map?;
+      final methods = paymentConfig?['methods'] as Map?;
+      if (methods != null) {
+        for (final key in _paymentMethods.keys) {
+          _paymentMethods[key] = methods[key] == true;
+        }
+      }
+      _taxPinController.text = _business['taxPin']?.toString() ?? '';
+      _loading = false;
+      _error = null;
+    });
+    widget.onThemeChanged(_darkFor(theme));
+  }
+
+  bool _darkFor(String mode) =>
+      mode == 'dark' ||
+      (mode == 'auto' &&
+          MediaQuery.platformBrightnessOf(context) == Brightness.dark);
+
+  Future<void> _save(Map<String, Object?> patch) async {
+    try {
+      _apply(await _service.save(patch));
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  void _setTheme(String mode) {
+    setState(() => _themeMode = mode);
+    widget.onThemeChanged(_darkFor(mode));
+    unawaited(_save({'themeMode': mode}));
+  }
+
+  void _setPreference(String key, bool value) {
+    setState(() => _preferences = {..._preferences, key: value});
+    unawaited(_save({key: value}));
+  }
+
+  void _simulate(String key) {
+    if (_simulations[key] == 'loading') return;
+    setState(() => _simulations[key] = 'loading');
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _simulations[key] = 'done');
+    });
+    Future<void>.delayed(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _simulations[key] = 'idle');
+    });
+  }
+
+  Color get _background =>
+      widget.isDarkMode ? const Color(0xFF09152A) : const Color(0xFFF5F7FA);
+  Color get _panel =>
+      widget.isDarkMode ? const Color(0xFF0F2040) : Colors.white;
+  Color get _text => widget.isDarkMode ? const Color(0xFFDCE6FF) : ink;
+  Color get _muted => widget.isDarkMode ? const Color(0xFF7A8FBF) : muted;
+  Color get _divider =>
+      widget.isDarkMode ? const Color(0xFF1A3366) : const Color(0xFFE8ECF4);
+  String _moneyLabel(String code) => (_currencies
+          .firstWhere((item) => item['code'] == code,
+              orElse: () => {'label': code})['label']
+          ?.toString() ??
+      code);
+
+  Widget _section(String label) => Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 8),
+        child: Text(label.toUpperCase(),
+            style: TextStyle(
+                color: _muted,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: .8)),
+      );
+
+  Widget _card(List<Widget> children) => Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _divider)),
+        child: Column(children: children),
+      );
+
+  Widget _header(String title, VoidCallback back) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+        decoration:
+            const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+        child: Row(children: [
+          IconButton(
+              onPressed: back,
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              style: IconButton.styleFrom(
+                  backgroundColor: Colors.white24,
+                  fixedSize: const Size(36, 36))),
+          const SizedBox(width: 12),
+          Text(title,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800)),
+        ]),
+      );
+
+  Widget _themeButton(String mode, IconData icon, String label) {
+    final active = _themeMode == mode;
+    return Expanded(
+        child: OutlinedButton.icon(
+      onPressed: () => _setTheme(mode),
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: active ? navy : _muted,
+        backgroundColor: active ? navy.withValues(alpha: .10) : _panel,
+        side:
+            BorderSide(color: active ? navy : _divider, width: active ? 2 : 1),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    ));
+  }
+
+  Widget _infoRow(String label, String value,
+          {bool last = false, Widget? trailing}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+            border: Border(
+                bottom:
+                    BorderSide(color: last ? Colors.transparent : _divider))),
+        child: Row(children: [
+          Expanded(
+              child:
+                  Text(label, style: TextStyle(color: _muted, fontSize: 13))),
+          Flexible(
+              child: trailing ??
+                  Text(value,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: _text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700)))
+        ]),
+      );
+
+  Widget _toggleRow(String key, String label, String sub, {bool last = false}) {
+    final value = _preferences[key] == true;
+    return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        decoration: BoxDecoration(
+            border: Border(
+                bottom:
+                    BorderSide(color: last ? Colors.transparent : _divider))),
+        child: Row(children: [
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(label,
+                    style: TextStyle(
+                        color: _text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(sub, style: TextStyle(color: _muted, fontSize: 11))
+              ])),
+          Switch(
+              value: value,
+              activeThumbColor: navy,
+              onChanged: (next) => _setPreference(key, next))
+        ]));
+  }
+
+  Widget _actionRow(IconData icon, Color color, String label, String sub,
+      {VoidCallback? onTap, bool last = false, String? state}) {
+    final loading = state == 'loading';
+    final done = state == 'done';
+    return InkWell(
+        onTap: onTap,
+        child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            decoration: BoxDecoration(
+                border: Border(
+                    bottom: BorderSide(
+                        color: last ? Colors.transparent : _divider))),
+            child: Row(children: [
+              Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                      color: color.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: loading
+                      ? Padding(
+                          padding: const EdgeInsets.all(11),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: color))
+                      : Icon(done ? Icons.check : icon, color: color)),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(label,
+                        style: TextStyle(
+                            color: done ? color : _text,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700)),
+                    Text(done ? '${label} complete' : sub,
+                        style: TextStyle(
+                            color: done ? color : _muted, fontSize: 11))
+                  ])),
+              Icon(done ? Icons.check_circle : Icons.chevron_right,
+                  color: done ? color : _muted, size: 18)
+            ])));
+  }
+
+  Widget _currencyPicker() => Scaffold(
+      backgroundColor: _background,
+      body: Column(children: [
+        _header('Select Currency',
+            () => setState(() => _showCurrencyPicker = false)),
+        Expanded(
+            child: ListView(padding: const EdgeInsets.all(16), children: [
+          _card(_currencies.map((item) {
+            final code = item['code']?.toString() ?? '';
+            final active = _business['currency'] == code;
+            return InkWell(
+                onTap: () {
+                  setState(() => _showCurrencyPicker = false);
+                  unawaited(_save({'currency': code}));
+                },
+                child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 15),
+                    decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: _divider))),
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(item['label']?.toString() ?? code,
+                              style: TextStyle(
+                                  color: _text, fontWeight: FontWeight.w700))),
+                      if (active) const Icon(Icons.check_circle, color: navy)
+                    ])));
+          }).toList())
+        ])),
+      ]));
+
+  Widget _paymentMethodsView() {
+    const details = [
+      (
+        'cash',
+        'Cash',
+        'Physical cash at counter',
+        Icons.payments_outlined,
+        Color(0xFF2E7D32)
+      ),
+      (
+        'mpesa',
+        'M-Pesa',
+        'Mobile money (Safaricom)',
+        Icons.phone_android,
+        Color(0xFF2E7D32)
+      ),
+      (
+        'bank',
+        'Bank Transfer',
+        'Direct bank / RTGS',
+        Icons.account_balance_outlined,
+        Color(0xFF0288D1)
+      ),
+      (
+        'card',
+        'Card (Visa/MC)',
+        'POS terminal / tap-to-pay',
+        Icons.credit_card,
+        Color(0xFF7B1FA2)
+      ),
+      (
+        'credit',
+        'Credit / Tab',
+        'Defer payment to customer account',
+        Icons.receipt_long_outlined,
+        Color(0xFFD32F2F)
+      ),
+    ];
+    final active = _paymentMethods.values.where((value) => value).length;
+    return Scaffold(
+        backgroundColor: _background,
+        body: Column(children: [
+          Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Row(children: [
+                IconButton(
+                    onPressed: () => setState(() => _page = 'settings'),
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    style: IconButton.styleFrom(
+                        backgroundColor: Colors.white24,
+                        fixedSize: const Size(36, 36))),
+                const SizedBox(width: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Payment Methods',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
+                  Text('$active of ${details.length} active',
+                      style:
+                          const TextStyle(color: Colors.white60, fontSize: 12))
+                ])
+              ])),
+          Expanded(
+              child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                  children: [
+                _section('Accepted Payment Methods'),
+                _card(details.asMap().entries.map((entry) {
+                  final item = entry.value;
+                  final enabled = _paymentMethods[item.$1] == true;
+                  return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 13),
+                      decoration: BoxDecoration(
+                          border: Border(
+                              bottom: BorderSide(
+                                  color: entry.key == details.length - 1
+                                      ? Colors.transparent
+                                      : _divider))),
+                      child: Row(children: [
+                        Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                                color: item.$5.withValues(alpha: .12),
+                                borderRadius: BorderRadius.circular(8)),
+                            child: Icon(item.$4, color: item.$5)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(item.$2,
+                                  style: TextStyle(
+                                      color: _text,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800)),
+                              Text(item.$3,
+                                  style: TextStyle(color: _muted, fontSize: 11))
+                            ])),
+                        Switch(
+                            value: enabled,
+                            activeThumbColor: item.$5,
+                            onChanged: (value) => setState(
+                                () => _paymentMethods[item.$1] = value))
+                      ]));
+                }).toList()),
+                const SizedBox(height: 4),
+                Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                        color: navy.withValues(alpha: .08),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: navy.withValues(alpha: .2))),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Admin note',
+                              style: TextStyle(
+                                  color: Color(0xFF1565C0),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 4),
+                          Text(
+                              'Disabled payment methods will be hidden from cashiers during checkout. Changes take effect immediately.',
+                              style: TextStyle(
+                                  color: _muted, fontSize: 12, height: 1.4))
+                        ])),
+                const SizedBox(height: 18),
+                TextButton(
+                    onPressed: () => unawaited(_save({
+                          'paymentConfig': {'methods': _paymentMethods}
+                        })),
+                    style: TextButton.styleFrom(
+                        backgroundColor: navy,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8))),
+                    child: const Text('Save Payment Settings',
+                        style: TextStyle(fontWeight: FontWeight.w800))),
+              ])),
+        ]));
+  }
+
+  Widget _sessionsView() {
+    final others =
+        _sessions.where((session) => session['id'] != 'current').toList();
+    return Scaffold(
+        backgroundColor: _background,
+        body: Column(children: [
+          Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Row(children: [
+                IconButton(
+                    onPressed: () => setState(() => _page = 'settings'),
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    style: IconButton.styleFrom(
+                        backgroundColor: Colors.white24,
+                        fixedSize: const Size(36, 36))),
+                const SizedBox(width: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Active Sessions',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
+                  Text('${_sessions.length} devices logged in',
+                      style:
+                          const TextStyle(color: Colors.white60, fontSize: 12))
+                ])
+              ])),
+          Expanded(
+              child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                  children: [
+                _section('This Device'),
+                _card([_sessionTile(_sessions.first, current: true)]),
+                if (others.isNotEmpty) ...[
+                  _section('Other Devices'),
+                  TextButton(
+                      onPressed: () =>
+                          setState(() => _sessions = [_sessions.first]),
+                      style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFFD32F2F)),
+                      child: const Align(
+                          alignment: Alignment.centerRight,
+                          child: Text('Sign out all'))),
+                  _card(others.map((session) => _sessionTile(session)).toList())
+                ],
+                if (others.isEmpty)
+                  Container(
+                      padding: const EdgeInsets.all(24),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                          color: _panel,
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Column(children: [
+                        const Icon(Icons.verified_user,
+                            color: Color(0xFF2E7D32), size: 38),
+                        const SizedBox(height: 8),
+                        Text('Only this device is active',
+                            style: TextStyle(
+                                color: _text, fontWeight: FontWeight.w800)),
+                        Text('Your account is secure',
+                            style: TextStyle(color: _muted, fontSize: 12))
+                      ])),
+                Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFFFF8E1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFFFE082))),
+                    child: const Text(
+                        'Security tip\nIf you do not recognise a session, revoke it immediately and change your PIN from User Profile.',
+                        style: TextStyle(
+                            color: Color(0xFF795548),
+                            fontSize: 12,
+                            height: 1.4))),
+              ])),
+        ]));
+  }
+
+  Widget _sessionTile(Map<String, String> session, {bool current = false}) =>
+      Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              border: Border(
+                  bottom: BorderSide(
+                      color: current ? Colors.transparent : _divider))),
+          child: Row(children: [
+            Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                    color: current ? navy : navy.withValues(alpha: .10),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Icon(
+                    current
+                        ? Icons.phone_android
+                        : session['id'] == 'desktop'
+                            ? Icons.desktop_windows_outlined
+                            : Icons.tablet_android_outlined,
+                    color: current ? Colors.white : navy)),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Row(children: [
+                    Flexible(
+                        child: Text(session['device']!,
+                            style: TextStyle(
+                                color: _text, fontWeight: FontWeight.w800))),
+                    if (current)
+                      const Padding(
+                          padding: EdgeInsets.only(left: 6),
+                          child: Text('CURRENT',
+                              style: TextStyle(
+                                  color: Color(0xFF2E7D32),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800)))
+                  ]),
+                  Text(session['model']!,
+                      style: TextStyle(color: _muted, fontSize: 11)),
+                  Text(
+                      '${session['location']} · ${current ? session['ip'] : 'Last: ${session['last']}'}',
+                      style: TextStyle(color: _muted, fontSize: 11)),
+                  if (current)
+                    const Padding(
+                        padding: EdgeInsets.only(top: 5),
+                        child: Row(children: [
+                          Icon(Icons.circle, color: Color(0xFF2E7D32), size: 8),
+                          SizedBox(width: 5),
+                          Text('Active now',
+                              style: TextStyle(
+                                  color: Color(0xFF2E7D32),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700))
+                        ]))
+                ])),
+            if (!current)
+              TextButton(
+                  onPressed: () => setState(() => _sessions
+                      .removeWhere((item) => item['id'] == session['id'])),
+                  style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFFD32F2F),
+                      backgroundColor: const Color(0xFFFFEBEE)),
+                  child: const Text('Revoke'))
+          ]));
+
+  Widget _twoFactorView() {
+    final intro = _twoFactorStep == 'intro';
+    final method = _twoFactorStep == 'method';
+    final verify = _twoFactorStep == 'verify';
+    final done = _twoFactorStep == 'done';
+    final title = method
+        ? 'Choose Method'
+        : verify
+            ? 'Verify Two-Factor Auth'
+            : 'Two-Factor Auth';
+    return Scaffold(
+      backgroundColor: _background,
+      body: Column(children: [
+        Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 46, 16, 20),
+            decoration: const BoxDecoration(
+                gradient: LinearGradient(colors: [ink, navy])),
+            child: Row(children: [
+              IconButton(
+                  onPressed: () => setState(() {
+                        if (intro || done) {
+                          _page = 'settings';
+                        } else {
+                          _twoFactorStep = verify ? 'method' : 'intro';
+                        }
+                      }),
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  style: IconButton.styleFrom(
+                      backgroundColor: Colors.white24,
+                      fixedSize: const Size(36, 36))),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800)),
+                if (intro)
+                  Container(
+                      margin: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: const Color(0x40D32F2F),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: const Color(0x66EF9A9A))),
+                      child: const Text('NOT ENABLED',
+                          style: TextStyle(
+                              color: Color(0xFFFF8A80),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)))
+              ])
+            ])),
+        Expanded(
+          child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 80),
+              children: [
+                if (intro) ...[
+                  const Center(
+                      child:
+                          Icon(Icons.shield_outlined, color: navy, size: 60)),
+                  const SizedBox(height: 12),
+                  const Center(
+                      child: Text('Add Extra Security',
+                          style: TextStyle(
+                              color: ink,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800))),
+                  const SizedBox(height: 8),
+                  Text(
+                      "Two-factor authentication adds a second layer of protection to your MobiDuka account. Even if someone knows your PIN, they can't sign in without your second factor.",
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(color: _muted, fontSize: 14, height: 1.5)),
+                  const SizedBox(height: 24),
+                  _twoFactorBenefit(Icons.key_outlined, 'Stronger security',
+                      'Prevents unauthorised access even if your PIN is compromised'),
+                  _twoFactorBenefit(Icons.phone_android, 'Quick to set up',
+                      'Takes less than 2 minutes - works on any device'),
+                  _twoFactorBenefit(Icons.language, 'Works offline',
+                      'Authenticator apps work without internet connection'),
+                  const SizedBox(height: 16),
+                  TextButton(
+                      onPressed: () =>
+                          setState(() => _twoFactorStep = 'method'),
+                      style: TextButton.styleFrom(
+                          backgroundColor: navy,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8))),
+                      child: const Text('Enable Two-Factor Auth',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w800))),
+                ],
+                if (method) ...[
+                  _twoFactorMethodTile('sms', Icons.sms_outlined, 'SMS OTP',
+                      'Receive a one-time code by text message'),
+                  _twoFactorMethodTile(
+                      'totp',
+                      Icons.lock_outline,
+                      'Authenticator App',
+                      'Use Google Authenticator, Authy, or any TOTP app',
+                      recommended: true),
+                ],
+                if (verify) ...[
+                  if (_twoFactorMethod == 'totp')
+                    Container(
+                        height: 160,
+                        alignment: Alignment.center,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                            color: navy,
+                            borderRadius: BorderRadius.circular(8)),
+                        child: const Icon(Icons.qr_code_2,
+                            color: Colors.white, size: 110))
+                  else
+                    _card([
+                      const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text('Code sent to +254 712 *** 678'))
+                    ]),
+                  TextField(
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      textAlign: TextAlign.center,
+                      decoration: const InputDecoration(
+                          labelText: 'Enter 6-digit code',
+                          hintText: '000000',
+                          border: OutlineInputBorder())),
+                  const SizedBox(height: 16),
+                  TextButton(
+                      onPressed: () => setState(() => _twoFactorStep = 'done'),
+                      style: TextButton.styleFrom(
+                          backgroundColor: navy,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8))),
+                      child: const Text('Verify & Enable')),
+                ],
+                if (done) ...[
+                  const Icon(Icons.verified_user,
+                      color: Color(0xFF2E7D32), size: 64),
+                  const SizedBox(height: 12),
+                  const Center(
+                      child: Text('2FA Enabled!',
+                          style: TextStyle(
+                              color: Color(0xFF2E7D32),
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900))),
+                  const SizedBox(height: 8),
+                  Text(
+                      "Your account is now protected with ${_twoFactorMethod == 'sms' ? 'SMS OTP' : 'Authenticator App'}. You'll be asked for a code on each new login.",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: _muted)),
+                  const SizedBox(height: 20),
+                  _card([
+                    Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(children: [
+                          Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFE8F5E9),
+                                  borderRadius: BorderRadius.circular(8)),
+                              child: Icon(
+                                  _twoFactorMethod == 'sms'
+                                      ? Icons.phone_android
+                                      : Icons.lock_outline,
+                                  color: const Color(0xFF2E7D32))),
+                          const SizedBox(width: 12),
+                          Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text(
+                                    _twoFactorMethod == 'sms'
+                                        ? 'SMS OTP'
+                                        : 'Authenticator App',
+                                    style: TextStyle(
+                                        color: _text,
+                                        fontWeight: FontWeight.w800)),
+                                const Text('● Active',
+                                    style: TextStyle(
+                                        color: Color(0xFF2E7D32), fontSize: 11))
+                              ])),
+                          Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFE8F5E9),
+                                  borderRadius: BorderRadius.circular(999)),
+                              child: const Text('Enabled',
+                                  style: TextStyle(
+                                      color: Color(0xFF2E7D32),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w800)))
+                        ]))
+                  ]),
+                  Container(
+                      margin: const EdgeInsets.only(bottom: 18),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFFFF8E1),
+                          border: Border.all(color: const Color(0xFFFFE082)),
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Backup codes',
+                                style: TextStyle(
+                                    color: Color(0xFF5D4037),
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 4),
+                            const Text(
+                                'Save these in a safe place - they let you sign in if you lose your authenticator.',
+                                style: TextStyle(
+                                    color: Color(0xFF795548),
+                                    fontSize: 12,
+                                    height: 1.4)),
+                            const SizedBox(height: 10),
+                            GridView.count(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                crossAxisCount: 2,
+                                childAspectRatio: 3.2,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                                children: [
+                                  '7F2K-9PXM',
+                                  '3Q8R-T6WN',
+                                  'BH4J-K2VL',
+                                  'XN9E-5CMR'
+                                ]
+                                    .map((code) => Container(
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                            color: _panel,
+                                            border: Border.all(
+                                                color: const Color(0xFFFFE082)),
+                                            borderRadius:
+                                                BorderRadius.circular(6)),
+                                        child: Text(code,
+                                            style: TextStyle(
+                                                color: _text,
+                                                fontFamily: 'monospace',
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w800))))
+                                    .toList())
+                          ])),
+                  TextButton(
+                      onPressed: () => setState(() => _twoFactorStep = 'intro'),
+                      style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFFD32F2F),
+                          backgroundColor: const Color(0xFFFFEBEE)),
+                      child: const Text('Disable Two-Factor Auth')),
+                ],
+              ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _twoFactorBenefit(IconData icon, String title, String sub) =>
+      Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              color: _panel, borderRadius: BorderRadius.circular(8)),
+          child: Row(children: [
+            Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                    color: navy.withValues(alpha: .10),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Icon(icon, color: navy)),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(title,
+                      style:
+                          TextStyle(color: _text, fontWeight: FontWeight.w800)),
+                  Text(sub, style: TextStyle(color: _muted, fontSize: 11))
+                ]))
+          ]));
+
+  Widget _twoFactorMethodTile(
+          String key, IconData icon, String title, String sub,
+          {bool recommended = false}) =>
+      InkWell(
+          onTap: () => setState(() {
+                _twoFactorMethod = key;
+                _twoFactorStep = 'verify';
+              }),
+          child: Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: _panel, borderRadius: BorderRadius.circular(8)),
+              child: Row(children: [
+                Icon(icon, color: navy, size: 28),
+                const SizedBox(width: 14),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Row(children: [
+                        Text(title,
+                            style: TextStyle(
+                                color: _text, fontWeight: FontWeight.w800)),
+                        if (recommended)
+                          Container(
+                              margin: const EdgeInsets.only(left: 7),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: navy.withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(999)),
+                              child: const Text('RECOMMENDED',
+                                  style: TextStyle(
+                                      color: navy,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800)))
+                      ]),
+                      Text(sub, style: TextStyle(color: _muted, fontSize: 12))
+                    ])),
+                const Icon(Icons.chevron_right, color: muted)
+              ])));
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showCurrencyPicker) return _currencyPicker();
+    if (_page == 'payments') return _paymentMethodsView();
+    if (_page == 'sessions') return _sessionsView();
+    if (_page == 'twoFactor') return _twoFactorView();
+    final business = _business;
+    final currency = business['currency']?.toString() ?? 'KES';
+    return SizedBox.expand(
+        child: Scaffold(
+            backgroundColor: _background,
+            body: Column(children: [
+              _header('Settings', widget.onBack),
+              Expanded(
+                  child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                      children: [
+                    if (_error != null)
+                      Container(
+                          margin: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                              color: const Color(0xFFFFEBEE),
+                              borderRadius: BorderRadius.circular(8)),
+                          child: Text(_error!,
+                              style: const TextStyle(
+                                  color: Color(0xFFC62828), fontSize: 12))),
+                    if (_loading)
+                      const Center(
+                          child: Padding(
+                              padding: EdgeInsets.all(32),
+                              child: CircularProgressIndicator(color: navy))),
+                    if (!_loading) ...[
+                      _section('Appearance'),
+                      _card([
+                        Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Theme',
+                                      style: TextStyle(
+                                          color: _text,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700)),
+                                  const SizedBox(height: 12),
+                                  Row(children: [
+                                    _themeButton('light',
+                                        Icons.light_mode_outlined, 'Light'),
+                                    const SizedBox(width: 8),
+                                    _themeButton('dark',
+                                        Icons.dark_mode_outlined, 'Dark'),
+                                    const SizedBox(width: 8),
+                                    _themeButton('auto',
+                                        Icons.brightness_auto_outlined, 'Auto')
+                                  ])
+                                ]))
+                      ]),
+                      _section('Business Information'),
+                      _card([
+                        _infoRow('Business Name',
+                            business['name']?.toString() ?? '-'),
+                        _infoRow(
+                            'Location',
+                            [business['branch'], business['country']]
+                                    .where((value) =>
+                                        value?.toString().isNotEmpty == true)
+                                    .join(', ')
+                                    .isEmpty
+                                ? '-'
+                                : [business['branch'], business['country']]
+                                    .where((value) =>
+                                        value?.toString().isNotEmpty == true)
+                                    .join(', ')),
+                        _infoRow('Phone', business['phone']?.toString() ?? '-'),
+                        Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                                border: Border(
+                                    bottom: BorderSide(color: _divider))),
+                            child: _editingTaxPin
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                        Text('Tax PIN',
+                                            style: TextStyle(
+                                                color: _muted, fontSize: 13)),
+                                        const SizedBox(height: 8),
+                                        TextField(
+                                            controller: _taxPinController,
+                                            textCapitalization:
+                                                TextCapitalization.characters,
+                                            decoration: const InputDecoration(
+                                                isDense: true,
+                                                hintText: 'Enter Tax PIN',
+                                                border: OutlineInputBorder())),
+                                        const SizedBox(height: 8),
+                                        Align(
+                                            alignment: Alignment.centerRight,
+                                            child: TextButton.icon(
+                                                onPressed: () {
+                                                  setState(() =>
+                                                      _editingTaxPin = false);
+                                                  unawaited(_save({
+                                                    'taxPin': _taxPinController
+                                                        .text
+                                                        .trim()
+                                                  }));
+                                                },
+                                                icon: const Icon(Icons.check,
+                                                    size: 16),
+                                                label: const Text(
+                                                    'Save Tax PIN'),
+                                                style: TextButton.styleFrom(
+                                                    backgroundColor: navy,
+                                                    foregroundColor: Colors
+                                                        .white,
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 12,
+                                                        vertical: 8),
+                                                    shape:
+                                                        RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8)))))
+                                      ])
+                                : Row(children: [
+                                    Expanded(
+                                        child: Text('Tax PIN',
+                                            style: TextStyle(
+                                                color: _muted, fontSize: 13))),
+                                    Flexible(
+                                        child: Text(
+                                            business['taxPin']?.toString() ??
+                                                '-',
+                                            textAlign: TextAlign.right,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                                color: _text,
+                                                fontFamily: 'monospace',
+                                                fontWeight: FontWeight.w700))),
+                                    IconButton(
+                                        onPressed: () => setState(
+                                            () => _editingTaxPin = true),
+                                        icon: const Icon(Icons.edit_outlined,
+                                            size: 17, color: navy))
+                                  ])),
+                        _infoRow('Currency', _moneyLabel(currency),
+                            last: true,
+                            trailing: TextButton(
+                                onPressed: () =>
+                                    setState(() => _showCurrencyPicker = true),
+                                child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(_moneyLabel(currency),
+                                          overflow: TextOverflow.ellipsis),
+                                      const Icon(Icons.chevron_right)
+                                    ])))
+                      ]),
+                      _section('Preferences'),
+                      _card([
+                        _toggleRow('receiptPrint', 'Auto-print Receipt',
+                            'Print receipt after every sale'),
+                        _toggleRow('lowStockAlerts', 'Low Stock Alerts',
+                            'Notify when stock is below reorder level'),
+                        _toggleRow(
+                            'salesNotifications',
+                            'Sales Completed Alerts',
+                            'Notify after each completed sale'),
+                        _toggleRow('dailyReport', 'Daily Report Email',
+                            'Send end-of-day report to email'),
+                        _toggleRow('autoBackup', 'Auto Cloud Backup',
+                            'Backup data daily at midnight'),
+                        _toggleRow('mpesaEnabled', 'M-Pesa Integration',
+                            'Accept M-Pesa payments',
+                            last: true)
+                      ]),
+                      _section('Admin Area'),
+                      _card([
+                        _actionRow(
+                            Icons.credit_card_outlined,
+                            const Color(0xFF0288D1),
+                            'Payment Methods',
+                            'Cash · M-Pesa · Bank · Credit',
+                            onTap: () => setState(() => _page = 'payments')),
+                        _actionRow(
+                            Icons.receipt_long_outlined,
+                            const Color(0xFF5E35B1),
+                            'Receipt Settings',
+                            'Logo, footer text, print format'),
+                        _actionRow(
+                            Icons.assured_workload_outlined,
+                            const Color(0xFF2E7D32),
+                            'Tax & Compliance',
+                            'PIN: ${business['taxPin']?.toString() ?? '-'}',
+                            last: true)
+                      ]),
+                      _section('Security'),
+                      _card([
+                        _actionRow(Icons.phone_android_outlined, navy,
+                            'Active Sessions', '3 devices logged in',
+                            onTap: () => setState(() => _page = 'sessions')),
+                        _actionRow(
+                            Icons.security_outlined,
+                            const Color(0xFF2E7D32),
+                            'Two-Factor Auth',
+                            'Not enabled',
+                            onTap: () => setState(() => _page = 'twoFactor'),
+                            last: true)
+                      ]),
+                      _section('Data Management'),
+                      _card([
+                        _actionRow(
+                            Icons.cloud_upload_outlined,
+                            const Color(0xFF0288D1),
+                            'Backup Now',
+                            'Last backup: Today 06:00 AM',
+                            state: _simulations['backup'],
+                            onTap: () => _simulate('backup')),
+                        _actionRow(
+                            Icons.ios_share_outlined,
+                            const Color(0xFF2E7D32),
+                            'Export Data (CSV)',
+                            'Download all transactions',
+                            state: _simulations['export'],
+                            onTap: () => _simulate('export')),
+                        _actionRow(
+                            Icons.delete_outline,
+                            const Color(0xFFF57C00),
+                            'Clear Cache',
+                            '12.4 MB used',
+                            state: _simulations['cache'],
+                            onTap: () => _simulate('cache'),
+                            last: true)
+                      ]),
+                      Center(
+                          child: Text(
+                              'MobiDuka POS v1.1 · SmartScan Integrated',
+                              style: TextStyle(color: _muted, fontSize: 12))),
+                    ],
+                  ])),
+            ])));
+  }
+}
+
+class LegacySettingsDetailScreen extends StatefulWidget {
+  const LegacySettingsDetailScreen(
       {required this.onBack,
       required this.isDarkMode,
       required this.onThemeChanged,
@@ -8568,10 +10697,12 @@ class SettingsDetailScreen extends StatefulWidget {
   final ValueChanged<bool> onThemeChanged;
 
   @override
-  State<SettingsDetailScreen> createState() => _SettingsDetailScreenState();
+  State<LegacySettingsDetailScreen> createState() =>
+      _LegacySettingsDetailScreenState();
 }
 
-class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
+class _LegacySettingsDetailScreenState
+    extends State<LegacySettingsDetailScreen> {
   bool receiptPrint = true;
   bool lowStockAlerts = true;
   bool dailyReport = false;
@@ -9041,6 +11172,16 @@ class _DetailScreenState extends State<DetailScreen> {
       return ReportsScreen(onBack: widget.onBack);
     if (widget.title == 'Credit Book')
       return CreditBookScreen(onBack: widget.onBack);
+    if (widget.title == 'Customers')
+      return CustomersScreen(onBack: widget.onBack);
+    if (widget.title == 'User Profile')
+      return UserProfileDetailScreen(onBack: widget.onBack);
+    if (widget.title == 'Settings')
+      return SettingsDetailScreen(
+        onBack: widget.onBack,
+        isDarkMode: widget.isDarkMode,
+        onThemeChanged: widget.onThemeChanged,
+      );
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 28, 16, 20),
       children: [
@@ -9061,35 +11202,37 @@ class _DetailScreenState extends State<DetailScreen> {
   List<Widget> _content() {
     switch (widget.title) {
       case 'Purchase Orders':
-        return [PurchaseOrdersScreen(onBack: widget.onBack)];
+        return [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 150,
+            child: PurchaseOrdersScreen(onBack: widget.onBack),
+          ),
+        ];
       case 'Suppliers':
-        return [SupplierScreen(onBack: widget.onBack)];
+        return [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 150,
+            child: SupplierScreen(onBack: widget.onBack),
+          ),
+        ];
       case 'Credit Book':
         return [CreditBookScreen(onBack: widget.onBack)];
+      case 'Customers':
+        return [CustomersScreen(onBack: widget.onBack)];
       case 'Expense Tracking':
-        return _cards([
-          (
-            'Electricity Bill',
-            'Utilities · M-Pesa · 8 Jul 2026',
-            'RECURRING',
-            'KSh 8,500'
+        return [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 150,
+            child: ExpenseTrackingScreen(onBack: widget.onBack),
           ),
-          (
-            'Staff Salaries',
-            'Payroll · Bank · 7 Jul 2026',
-            'RECURRING',
-            'KSh 75,000'
-          ),
-          ('Shop Rent', 'Rent · Bank · 1 Jul 2026', 'RECURRING', 'KSh 35,000'),
-          (
-            'Plastic Bags & Packaging',
-            'Supplies · Cash · 6 Jul 2026',
-            '',
-            'KSh 2,300'
-          )
-        ]);
+        ];
       case 'Employees':
-        return [EmployeeScreen(onBack: widget.onBack)];
+        return [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 150,
+            child: EmployeeScreen(onBack: widget.onBack),
+          ),
+        ];
       case 'Notifications':
         return [NotificationsScreen(onBack: widget.onBack)];
       case 'Backup & Cloud Sync':
@@ -9121,8 +11264,6 @@ class _DetailScreenState extends State<DetailScreen> {
               isDarkMode: widget.isDarkMode,
               onThemeChanged: widget.onThemeChanged)
         ];
-      case 'User Profile':
-        return [UserProfileDetailScreen(onBack: widget.onBack)];
       default:
         return [
           Card(
@@ -9149,16 +11290,17 @@ class _DetailScreenState extends State<DetailScreen> {
       }).toList();
 }
 
-class UserProfileDetailScreen extends StatefulWidget {
-  const UserProfileDetailScreen({required this.onBack, super.key});
+class LegacyUserProfileDetailScreen extends StatefulWidget {
+  const LegacyUserProfileDetailScreen({required this.onBack, super.key});
   final VoidCallback onBack;
 
   @override
-  State<UserProfileDetailScreen> createState() =>
-      _UserProfileDetailScreenState();
+  State<LegacyUserProfileDetailScreen> createState() =>
+      _LegacyUserProfileDetailScreenState();
 }
 
-class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
+class _LegacyUserProfileDetailScreenState
+    extends State<LegacyUserProfileDetailScreen> {
   bool editing = false;
   bool changingPin = false;
   bool saved = false;
@@ -9654,6 +11796,533 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
       );
 }
 
+class UserProfileDetailScreen extends StatefulWidget {
+  const UserProfileDetailScreen({required this.onBack, super.key});
+  final VoidCallback onBack;
+
+  @override
+  State<UserProfileDetailScreen> createState() =>
+      _UserProfileDetailScreenState();
+}
+
+class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
+  final ProfileService _service = ProfileService();
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  final _email = TextEditingController();
+  final _currentPin = TextEditingController();
+  final _newPin = TextEditingController();
+  final _confirmPin = TextEditingController();
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+  bool _editing = false;
+  bool _changingPin = false;
+  bool _saving = false;
+  bool _pinDone = false;
+  String? _securityPage;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    for (final controller in [
+      _name,
+      _phone,
+      _email,
+      _currentPin,
+      _newPin,
+      _confirmPin
+    ]) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final profile = await _service.load();
+      if (!mounted) return;
+      _apply(profile);
+    } on Object catch (error) {
+      if (mounted)
+        setState(() {
+          _loading = false;
+          _error = error.toString().replaceFirst('Exception: ', '');
+        });
+    }
+  }
+
+  void _apply(Map<String, dynamic> profile) => setState(() {
+        _profile = profile;
+        _name.text = profile['name']?.toString() ?? '';
+        _phone.text = profile['phone']?.toString() ?? '';
+        _email.text = profile['email']?.toString() ?? '';
+        _loading = false;
+        _error = null;
+      });
+
+  Future<void> _saveProfile() async {
+    if (_name.text.trim().isEmpty) {
+      setState(() => _error = 'Full name is required.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final profile = await _service.update(
+          name: _name.text.trim(),
+          phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+          email: _email.text.trim().isEmpty ? null : _email.text.trim());
+      if (!mounted) return;
+      _apply(profile);
+      setState(() => _editing = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          backgroundColor: Color(0xFF2E7D32),
+          content: Text('Profile updated successfully.')));
+    } on Object catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _updatePin() async {
+    final configured = _profile?['pinConfigured'] == true;
+    if (configured && _currentPin.text.length != 4) {
+      setState(() => _error = 'Enter your current 4-digit PIN.');
+      return;
+    }
+    if (!RegExp(r'^\d{4}$').hasMatch(_newPin.text)) {
+      setState(() => _error = 'New PIN must be 4 digits.');
+      return;
+    }
+    if (_newPin.text != _confirmPin.text) {
+      setState(() => _error = 'New PINs do not match.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final profile = await _service.updatePin(
+          currentPin: configured ? _currentPin.text : null,
+          newPin: _newPin.text);
+      if (!mounted) return;
+      _apply(profile);
+      setState(() {
+        _saving = false;
+        _pinDone = true;
+      });
+    } on Object catch (error) {
+      if (mounted)
+        setState(() {
+          _saving = false;
+          _error = error.toString().replaceFirst('Exception: ', '');
+        });
+    }
+  }
+
+  void _openSettings(String page) => setState(() => _securityPage = page);
+  String _initials() {
+    final name = _profile?['name']?.toString() ?? 'User';
+    return name
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .take(2)
+        .map((word) => word[0])
+        .join()
+        .toUpperCase();
+  }
+
+  String _memberSince() {
+    final date = DateTime.tryParse(_profile?['memberSince']?.toString() ?? '');
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December'
+    ];
+    return date == null ? '-' : '${months[date.month - 1]} ${date.year}';
+  }
+
+  Widget _header(String title, VoidCallback onBack, {Widget? action}) =>
+      Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 46, 16, 22),
+          decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy])),
+          child: Row(children: [
+            IconButton(
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                style: IconButton.styleFrom(
+                    backgroundColor: Colors.white24,
+                    fixedSize: const Size(36, 36))),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800))),
+            if (action != null) action
+          ]));
+  Widget _section(String value) => Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(value.toUpperCase(),
+              style: const TextStyle(
+                  color: muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .6))));
+  Widget _card(List<Widget> children) => Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+          ]),
+      child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, children: children));
+  Widget _field(String label, TextEditingController controller,
+          {TextInputType? type, bool editable = true}) =>
+      Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(
+                    color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            editable
+                ? TextField(
+                    controller: controller,
+                    keyboardType: type,
+                    decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 12, vertical: 12)))
+                : Text(controller.text.isEmpty ? '-' : controller.text,
+                    style: const TextStyle(
+                        color: ink, fontSize: 14, fontWeight: FontWeight.w700))
+          ]));
+  Widget _security(IconData icon, String label, String sub, VoidCallback action,
+          {bool last = false}) =>
+      InkWell(
+          onTap: action,
+          child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              decoration: BoxDecoration(
+                  border: Border(
+                      bottom: BorderSide(
+                          color: last
+                              ? Colors.transparent
+                              : const Color(0xFFF0F3F9)))),
+              child: Row(children: [
+                Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFEEF3FF),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Icon(icon, color: navy)),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(label,
+                          style: const TextStyle(
+                              color: ink, fontWeight: FontWeight.w700)),
+                      Text(sub,
+                          style: const TextStyle(color: muted, fontSize: 11))
+                    ])),
+                const Icon(Icons.chevron_right,
+                    color: Color(0xFFB0BAD3), size: 18)
+              ])));
+
+  Widget _pinView() {
+    final configured = _profile?['pinConfigured'] == true;
+    final contents = _pinDone
+        ? <Widget>[
+            const Icon(Icons.lock_outline, size: 52, color: navy),
+            const SizedBox(height: 12),
+            const Text('PIN Updated!',
+                style: TextStyle(
+                    color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            const Text('Your new PIN is active.\nUse it on your next login.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: muted, fontSize: 13)),
+            const SizedBox(height: 22),
+            SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                    onPressed: () => setState(() {
+                          _changingPin = false;
+                          _pinDone = false;
+                          _currentPin.clear();
+                          _newPin.clear();
+                          _confirmPin.clear();
+                        }),
+                    style: TextButton.styleFrom(
+                        backgroundColor: navy,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8))),
+                    child: const Text('Done'))),
+          ]
+        : <Widget>[
+            if (_error != null)
+              Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFFFEBEE),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Text(_error!,
+                      style: const TextStyle(
+                          color: Color(0xFFC62828), fontSize: 12))),
+            if (configured) _pinField('Current PIN', _currentPin),
+            _pinField(configured ? 'New PIN' : 'Create PIN', _newPin),
+            _pinField('Confirm New PIN', _confirmPin),
+            SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                    onPressed: _saving ? null : _updatePin,
+                    style: TextButton.styleFrom(
+                        backgroundColor: navy,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8))),
+                    child: Text(_saving ? 'Updating...' : 'Update PIN',
+                        style: const TextStyle(fontWeight: FontWeight.w800)))),
+          ];
+    return Scaffold(
+        backgroundColor: const Color(0xFFF5F7FA),
+        body: Column(children: [
+          _header(
+              'Change PIN',
+              () => setState(() {
+                    _changingPin = false;
+                    _pinDone = false;
+                    _error = null;
+                  })),
+          Expanded(
+              child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [_card(contents)])),
+        ]));
+  }
+
+  Widget _pinField(String label, TextEditingController controller) => Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(
+                color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        TextField(
+            controller: controller,
+            obscureText: true,
+            maxLength: 4,
+            keyboardType: TextInputType.number,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 28, letterSpacing: 12, fontWeight: FontWeight.w800),
+            decoration: const InputDecoration(
+                hintText: '••••',
+                counterText: '',
+                border: OutlineInputBorder()))
+      ]));
+
+  @override
+  Widget build(BuildContext context) {
+    if (_securityPage != null) {
+      return SettingsDetailScreen(
+          onBack: () => setState(() => _securityPage = null),
+          isDarkMode: Theme.of(context).brightness == Brightness.dark,
+          onThemeChanged: (_) {},
+          initialPage: _securityPage!);
+    }
+    if (_changingPin) return _pinView();
+    final profile = _profile;
+    final business = profile?['business'] as Map? ?? const {};
+    return SizedBox.expand(
+        child: Scaffold(
+            backgroundColor: const Color(0xFFF5F7FA),
+            body: Column(children: [
+              Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 46, 16, 24),
+                  decoration: const BoxDecoration(
+                      gradient: LinearGradient(colors: [ink, navy])),
+                  child: Column(children: [
+                    Row(children: [
+                      IconButton(
+                          onPressed: widget.onBack,
+                          icon:
+                              const Icon(Icons.arrow_back, color: Colors.white),
+                          style: IconButton.styleFrom(
+                              backgroundColor: Colors.white24,
+                              fixedSize: const Size(36, 36))),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                          child: Text('User Profile',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800))),
+                      TextButton(
+                          onPressed: () => setState(() {
+                                _editing = !_editing;
+                                _error = null;
+                              }),
+                          style: TextButton.styleFrom(
+                              backgroundColor: _editing ? gold : Colors.white24,
+                              foregroundColor: _editing ? ink : Colors.white,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8))),
+                          child: Text(_editing ? 'Cancel' : 'Edit')),
+                    ]),
+                    const SizedBox(height: 18),
+                    CircleAvatar(
+                        radius: 40,
+                        backgroundColor: gold,
+                        child: Text(_initials(),
+                            style: const TextStyle(
+                                color: ink,
+                                fontSize: 30,
+                                fontWeight: FontWeight.w800))),
+                    const SizedBox(height: 10),
+                    Text(profile?['name']?.toString() ?? 'Loading profile...',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800)),
+                    Container(
+                        margin: const EdgeInsets.only(top: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: gold.withValues(alpha: .24),
+                            borderRadius: BorderRadius.circular(999)),
+                        child: Text(profile?['role']?.toString() ?? 'User',
+                            style: const TextStyle(
+                                color: gold,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700)))
+                  ])),
+              Expanded(
+                  child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                      children: [
+                    if (_error != null)
+                      Container(
+                          margin: const EdgeInsets.only(bottom: 14),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                              color: const Color(0xFFFFEBEE),
+                              borderRadius: BorderRadius.circular(8)),
+                          child: Text(_error!,
+                              style: const TextStyle(
+                                  color: Color(0xFFC62828), fontSize: 12))),
+                    if (_loading)
+                      const Center(
+                          child: Padding(
+                              padding: EdgeInsets.all(32),
+                              child: CircularProgressIndicator(color: navy))),
+                    if (!_loading) ...[
+                      _section('Personal Information'),
+                      _card([
+                        _field('Full Name', _name, editable: _editing),
+                        _field('Phone Number', _phone,
+                            type: TextInputType.phone, editable: _editing),
+                        _field('Email Address', _email,
+                            type: TextInputType.emailAddress,
+                            editable: _editing),
+                        if (_editing)
+                          SizedBox(
+                              width: double.infinity,
+                              child: TextButton(
+                                  onPressed: _saving ? null : _saveProfile,
+                                  style: TextButton.styleFrom(
+                                      backgroundColor: navy,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(8))),
+                                  child: Text(
+                                      _saving ? 'Saving...' : 'Save Changes')))
+                      ]),
+                      _section('Store Information'),
+                      _card([
+                        _field(
+                            'Store Name',
+                            TextEditingController(
+                                text: business['name']?.toString() ?? ''),
+                            editable: false),
+                        _field(
+                            'Branch',
+                            TextEditingController(
+                                text: business['branch']?.toString() ?? ''),
+                            editable: false)
+                      ]),
+                      _section('Security'),
+                      _card([
+                        _security(
+                            Icons.lock_outline,
+                            'Change PIN',
+                            'Update your 4-digit login PIN',
+                            () => setState(() {
+                                  _changingPin = true;
+                                  _error = null;
+                                })),
+                        _security(
+                            Icons.phone_android_outlined,
+                            'Active Sessions',
+                            '3 devices currently logged in',
+                            () => _openSettings('sessions')),
+                        _security(Icons.security_outlined, 'Two-Factor Auth',
+                            'Not enabled', () => _openSettings('twoFactor'),
+                            last: true)
+                      ]),
+                      Center(
+                          child: Text(
+                              'Member since ${_memberSince()}\nMobiDuka POS · ${profile?['role'] ?? 'User'} · ${business['name'] ?? '-'} · ${business['branch'] ?? '-'}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  color: Color(0xFFB0BAD3),
+                                  fontSize: 12,
+                                  height: 1.5)))
+                    ]
+                  ]))
+            ])));
+  }
+}
+
 class PurchaseOrdersScreen extends StatefulWidget {
   const PurchaseOrdersScreen({required this.onBack, super.key});
   final VoidCallback onBack;
@@ -9662,125 +12331,113 @@ class PurchaseOrdersScreen extends StatefulWidget {
   State<PurchaseOrdersScreen> createState() => _PurchaseOrdersScreenState();
 }
 
-class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
-  final SyncService _syncService = SyncService();
-  final PurchaseOrderService _purchaseOrderService =
-      PurchaseOrderService.instance;
+class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen>
+    with AutomaticKeepAliveClientMixin {
+  final PurchaseOrderService _purchaseOrderService = PurchaseOrderService();
 
   String filter = 'all';
   _PurchaseOrderEntry? selected;
   bool showNew = false;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  String? _dataError;
   List<_PurchaseOrderEntry> orders = const [];
   final Map<String, TextEditingController> _itemControllers = {};
-
-  final List<Map<String, dynamic>> orderItems = const [
-    {
-      'name': 'Unga Jogoo 2kg',
-      'qty': 50,
-      'unit': 'Bags',
-      'cost': 160,
-      'total': 8000
-    },
-    {
-      'name': 'Unga Pembe 2kg',
-      'qty': 40,
-      'unit': 'Bags',
-      'cost': 155,
-      'total': 6200
-    },
-    {
-      'name': 'Sembe 2kg',
-      'qty': 60,
-      'unit': 'Bags',
-      'cost': 110,
-      'total': 6600
-    },
-    {
-      'name': 'Unga Dola 1kg',
-      'qty': 80,
-      'unit': 'Bags',
-      'cost': 80,
-      'total': 6400
-    },
-    {
-      'name': 'Maize Meal 2kg',
-      'qty': 50,
-      'unit': 'Bags',
-      'cost': 100,
-      'total': 5000
-    },
-    {
-      'name': 'Rice Pishori 1kg',
-      'qty': 40,
-      'unit': 'Packs',
-      'cost': 190,
-      'total': 7600
-    },
-  ];
-
-  final List<String> suppliers = const [
-    'Unga Limited',
-    'Bidco Africa',
-    'Procter & Gamble',
-    'Dawa Limited',
-    'Brookside Dairy'
-  ];
-
-  final Map<String, String> newForm = {'supplier': '', 'notes': ''};
+  final Map<String, TextEditingController> _costControllers = {};
+  final TextEditingController _dueDateController = TextEditingController();
+  final List<Map<String, dynamic>> orderItems = [];
+  List<PurchaseOrderSupplier> suppliers = const [];
+  List<PurchaseOrderProduct> _products = const [];
+  final Map<String, String> newForm = {
+    'supplierId': '',
+    'dueDate': '',
+    'notes': '',
+  };
 
   @override
   void initState() {
     super.initState();
     _loadOrders();
-    for (final item in orderItems) {
-      final name = item['name'] as String;
-      _itemControllers[name] = TextEditingController(text: '${item['qty']}');
-    }
   }
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void dispose() {
     for (final controller in _itemControllers.values) {
       controller.dispose();
     }
+    for (final controller in _costControllers.values) {
+      controller.dispose();
+    }
+    _dueDateController.dispose();
     super.dispose();
   }
 
   Future<void> _loadOrders() async {
-    final rows = await _purchaseOrderService.loadPurchaseOrders();
-    if (!mounted) return;
-
     setState(() {
-      orders = rows.map(_mapRowToOrder).toList();
+      _isLoading = true;
+      _dataError = null;
     });
+    try {
+      final data = await Future.wait([
+        _purchaseOrderService.loadPurchaseOrders(),
+        _purchaseOrderService.loadSuppliers(),
+        _purchaseOrderService.loadProducts(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        orders = (data[0] as List<Map<String, dynamic>>)
+            .map(_mapRowToOrder)
+            .toList();
+        suppliers = data[1] as List<PurchaseOrderSupplier>;
+        _products = data[2] as List<PurchaseOrderProduct>;
+      });
+    } catch (error) {
+      if (mounted)
+        setState(() =>
+            _dataError = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   _PurchaseOrderEntry _mapRowToOrder(Map<String, dynamic> row) {
     final rawStatus = (row['status'] as String? ?? 'REQUESTED').toString();
     final status = _normalizeOrderStatus(rawStatus);
 
-    final rawItems = row['items'] as String? ?? '[]';
-    List<dynamic> decodedItems = [];
-    try {
-      decodedItems = jsonDecode(rawItems) as List<dynamic>;
-    } catch (_) {
-      decodedItems = const [];
-    }
+    final rawItems = row['items'];
+    final decodedItems = rawItems is List ? rawItems : const [];
 
     return _PurchaseOrderEntry(
-      id: row['id'] as String? ?? 'PO-${DateTime.now().millisecondsSinceEpoch}',
-      supplier: row['supplierName'] as String? ?? 'Supplier',
+      id: row['id']?.toString() ?? '',
+      orderNo: row['orderNo']?.toString() ?? row['id']?.toString() ?? '',
+      supplier: (row['supplier'] as Map?)?['name']?.toString() ??
+          'Unassigned supplier',
       date: _formatDisplayDate(row['createdAt'] as String?),
       items: decodedItems.length,
-      itemLines: decodedItems
-          .whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item))
-          .toList(),
-      total: row['total'] as int? ?? 0,
+      itemLines: decodedItems.whereType<Map>().map((item) {
+        final line = Map<String, dynamic>.from(item);
+        final product = line['product'] as Map?;
+        final quantity = line['quantity'] ?? 0;
+        final cost = line['costPrice'] ?? 0;
+        return {
+          'name': product?['name'] ?? 'Product',
+          'qty': quantity,
+          'unit': product?['unit'] ?? 'units',
+          'cost': cost,
+          'total': _number(quantity) * _number(cost)
+        };
+      }).toList(),
+      total: _number(row['totalCost']).round(),
       status: status,
-      dueDate: _formatDisplayDate(row['expectedDeliveryDate'] as String?),
+      dueDate: _formatDisplayDate(row['dueDate']?.toString()),
     );
   }
+
+  num _number(Object? value) =>
+      value is num ? value : num.tryParse(value?.toString() ?? '') ?? 0;
 
   String _normalizeOrderStatus(String status) {
     final value = status.trim().toLowerCase();
@@ -9819,166 +12476,84 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   }
 
   Future<void> _submitPurchaseOrder() async {
-    final supplierName = (newForm['supplier'] ?? '').trim();
-    if (supplierName.isEmpty) {
+    final supplierId = newForm['supplierId'] ?? '';
+    if (supplierId.isEmpty || orderItems.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text(
-                'Please select a supplier before submitting the procurement request.')),
+            content: Text('Select a supplier and add at least one item.')),
       );
       return;
     }
-
     final draftedItems = orderItems.map((item) {
-      final name = item['name'] as String;
-      final controller = _itemControllers[name] ??
-          TextEditingController(text: '${item['qty']}');
-      final qty = int.tryParse(controller.text) ?? (item['qty'] as int);
-      final cost = item['cost'] as int;
-      return {
-        'name': name,
-        'qty': qty,
-        'unit': item['unit'],
-        'cost': cost,
-        'total': qty * cost,
+      final id = item['productId'] as String;
+      final quantity = int.tryParse(_itemControllers[id]?.text ?? '') ?? 0;
+      return <String, Object?>{
+        'productId': id,
+        'quantity': quantity,
+        'costPrice': _number(_costControllers[id]?.text ?? item['cost'])
       };
     }).toList();
+    if (draftedItems.any((item) => (item['quantity'] as int) < 1)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Every item needs a quantity of at least 1.')));
+      return;
+    }
+    setState(() => _isSaving = true);
+    try {
+      await _purchaseOrderService.createPurchaseOrder(
+        supplierId: supplierId,
+        dueDate: newForm['dueDate'] ?? '',
+        items: draftedItems,
+      );
+      if (!mounted) return;
+      setState(() {
+        newForm.addAll({'supplierId': '', 'dueDate': '', 'notes': ''});
+        _dueDateController.clear();
+        _clearDraftItems();
+        showNew = false;
+      });
+      await _loadOrders();
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Purchase order submitted.')));
+    } catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', ''))));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
 
-    final created = await _purchaseOrderService.createOfflinePurchaseOrder(
-      supplierName: supplierName,
-      items: draftedItems,
-      notes: newForm['notes'],
-      expectedDeliveryDate:
-          DateTime.now().add(const Duration(days: 5)).toIso8601String(),
-    );
-
-    final orderId = created['id'] as String? ??
-        'PO-${DateTime.now().millisecondsSinceEpoch}';
-
-    await _syncService.queueChange(
-      id: orderId,
-      entityName: 'purchase_order',
-      operation: 'create',
-      payload: {
-        'id': orderId,
-        'supplierName': supplierName,
-        'status': 'REQUESTED',
-        'action': 'CREATE',
-        'notes': newForm['notes'] ?? '',
-        'expectedDeliveryDate':
-            DateTime.now().add(const Duration(days: 5)).toIso8601String(),
-        'items': draftedItems,
-        'total': created['total'],
-      },
-    );
-
-    if (!mounted) return;
-
+  void _openNewOrder() {
     setState(() {
-      newForm['supplier'] = '';
-      newForm['notes'] = '';
-      showNew = false;
-      for (final item in orderItems) {
-        final name = item['name'] as String;
-        _itemControllers[name]?.text = '${item['qty']}';
-      }
+      newForm.addAll({'supplierId': '', 'dueDate': '', 'notes': ''});
+      _dueDateController.clear();
+      _clearDraftItems();
+      showNew = true;
     });
-
-    await _loadOrders();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          backgroundColor: Color(0xFF2E7D32),
-          content: Text('Procurement request saved offline.')),
-    );
-    unawaited(_syncService.processCloudSync(
-      businessId: 'demo-business',
-      deviceId: 'mobile-device',
-      userId: 'demo-owner',
-    ));
   }
 
   Future<void> _markOrderReceived(_PurchaseOrderEntry order) async {
-    final updated =
-        await _purchaseOrderService.markPurchaseOrderReceived(order.id);
-    if (updated.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Unable to mark the purchase order as received.')),
-      );
-      return;
-    }
-
-    final orderItemsRaw = updated['items'] as String? ?? '[]';
-    List<dynamic> items = [];
+    setState(() => _isSaving = true);
     try {
-      items = jsonDecode(orderItemsRaw) as List<dynamic>;
-    } catch (_) {
-      items = const [];
+      await _purchaseOrderService.markPurchaseOrderReceived(order.id);
+      if (!mounted) return;
+      setState(() => selected = null);
+      await _loadOrders();
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Purchase order marked as received.')));
+    } catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', ''))));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
-
-    final refreshedProducts = List<Product>.from(products);
-    for (final item in items) {
-      final itemMap = item as Map<String, dynamic>;
-      final name = itemMap['name'] as String? ?? '';
-      final qty = (itemMap['qty'] is num)
-          ? (itemMap['qty'] as num).toInt()
-          : int.tryParse(itemMap['qty']?.toString() ?? '') ?? 0;
-      if (name.isEmpty || qty <= 0) continue;
-
-      final index =
-          refreshedProducts.indexWhere((product) => product.name == name);
-      if (index >= 0) {
-        final existing = refreshedProducts[index];
-        refreshedProducts[index] = Product(
-          existing.name,
-          existing.category,
-          existing.cost,
-          existing.price,
-          existing.stock + qty,
-          existing.reorder,
-          existing.emoji,
-          status: existing.stock + qty <= existing.reorder ? 'low' : 'good',
-        );
-      }
-    }
-
-    products = refreshedProducts;
-    await ProductRepository.instance.saveProducts(products);
-
-    await _syncService.queueChange(
-      id: order.id,
-      entityName: 'purchase_order',
-      operation: 'update',
-      payload: {
-        'id': order.id,
-        'supplierName': order.supplier,
-        'status': 'RECEIVED',
-        'action': 'RECEIVE',
-        'items': items,
-        'receivedAt': updated['receivedAt'],
-      },
-    );
-    if (!mounted) return;
-
-    setState(() {
-      selected = null;
-    });
-    await _loadOrders();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          backgroundColor: Color(0xFF2E7D32),
-          content: Text(
-              'Stock was refreshed and the receipt was recorded offline.')),
-    );
-    unawaited(_syncService.processCloudSync(
-      businessId: 'demo-business',
-      deviceId: 'mobile-device',
-      userId: 'demo-owner',
-    ));
   }
 
   List<_PurchaseOrderEntry> get filteredOrders {
@@ -9991,20 +12566,77 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     return orders;
   }
 
-  int get draftSubtotal {
-    var total = 0;
+  void _addDraftItem() {
+    final product = _products.firstWhere(
+      (candidate) =>
+          !orderItems.any((item) => item['productId'] == candidate.id),
+      orElse: () =>
+          const PurchaseOrderProduct(id: '', name: '', unit: '', costPrice: 0),
+    );
+    if (product.id.isEmpty) return;
+    final item = <String, dynamic>{
+      'productId': product.id,
+      'name': product.name,
+      'unit': product.unit,
+      'cost': product.costPrice,
+    };
+    setState(() {
+      orderItems.add(item);
+      _itemControllers[product.id] = TextEditingController(text: '1');
+      _costControllers[product.id] =
+          TextEditingController(text: product.costPrice.toString());
+    });
+  }
+
+  void _removeDraftItem(int index) {
+    final item = orderItems.removeAt(index);
+    _itemControllers.remove(item['productId'])?.dispose();
+    _costControllers.remove(item['productId'])?.dispose();
+    setState(() {});
+  }
+
+  void _changeDraftProduct(int index, String productId) {
+    final product =
+        _products.firstWhere((candidate) => candidate.id == productId);
+    final oldId = orderItems[index]['productId'] as String;
+    _itemControllers.remove(oldId)?.dispose();
+    _costControllers.remove(oldId)?.dispose();
+    _itemControllers[product.id] = TextEditingController(text: '1');
+    _costControllers[product.id] =
+        TextEditingController(text: product.costPrice.toString());
+    setState(() => orderItems[index] = {
+          'productId': product.id,
+          'name': product.name,
+          'unit': product.unit,
+          'cost': product.costPrice,
+        });
+  }
+
+  void _clearDraftItems() {
+    for (final controller in _itemControllers.values) {
+      controller.dispose();
+    }
+    for (final controller in _costControllers.values) {
+      controller.dispose();
+    }
+    _itemControllers.clear();
+    _costControllers.clear();
+    orderItems.clear();
+  }
+
+  num get draftSubtotal {
+    num total = 0;
     for (final item in orderItems) {
-      final name = item['name'] as String;
-      final qty = int.tryParse(_itemControllers[name]?.text ?? '') ??
-          (item['qty'] as int);
-      final cost = item['cost'] as int;
+      final id = item['productId'] as String;
+      final qty = int.tryParse(_itemControllers[id]?.text ?? '') ?? 0;
+      final cost = _number(_costControllers[id]?.text ?? item['cost']);
       total += qty * cost;
     }
     return total;
   }
 
-  int get draftTax => (draftSubtotal * 0.16).round();
-  int get draftTotal => draftSubtotal + draftTax;
+  num get draftTax => 0;
+  num get draftTotal => draftSubtotal + draftTax;
 
   Color _statusColor(String status) {
     switch (status) {
@@ -10045,11 +12677,11 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
         onTap: () => setState(() => selected = order),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(14),
-          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          margin: const EdgeInsets.only(bottom: 8),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(8),
             boxShadow: const [
               BoxShadow(
                   color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
@@ -10064,7 +12696,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(order.id,
+                        Text(order.orderNo,
                             style: const TextStyle(
                                 color: ink,
                                 fontSize: 13,
@@ -10078,7 +12710,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   _statusBadge(order.status),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -10092,7 +12724,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                           fontWeight: FontWeight.w800)),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Container(
                 height: 4,
                 decoration: BoxDecoration(
@@ -10219,39 +12851,88 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                               fontSize: 13,
                               fontWeight: FontWeight.w800)),
                       const SizedBox(height: 16),
+                      const Text('Supplier *',
+                          style: TextStyle(
+                              color: muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 6),
                       DropdownButtonFormField<String>(
-                        initialValue: newForm['supplier']!.isEmpty
+                        value: newForm['supplierId']!.isEmpty
                             ? null
-                            : newForm['supplier'],
+                            : newForm['supplierId'],
+                        isExpanded: true,
+                        hint: const Text('Select supplier...'),
                         decoration: const InputDecoration(
-                          labelText: 'Supplier *',
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(
                               horizontal: 12, vertical: 12),
                         ),
                         items: suppliers
                             .map((supplier) => DropdownMenuItem(
-                                value: supplier, child: Text(supplier)))
+                                value: supplier.id,
+                                child: Text(supplier.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis)))
+                            .toList(),
+                        selectedItemBuilder: (context) => suppliers
+                            .map((supplier) => Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(supplier.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis),
+                                ))
                             .toList(),
                         onChanged: (value) =>
-                            setState(() => newForm['supplier'] = value ?? ''),
+                            setState(() => newForm['supplierId'] = value ?? ''),
                       ),
                       const SizedBox(height: 14),
+                      const Text('Expected Delivery Date *',
+                          style: TextStyle(
+                              color: muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 6),
                       TextField(
-                        keyboardType: TextInputType.datetime,
+                        controller: _dueDateController,
+                        readOnly: true,
                         decoration: const InputDecoration(
-                          labelText: 'Expected Delivery Date *',
+                          hintText: 'mm/dd/yyyy',
                           border: OutlineInputBorder(),
+                          suffixIcon: Icon(Icons.calendar_today_outlined),
                           contentPadding: EdgeInsets.symmetric(
                               horizontal: 12, vertical: 12),
                         ),
+                        onTap: () async {
+                          final date = await showDatePicker(
+                            context: context,
+                            initialDate:
+                                DateTime.now().add(const Duration(days: 1)),
+                            firstDate: DateTime.now(),
+                            lastDate:
+                                DateTime.now().add(const Duration(days: 3650)),
+                          );
+                          if (date == null || !mounted) return;
+                          final apiValue =
+                              '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+                          setState(() {
+                            newForm['dueDate'] = apiValue;
+                            _dueDateController.text =
+                                '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year}';
+                          });
+                        },
                       ),
                       const SizedBox(height: 14),
+                      const Text('Notes',
+                          style: TextStyle(
+                              color: muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 6),
                       TextField(
                         minLines: 3,
                         maxLines: 5,
                         decoration: const InputDecoration(
-                          labelText: 'Notes',
                           hintText: 'Optional notes...',
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(
@@ -10268,66 +12949,114 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                     style: TextStyle(
                         color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
-                ...orderItems.take(4).map((item) => Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: const [
-                          BoxShadow(
-                              color: Color(0x0F000000),
-                              blurRadius: 8,
-                              offset: Offset(0, 2))
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(item['name'] as String,
-                                    style: const TextStyle(
-                                        color: ink,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700)),
-                                Text('KSh ${item['cost']} / ${item['unit']}',
-                                    style: const TextStyle(
-                                        color: muted, fontSize: 11)),
-                              ],
+                ...orderItems.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final item = entry.value;
+                  final productId = item['productId'] as String;
+                  final lineTotal = (int.tryParse(
+                              _itemControllers[productId]?.text ?? '') ??
+                          0) *
+                      _number(
+                          _costControllers[productId]?.text ?? item['cost']);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 8,
+                            offset: Offset(0, 2))
+                      ],
+                    ),
+                    child: Column(children: [
+                      Row(children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: productId,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                                isDense: true, border: OutlineInputBorder()),
+                            items: _products
+                                .map((product) => DropdownMenuItem(
+                                    value: product.id,
+                                    child: Text(product.name,
+                                        overflow: TextOverflow.ellipsis)))
+                                .toList(),
+                            onChanged: (value) {
+                              if (value != null)
+                                _changeDraftProduct(index, value);
+                            },
+                          ),
+                        ),
+                        IconButton(
+                            onPressed: () => _removeDraftItem(index),
+                            icon: const Icon(Icons.close),
+                            color: const Color(0xFFC62828),
+                            tooltip: 'Remove item'),
+                      ]),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        Expanded(
+                          child: TextField(
+                            textAlign: TextAlign.center,
+                            keyboardType: TextInputType.number,
+                            controller: _itemControllers[productId],
+                            onChanged: (_) => setState(() {}),
+                            decoration: const InputDecoration(
+                              labelText: 'Quantity',
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 8),
+                              border: OutlineInputBorder(),
                             ),
                           ),
-                          SizedBox(
-                            width: 62,
-                            child: TextField(
-                              textAlign: TextAlign.center,
-                              keyboardType: TextInputType.number,
-                              controller: _itemControllers[item['name']] ??
-                                  TextEditingController(text: '${item['qty']}'),
-                              decoration: const InputDecoration(
-                                contentPadding: EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 8),
-                                border: OutlineInputBorder(),
-                              ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            textAlign: TextAlign.center,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            controller: _costControllers[productId],
+                            onChanged: (_) => setState(() {}),
+                            decoration: const InputDecoration(
+                              labelText: 'Buying price (KSh)',
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 8),
+                              border: OutlineInputBorder(),
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          SizedBox(
-                            width: 80,
-                            child: Text(
-                              'KSh ${item['total']}',
-                              textAlign: TextAlign.right,
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+                      Align(
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                              '${item['unit']} · Line total: KSh $lineTotal',
                               style: const TextStyle(
                                   color: navy,
                                   fontSize: 12,
-                                  fontWeight: FontWeight.w800),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )),
-                Container(
+                                  fontWeight: FontWeight.w700)))
+                    ]),
+                  );
+                }),
+                OutlinedButton.icon(
+                  onPressed:
+                      _products.isEmpty || orderItems.length >= _products.length
+                          ? null
+                          : _addDraftItem,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Item'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: navy,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    side: const BorderSide(color: navy, width: 1.5),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                /*Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   margin: const EdgeInsets.only(bottom: 16),
@@ -10346,7 +13075,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             fontSize: 13,
                             fontWeight: FontWeight.w700)),
                   ),
-                ),
+                ),*/
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -10363,7 +13092,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                     children: [
                       _totalsRow('Subtotal',
                           'KSh ${draftSubtotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
-                      _totalsRow('Tax (16% VAT)',
+                      _totalsRow('Tax (0%)',
                           'KSh ${draftTax.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}'),
                       _totalsRow('Total',
                           'KSh ${draftTotal.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}',
@@ -10373,7 +13102,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                 ),
                 const SizedBox(height: 20),
                 TextButton(
-                  onPressed: _submitPurchaseOrder,
+                  onPressed: _isSaving ? null : _submitPurchaseOrder,
                   style: TextButton.styleFrom(
                     backgroundColor: navy,
                     foregroundColor: Colors.white,
@@ -10381,9 +13110,10 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                         borderRadius: BorderRadius.circular(16)),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  child: const Text('Submit Procurement Request',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                  child: Text(
+                      _isSaving ? 'Submitting...' : 'Submit Purchase Order',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800)),
                 ),
               ],
             ),
@@ -10441,7 +13171,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(order.id,
+                          Text(order.orderNo,
                               style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -10567,7 +13297,9 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: TextButton(
-                          onPressed: () => _markOrderReceived(order),
+                          onPressed: _isSaving
+                              ? null
+                              : () => _markOrderReceived(order),
                           style: TextButton.styleFrom(
                             foregroundColor: Colors.white,
                             backgroundColor: const Color(0xFF2E7D32),
@@ -10616,6 +13348,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     if (showNew) return _newPurchaseOrderView();
     if (selected != null) return _detailView(selected!);
 
@@ -10631,6 +13364,15 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
             ),
             child: Column(
               children: [
+                if (_dataError != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    color: const Color(0xFFFFEBEE),
+                    child: Text(_dataError!,
+                        style: const TextStyle(
+                            color: Color(0xFFC62828), fontSize: 12)),
+                  ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -10645,7 +13387,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                       ],
                     ),
                     TextButton(
-                      onPressed: () => setState(() => showNew = true),
+                      onPressed: _openNewOrder,
                       style: TextButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: ink,
@@ -10681,11 +13423,11 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   children: [
                     _topMetric(
                         'KSh ${orders.fold<int>(0, (sum, order) => sum + order.total).toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}',
-                        'Total Orders',
+                        'This Month',
                         navy),
                     const SizedBox(width: 8),
                     _topMetric(
-                        '${orders.where((order) => order.status == 'pending').length}',
+                        '${orders.where((order) => order.status == 'pending' || order.status == 'partial').length}',
                         'Pending',
                         const Color(0xFFF9A825)),
                     const SizedBox(width: 8),
@@ -10696,7 +13438,18 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                ...filteredOrders.map(_orderCard),
+                if (_isLoading)
+                  const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: CircularProgressIndicator()))
+                else if (filteredOrders.isEmpty)
+                  const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(
+                          child: Text('No purchase orders found.',
+                              style: TextStyle(color: muted))))
+                else
+                  ...filteredOrders.map(_orderCard),
               ],
             ),
           ),
@@ -10709,6 +13462,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
 class _PurchaseOrderEntry {
   const _PurchaseOrderEntry({
     required this.id,
+    required this.orderNo,
     required this.supplier,
     required this.date,
     required this.items,
@@ -10719,6 +13473,7 @@ class _PurchaseOrderEntry {
   });
 
   final String id;
+  final String orderNo;
   final String supplier;
   final String date;
   final int items;
@@ -10726,6 +13481,481 @@ class _PurchaseOrderEntry {
   final int total;
   final String status;
   final String dueDate;
+}
+
+class ExpenseTrackingScreen extends StatefulWidget {
+  const ExpenseTrackingScreen({required this.onBack, super.key});
+  final VoidCallback onBack;
+  @override
+  State<ExpenseTrackingScreen> createState() => _ExpenseTrackingScreenState();
+}
+
+class _ExpenseTrackingScreenState extends State<ExpenseTrackingScreen> {
+  final ExpenseService _service = ExpenseService();
+  final _description = TextEditingController();
+  final _amount = TextEditingController();
+  final _otherCategory = TextEditingController();
+  final _date = TextEditingController();
+  List<Map<String, dynamic>> _expenses = const [];
+  String _filter = 'All';
+  String _category = 'Utilities';
+  String _method = 'Cash';
+  bool _recurring = false;
+  bool _showAdd = false;
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+  static const _knownCategories = [
+    'Utilities',
+    'Payroll',
+    'Rent',
+    'Supplies',
+    'Logistics'
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _resetForm();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _description.dispose();
+    _amount.dispose();
+    _otherCategory.dispose();
+    _date.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final expenses = await _service.loadExpenses();
+      if (mounted)
+        setState(() {
+          _expenses = expenses;
+          _error = null;
+        });
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _resetForm() {
+    _description.clear();
+    _amount.clear();
+    _otherCategory.clear();
+    _date.text = DateTime.now().toIso8601String().substring(0, 10);
+    _category = 'Utilities';
+    _method = 'Cash';
+    _recurring = false;
+  }
+
+  String _normalizedCategory(Object? value) {
+    final raw = value?.toString().trim() ?? '';
+    final found = _knownCategories
+        .where((item) => item.toLowerCase() == raw.toLowerCase());
+    return found.isEmpty
+        ? (raw.isEmpty
+            ? 'Uncategorized'
+            : '${raw[0].toUpperCase()}${raw.substring(1).toLowerCase()}')
+        : found.first;
+  }
+
+  num _amountOf(Map<String, dynamic> expense) => expense['amount'] is num
+      ? expense['amount'] as num
+      : num.tryParse(expense['amount']?.toString() ?? '') ?? 0;
+  List<String> get _categories => [
+        'All',
+        ...{
+          ..._expenses
+              .map((expense) => _normalizedCategory(expense['category']))
+        }
+      ];
+  List<Map<String, dynamic>> get _filtered => _expenses
+      .where((expense) =>
+          _filter == 'All' ||
+          _normalizedCategory(expense['category']) == _filter)
+      .toList();
+  num get _monthTotal {
+    final now = DateTime.now();
+    return _expenses.where((expense) {
+      final date = DateTime.tryParse(expense['createdAt']?.toString() ?? '');
+      return date?.year == now.year && date?.month == now.month;
+    }).fold(0, (sum, expense) => sum + _amountOf(expense));
+  }
+
+  String _methodOf(Map<String, dynamic> expense) =>
+      expense['paymentMethod']?.toString().isNotEmpty == true
+          ? expense['paymentMethod'].toString()
+          : 'Cash';
+  IconData _icon(Map<String, dynamic> expense) {
+    final text =
+        '${expense['description']} ${expense['category']}'.toLowerCase();
+    if (text.contains('rent')) return Icons.storefront;
+    if (text.contains('salary') || text.contains('payroll'))
+      return Icons.people;
+    if (text.contains('transport') || text.contains('delivery'))
+      return Icons.local_shipping;
+    if (text.contains('electric') ||
+        text.contains('water') ||
+        text.contains('utilit')) return Icons.bolt;
+    if (text.contains('suppl') || text.contains('packag'))
+      return Icons.shopping_bag;
+    return Icons.payments_outlined;
+  }
+
+  Color _categoryColor(String category) =>
+      const {
+        'Utilities': Color(0xFF0288D1),
+        'Payroll': Color(0xFF5E35B1),
+        'Rent': Color(0xFF2E7D32),
+        'Supplies': Color(0xFFF57C00),
+        'Logistics': Color(0xFFD32F2F)
+      }[category] ??
+      muted;
+  Widget _header(String title, {Widget? action}) => Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 52, 16, 16),
+      decoration:
+          const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+      child: Row(children: [
+        IconButton(
+            onPressed: widget.onBack,
+            icon: const Icon(Icons.arrow_back),
+            color: Colors.white,
+            style: IconButton.styleFrom(
+                backgroundColor: Colors.white.withValues(alpha: .12),
+                fixedSize: const Size(36, 36))),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800))),
+        if (action != null) action
+      ]));
+  Widget _card(Widget child, {EdgeInsets padding = const EdgeInsets.all(16)}) =>
+      Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: padding,
+          decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: const [
+                BoxShadow(
+                    color: Color(0x0F000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2))
+              ]),
+          child: child);
+  Widget _label(String text) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(text,
+          style: const TextStyle(
+              color: muted, fontSize: 12, fontWeight: FontWeight.w700)));
+  Widget _choice(String text, bool active, VoidCallback onTap,
+          {Color color = navy}) =>
+      ChoiceChip(
+          label: Text(text),
+          selected: active,
+          onSelected: (_) => onTap(),
+          selectedColor: color,
+          labelStyle: TextStyle(
+              color: active ? Colors.white : muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w700));
+
+  Future<void> _save() async {
+    final amount = num.tryParse(_amount.text);
+    final category =
+        _category == 'Other' ? _otherCategory.text.trim() : _category;
+    if (_description.text.trim().isEmpty ||
+        amount == null ||
+        amount <= 0 ||
+        category.isEmpty) {
+      setState(() =>
+          _error = 'Enter a description, a positive amount, and a category.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await _service.createExpense(
+          description: _description.text.trim(),
+          amount: amount,
+          category: category,
+          paymentMethod: _method,
+          recurring: _recurring,
+          date: _date.text);
+      if (!mounted) return;
+      setState(() {
+        _showAdd = false;
+        _resetForm();
+      });
+      await _load();
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Expense saved.')));
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showAdd)
+      return Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          body: Column(children: [
+            _header('Add Expense',
+                action: IconButton(
+                    onPressed: () => setState(() => _showAdd = false),
+                    icon: const Icon(Icons.close),
+                    color: Colors.white)),
+            Expanded(
+                child: ListView(padding: const EdgeInsets.all(16), children: [
+              if (_error != null)
+                _card(Text(_error!,
+                    style: const TextStyle(color: Color(0xFFC62828)))),
+              _card(Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _label('Description *'),
+                    TextField(
+                        controller: _description,
+                        decoration: const InputDecoration(
+                            hintText: 'e.g. Electricity Bill',
+                            border: OutlineInputBorder())),
+                    const SizedBox(height: 14),
+                    _label('Amount (KSh) *'),
+                    TextField(
+                        controller: _amount,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            fontSize: 24, fontWeight: FontWeight.w800),
+                        decoration: const InputDecoration(
+                            hintText: '0.00', border: OutlineInputBorder())),
+                    const SizedBox(height: 14),
+                    _label('Category *'),
+                    Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [..._knownCategories, 'Other']
+                            .map((item) => _choice(item, _category == item,
+                                () => setState(() => _category = item)))
+                            .toList()),
+                    if (_category == 'Other')
+                      Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: TextField(
+                              controller: _otherCategory,
+                              decoration: const InputDecoration(
+                                  hintText: 'Specify category (e.g. Marketing)',
+                                  border: OutlineInputBorder()))),
+                    const SizedBox(height: 14),
+                    _label('Payment Method'),
+                    Row(
+                        children: ['Cash', 'M-Pesa', 'Bank']
+                            .map((item) => Expanded(
+                                child: Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: _choice(item, _method == item,
+                                        () => setState(() => _method = item)))))
+                            .toList()),
+                    const SizedBox(height: 14),
+                    _label('Date'),
+                    TextField(
+                        controller: _date,
+                        readOnly: true,
+                        decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            suffixIcon: Icon(Icons.calendar_today_outlined)),
+                        onTap: () async {
+                          final selected = await showDatePicker(
+                              context: context,
+                              initialDate: DateTime.tryParse(_date.text) ??
+                                  DateTime.now(),
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime.now()
+                                  .add(const Duration(days: 3650)));
+                          if (selected != null)
+                            setState(() => _date.text =
+                                selected.toIso8601String().substring(0, 10));
+                        }),
+                    const SizedBox(height: 14),
+                    Container(
+                        padding: const EdgeInsets.all(12),
+                        color: const Color(0xFFF0F3F9),
+                        child: Row(children: [
+                          const Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text('Recurring Expense',
+                                    style: TextStyle(
+                                        color: ink,
+                                        fontWeight: FontWeight.w700)),
+                                Text('Repeats monthly',
+                                    style:
+                                        TextStyle(color: muted, fontSize: 11))
+                              ])),
+                          Switch(
+                              value: _recurring,
+                              activeColor: navy,
+                              onChanged: (value) =>
+                                  setState(() => _recurring = value))
+                        ]))
+                  ])),
+              FilledButton(
+                  onPressed: _saving ? null : _save,
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFD32F2F),
+                      padding: const EdgeInsets.symmetric(vertical: 16)),
+                  child: Text(_saving ? 'Saving...' : 'Save Expense'))
+            ]))
+          ]));
+    final total =
+        _filtered.fold<num>(0, (sum, expense) => sum + _amountOf(expense));
+    return Column(children: [
+      Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+          decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [ink, navy])),
+          child: Column(children: [
+            Row(children: [
+              const Expanded(
+                  child: Text('Expense Tracking',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800))),
+              TextButton.icon(
+                  onPressed: () => setState(() {
+                        _error = null;
+                        _resetForm();
+                        _showAdd = true;
+                      }),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add'),
+                  style: TextButton.styleFrom(
+                      backgroundColor: gold, foregroundColor: ink))
+            ]),
+            const SizedBox(height: 14),
+            Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                    color: const Color(0x33D32F2F),
+                    border: Border.all(color: const Color(0x4DEFA0A0)),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Total Expenses This Month',
+                          style: TextStyle(
+                              color: Color(0xBBFFFFFF), fontSize: 11)),
+                      Text('KSh ${_monthTotal.toStringAsFixed(0)}',
+                          style: const TextStyle(
+                              color: Color(0xFFFF6B6B),
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900))
+                    ])),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                    children: _categories
+                        .map((category) => Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: _choice(category, _filter == category,
+                                () => setState(() => _filter = category),
+                                color: gold)))
+                        .toList()))
+          ])),
+      Expanded(
+          child: ListView(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+              children: [
+            if (_error != null)
+              _card(Text(_error!,
+                  style: const TextStyle(color: Color(0xFFC62828)))),
+            Text(
+                '${_filter == 'All' ? 'All Expenses' : _filter} · KSh ${total.toStringAsFixed(0)}',
+                style: const TextStyle(
+                    color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            if (_loading)
+              const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()))
+            else if (_filtered.isEmpty)
+              const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(
+                      child: Text('No expenses found.',
+                          style: TextStyle(color: muted))))
+            else
+              ..._filtered.map((expense) {
+                final category = _normalizedCategory(expense['category']);
+                return _card(Row(children: [
+                  Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                          color:
+                              _categoryColor(category).withValues(alpha: .12),
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Icon(_icon(expense),
+                          color: _categoryColor(category))),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Row(children: [
+                          Expanded(
+                              child: Text(
+                                  expense['description']?.toString() ??
+                                      'Expense',
+                                  style: const TextStyle(
+                                      color: ink,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w800))),
+                          if (expense['recurring'] == true)
+                            const Text('RECURRING',
+                                style: TextStyle(
+                                    color: navy,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w800))
+                        ]),
+                        Text(
+                            '$category · ${_methodOf(expense)} · ${expense['createdAt']?.toString().substring(0, 10) ?? ''}',
+                            style: const TextStyle(color: muted, fontSize: 11))
+                      ])),
+                  Text('KSh ${_amountOf(expense).toStringAsFixed(0)}',
+                      style: const TextStyle(
+                          color: Color(0xFFD32F2F),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800))
+                ]));
+              })
+          ]))
+    ]);
+  }
 }
 
 class SupplierEntry {
@@ -10758,15 +13988,15 @@ class SupplierEntry {
   final String terms;
 }
 
-class SupplierScreen extends StatefulWidget {
-  const SupplierScreen({required this.onBack, super.key});
+class LegacySupplierScreen extends StatefulWidget {
+  const LegacySupplierScreen({required this.onBack, super.key});
   final VoidCallback onBack;
 
   @override
-  State<SupplierScreen> createState() => _SupplierScreenState();
+  State<LegacySupplierScreen> createState() => _LegacySupplierScreenState();
 }
 
-class _SupplierScreenState extends State<SupplierScreen> {
+class _LegacySupplierScreenState extends State<LegacySupplierScreen> {
   final List<SupplierEntry> _suppliers = const [
     SupplierEntry(
         id: 1,
@@ -11527,6 +14757,487 @@ class _SupplierScreenState extends State<SupplierScreen> {
       );
 }
 
+class SupplierScreen extends StatefulWidget {
+  const SupplierScreen({required this.onBack, super.key});
+  final VoidCallback onBack;
+
+  @override
+  State<SupplierScreen> createState() => _SupplierScreenState();
+}
+
+class _SupplierScreenState extends State<SupplierScreen> {
+  final SupplierService _service = SupplierService();
+  final Map<String, TextEditingController> _controllers = {
+    'name': TextEditingController(),
+    'category': TextEditingController(),
+    'contact': TextEditingController(),
+    'phone': TextEditingController(),
+    'email': TextEditingController(),
+  };
+  List<Map<String, dynamic>> _suppliers = const [];
+  Map<String, dynamic>? _selected;
+  String _search = '';
+  bool _showAdd = false;
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final suppliers = await _service.loadSuppliers();
+      if (mounted)
+        setState(() {
+          _suppliers = suppliers;
+          _error = null;
+        });
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  List<Map<String, dynamic>> get _filtered => _suppliers.where((supplier) {
+        final query = _search.toLowerCase();
+        return supplier['name']?.toString().toLowerCase().contains(query) ==
+                true ||
+            supplier['category']?.toString().toLowerCase().contains(query) ==
+                true;
+      }).toList();
+  int _count(Map<String, dynamic> supplier, String key) =>
+      ((supplier['_count'] as Map?)?[key] as num?)?.toInt() ?? 0;
+  String _initials(Map<String, dynamic> supplier) =>
+      (supplier['name']?.toString() ?? 'S')
+          .split(RegExp(r'\s+'))
+          .where((word) => word.isNotEmpty)
+          .map((word) => word[0])
+          .take(2)
+          .join()
+          .toUpperCase();
+  String _text(Map<String, dynamic> supplier, String key,
+          [String fallback = 'Not provided']) =>
+      supplier[key]?.toString().trim().isNotEmpty == true
+          ? supplier[key].toString()
+          : fallback;
+  Widget _card(Widget child, {EdgeInsets padding = const EdgeInsets.all(16)}) =>
+      Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: padding,
+          decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: const [
+                BoxShadow(
+                    color: Color(0x0F000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2))
+              ]),
+          child: child);
+  Widget _header(String title, {Widget? action}) => Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 52, 16, 16),
+      decoration:
+          const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+      child: Row(children: [
+        IconButton(
+            onPressed: widget.onBack,
+            icon: const Icon(Icons.arrow_back),
+            color: Colors.white,
+            style: IconButton.styleFrom(
+                backgroundColor: Colors.white.withValues(alpha: .12),
+                fixedSize: const Size(36, 36))),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800))),
+        if (action != null) action
+      ]));
+
+  Future<void> _save() async {
+    final name = _controllers['name']!.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = 'Business name is required.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await _service.createSupplier(
+          name: name,
+          category: _controllers['category']!.text,
+          contact: _controllers['contact']!.text,
+          phone: _controllers['phone']!.text,
+          email: _controllers['email']!.text);
+      if (!mounted) return;
+      for (final controller in _controllers.values) {
+        controller.clear();
+      }
+      setState(() => _showAdd = false);
+      await _load();
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Supplier saved.')));
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _field(String label, String key, String hint,
+          {bool required = false}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(
+                  color: muted, fontSize: 12, fontWeight: FontWeight.w700),
+              children: [
+                TextSpan(text: label),
+                if (required)
+                  const TextSpan(
+                      text: ' *', style: TextStyle(color: Color(0xFFD32F2F))),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _controllers[key],
+            keyboardType: key == 'phone'
+                ? TextInputType.phone
+                : key == 'email'
+                    ? TextInputType.emailAddress
+                    : TextInputType.text,
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: const TextStyle(color: Color(0xFF8B97AE)),
+              border: const OutlineInputBorder(),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+          ),
+        ]),
+      );
+  Widget _info(String label, String value) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(children: [
+        Text(label, style: const TextStyle(color: muted, fontSize: 12)),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                    color: ink, fontSize: 13, fontWeight: FontWeight.w700)))
+      ]));
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showAdd)
+      return Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          body: Column(children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 52, 16, 18),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Row(children: [
+                IconButton(
+                  onPressed: () => setState(() => _showAdd = false),
+                  icon: const Icon(Icons.arrow_back),
+                  color: Colors.white,
+                  style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: .12),
+                      fixedSize: const Size(36, 36)),
+                ),
+                const SizedBox(width: 12),
+                const Text('Add Supplier',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ),
+            Expanded(
+                child: ListView(padding: const EdgeInsets.all(16), children: [
+              _card(Column(children: [
+                _field('Business Name', 'name', 'e.g. Unga Limited',
+                    required: true),
+                _field('Category', 'category', 'e.g. Flour & Grains',
+                    required: true),
+                _field('Contact Person', 'contact', 'Full name'),
+                _field('Phone Number', 'phone', '+254 ...'),
+                _field('Email Address', 'email', 'supplier@email.com')
+              ])),
+              if (_error != null)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(_error!,
+                        style: const TextStyle(color: Color(0xFFC62828)))),
+              FilledButton(
+                  onPressed: _saving ? null : _save,
+                  style: FilledButton.styleFrom(
+                      backgroundColor: navy,
+                      padding: const EdgeInsets.symmetric(vertical: 16)),
+                  child: Text(_saving ? 'Saving...' : 'Save Supplier'))
+            ]))
+          ]));
+    final selected = _selected;
+    if (selected != null)
+      return Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          body: Column(children: [
+            _header('Supplier Profile',
+                action: IconButton(
+                    onPressed: () => setState(() {
+                          _selected = null;
+                          _showAdd = true;
+                        }),
+                    icon: const Icon(Icons.edit_outlined),
+                    color: Colors.white)),
+            Container(
+                width: double.infinity,
+                color: navy,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                child: Row(children: [
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFF1A4FBF),
+                        borderRadius: BorderRadius.circular(18)),
+                    child: Center(
+                        child: Text(_initials(selected),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800))),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Text(_text(selected, 'name'),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800)),
+                        Text(_text(selected, 'category', 'General supplier'),
+                            style: const TextStyle(
+                                color: Color(0x99FFFFFF), fontSize: 12))
+                      ]))
+                ])),
+            Expanded(
+                child: ListView(padding: const EdgeInsets.all(16), children: [
+              Row(children: [
+                Expanded(
+                    child: _card(Column(children: [
+                  const Text('Total Orders',
+                      style: TextStyle(color: muted, fontSize: 11)),
+                  Text('${_count(selected, 'purchaseOrders')}',
+                      style: const TextStyle(
+                          color: navy,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800))
+                ]))),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: _card(Column(children: [
+                  const Text('Products Supplied',
+                      style: TextStyle(color: muted, fontSize: 11)),
+                  Text('${_count(selected, 'products')}',
+                      style: const TextStyle(
+                          color: Color(0xFF2E7D32),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800))
+                ])))
+              ]),
+              _card(Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Contact Information',
+                        style: TextStyle(
+                            color: ink,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 8),
+                    _info('Contact Person', _text(selected, 'contactPerson')),
+                    _info('Phone', _text(selected, 'phone')),
+                    _info('Email', _text(selected, 'email'))
+                  ])),
+              Row(children: [
+                Expanded(
+                    child: FilledButton(
+                        onPressed: () => widget.onBack(),
+                        style: FilledButton.styleFrom(
+                            backgroundColor: navy,
+                            padding: const EdgeInsets.symmetric(vertical: 14)),
+                        child: const Text('New Order'))),
+                const SizedBox(width: 10),
+                IconButton(
+                    onPressed: () {},
+                    icon: const Icon(Icons.phone),
+                    color: const Color(0xFF2E7D32),
+                    style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFFE8F5E9),
+                        fixedSize: const Size(48, 48))),
+                const SizedBox(width: 10),
+                IconButton(
+                    onPressed: () {},
+                    icon: const Icon(Icons.email_outlined),
+                    color: navy,
+                    style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFFE3EAF8),
+                        fixedSize: const Size(48, 48)))
+              ])
+            ]))
+          ]));
+    return Column(children: [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+        decoration:
+            const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+        child: Column(children: [
+          Row(children: [
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  const Text('Suppliers',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 10),
+                  Text('${_suppliers.length}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800)),
+                  const Text('Total Suppliers',
+                      style: TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
+                ])),
+            TextButton.icon(
+                onPressed: () => setState(() {
+                      _error = null;
+                      _selected = null;
+                      for (final controller in _controllers.values) {
+                        controller.clear();
+                      }
+                      _showAdd = true;
+                    }),
+                icon: const Icon(Icons.add, size: 17),
+                label: const Text('Add'),
+                style: TextButton.styleFrom(
+                    backgroundColor: gold, foregroundColor: ink)),
+          ]),
+          const SizedBox(height: 14),
+          TextField(
+              onChanged: (value) => setState(() => _search = value),
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                  prefixIcon:
+                      const Icon(Icons.search, color: Color(0xCCFFFFFF)),
+                  hintText: 'Search suppliers...',
+                  hintStyle: const TextStyle(color: Color(0xCCFFFFFF)),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: .12),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: .2))))),
+        ]),
+      ),
+      Expanded(
+          child: ListView(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+              children: [
+            if (_error != null)
+              _card(Text(_error!,
+                  style: const TextStyle(color: Color(0xFFC62828)))),
+            if (_loading)
+              const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()))
+            else if (_filtered.isEmpty)
+              const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(
+                      child: Text('No suppliers found.',
+                          style: TextStyle(color: muted))))
+            else
+              ..._filtered.map((supplier) => InkWell(
+                  onTap: () => setState(() => _selected = supplier),
+                  child: _card(Row(children: [
+                    Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                            color: navy,
+                            borderRadius: BorderRadius.circular(14)),
+                        child: Center(
+                            child: Text(_initials(supplier),
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800)))),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                          Text(_text(supplier, 'name'),
+                              style: const TextStyle(
+                                  color: ink,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800)),
+                          Text(_text(supplier, 'category', 'General supplier'),
+                              style:
+                                  const TextStyle(color: muted, fontSize: 11))
+                        ])),
+                    Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('${_count(supplier, 'purchaseOrders')} orders',
+                              style:
+                                  const TextStyle(color: muted, fontSize: 11)),
+                          Text('${_count(supplier, 'products')} products',
+                              style: const TextStyle(
+                                  color: navy,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800))
+                        ]),
+                  ])))),
+          ])),
+    ]);
+  }
+}
+
 class EmployeeEntry {
   const EmployeeEntry({
     required this.id,
@@ -11571,7 +15282,7 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
 
   final Map<String, Color> _roleColors = const {
     'Admin': Color(0xFF455A64),
-    'Store Owner': Color(0xFF123A8F),
+    'Store Manager': Color(0xFF123A8F),
     'Cashier': Color(0xFF2E7D32),
     'Stock Keeper': Color(0xFF00796B),
     'Supervisor': Color(0xFF7B1FA2),
@@ -11580,7 +15291,7 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
 
   final Map<String, List<String>> _rolePermissions = const {
     'Admin': ['View Platform Health', 'Manage Tenants', 'Manage Licenses'],
-    'Store Owner': [
+    'Store Manager': [
       'Full Access',
       'Edit Settings',
       'Manage Staff',
@@ -11611,6 +15322,10 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
   };
 
   bool _showForm = false;
+  bool _showShifts = false;
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
   EmployeeEntry? _editing;
   EmployeeEntry? _selected;
   final Map<String, dynamic> _form = {
@@ -11630,17 +15345,34 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
   }
 
   Future<void> _loadEmployees() async {
-    final rows = await _employeeRepository.loadEmployees();
-    if (!mounted) return;
-    setState(() => _employees = rows.map(_mapEmployee).toList());
+    try {
+      final rows = await _employeeRepository.loadEmployees();
+      if (!mounted) return;
+      setState(() {
+        _employees = rows.map(_mapEmployee).toList();
+        _error = null;
+      });
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   EmployeeEntry _mapEmployee(Map<String, dynamic> row) {
     final role = (row['role'] as String? ?? 'CASHIER').toUpperCase();
     final normalizedRole = role == 'MANAGER' ? 'SUPERVISOR' : role;
-    final displayRole = normalizedRole == 'OWNER'
-        ? 'Store Owner'
-        : normalizedRole[0] + normalizedRole.substring(1).toLowerCase();
+    final displayRole = const {
+          'OWNER': 'Store Manager',
+          'ADMIN': 'Store Manager',
+          'SUPERVISOR': 'Supervisor',
+          'STOCK_KEEPER': 'Stock Keeper',
+          'ACCOUNTANT': 'Accountant',
+          'CASHIER': 'Cashier',
+        }[normalizedRole] ??
+        'Cashier';
     final name = row['fullName'] as String? ?? 'Employee';
     final initials = name
         .trim()
@@ -11657,14 +15389,33 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
       phone: row['phone'] as String? ?? '',
       email: row['email'] as String? ?? '',
       pin: '',
-      shift: 'Unassigned',
-      salary: 0,
-      startDate: row['createdAt'] as String? ?? 'TBD',
+      shift: row['shift']?.toString() ?? 'Morning',
+      salary: (row['salary'] is num)
+          ? (row['salary'] as num).round()
+          : int.tryParse(row['salary']?.toString() ?? '') ?? 0,
+      startDate: _displayDate(
+          row['startDate']?.toString() ?? row['createdAt']?.toString()),
       active: row['status'] == 'ACTIVE',
       initials: initials.isEmpty ? 'EM' : initials,
       color: _roleColors[displayRole] ?? const Color(0xFF123A8F),
     );
   }
+
+  String _displayDate(String? value) {
+    final date = value == null ? null : DateTime.tryParse(value);
+    if (date == null) return 'Not specified';
+    return '${date.day}/${date.month}/${date.year}';
+  }
+
+  String _roleToApi(String role) =>
+      const {
+        'Store Manager': 'OWNER',
+        'Supervisor': 'SUPERVISOR',
+        'Stock Keeper': 'STOCK_KEEPER',
+        'Accountant': 'ACCOUNTANT',
+        'Cashier': 'CASHIER',
+      }[role] ??
+      'CASHIER';
 
   void _openAdd() {
     setState(() {
@@ -11700,48 +15451,72 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
     final name = (_form['name'] as String).trim();
     if (name.isEmpty) return;
 
-    final selectedRole = (_form['role'] as String).toUpperCase();
-    final saved = await _employeeRepository.saveEmployee(
-      businessId: 'demo-business',
-      id: _editing?.id,
-      fullName: name,
-      email: _form['email'] as String,
-      phone: _form['phone'] as String,
-      role: selectedRole == 'ADMIN'
-          ? 'ADMIN'
-          : selectedRole == 'STORE OWNER'
-              ? 'OWNER'
-              : selectedRole == 'STORE MANAGER'
-                  ? 'OWNER'
-                  : selectedRole == 'SUPERVISOR'
-                      ? 'SUPERVISOR'
-                      : selectedRole == 'ACCOUNTANT'
-                          ? 'ACCOUNTANT'
-                          : 'CASHIER',
-      pin: (_form['pin'] as String).trim().isEmpty
-          ? null
-          : (_form['pin'] as String).trim(),
-    );
+    setState(() => _saving = true);
+    try {
+      await _employeeRepository.saveEmployee(
+        id: _editing?.id,
+        fullName: name,
+        email: _form['email'] as String,
+        phone: _form['phone'] as String,
+        role: _roleToApi(_form['role'] as String),
+        shift: _form['shift'] as String,
+        salary: num.tryParse(_form['salary'] as String) ?? 0,
+        pin: (_form['pin'] as String).trim().isEmpty
+            ? null
+            : (_form['pin'] as String).trim(),
+        active: _editing?.active ?? true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _showForm = false;
+        _selected = null;
+      });
+      await _loadEmployees();
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Employee saved.')));
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
-    setState(() {
-      _showForm = false;
-      _selected = null;
-    });
-    await _loadEmployees();
-    if (!mounted) return;
-    final synced = saved['synced'] == true;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      backgroundColor:
-          synced ? const Color(0xFF2E7D32) : const Color(0xFFF57C00),
-      content: Text(synced
-          ? 'Employee saved to the business database.'
-          : 'Employee saved locally; will sync when online.'),
-    ));
-    unawaited(_employeeRepository.syncPending(userId: 'demo-owner'));
+  Future<void> _toggleActive(EmployeeEntry employee) async {
+    setState(() => _saving = true);
+    try {
+      await _employeeRepository.saveEmployee(
+        id: employee.id,
+        fullName: employee.name,
+        email: employee.email,
+        phone: employee.phone,
+        role: _roleToApi(employee.role),
+        shift: employee.shift,
+        salary: employee.salary,
+        active: !employee.active,
+      );
+      if (!mounted) return;
+      setState(() => _selected = null);
+      await _loadEmployees();
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_showShifts) {
+      return ShiftManagementScreen(
+        onBack: () => setState(() => _showShifts = false),
+      );
+    }
     if (_showForm) {
       final isEdit = _editing != null;
       final role = _form['role'] as String;
@@ -11804,18 +15579,15 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         const SizedBox(height: 14),
                         _fieldLabel('Full Name *',
                             value: _form['name'],
-                            onChanged: (value) =>
-                                setState(() => _form['name'] = value)),
+                            onChanged: (value) => _form['name'] = value),
                         const SizedBox(height: 14),
                         _fieldLabel('Phone Number *',
                             value: _form['phone'],
-                            onChanged: (value) =>
-                                setState(() => _form['phone'] = value)),
+                            onChanged: (value) => _form['phone'] = value),
                         const SizedBox(height: 14),
                         _fieldLabel('Email Address',
                             value: _form['email'],
-                            onChanged: (value) =>
-                                setState(() => _form['email'] = value)),
+                            onChanged: (value) => _form['email'] = value),
                       ],
                     ),
                   ),
@@ -11851,10 +15623,10 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                           spacing: 8,
                           runSpacing: 8,
                           children: [
-                            'Admin',
-                            'Store Owner',
+                            'Store Manager',
                             'Supervisor',
                             'Cashier',
+                            'Stock Keeper',
                             'Accountant'
                           ].map((option) {
                             final selected = role == option;
@@ -11967,21 +15739,19 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                         _fieldLabel('Monthly Salary (KSh)',
                             value: _form['salary'],
                             keyboardType: TextInputType.number,
-                            onChanged: (value) =>
-                                setState(() => _form['salary'] = value)),
+                            onChanged: (value) => _form['salary'] = value),
                         const SizedBox(height: 14),
                         _fieldLabel('PIN (4 digits) *',
                             value: _form['pin'],
                             keyboardType: TextInputType.number,
-                            onChanged: (value) =>
-                                setState(() => _form['pin'] = value),
+                            onChanged: (value) => _form['pin'] = value,
                             maxLength: 4),
                       ],
                     ),
                   ),
                   const SizedBox(height: 16),
                   TextButton(
-                    onPressed: _saveForm,
+                    onPressed: _saving ? null : _saveForm,
                     style: TextButton.styleFrom(
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
@@ -11989,7 +15759,12 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14)),
                     ),
-                    child: Text(isEdit ? 'Save Changes' : 'Add Employee',
+                    child: Text(
+                        _saving
+                            ? 'Saving...'
+                            : isEdit
+                                ? 'Save Changes'
+                                : 'Add Employee',
                         style: const TextStyle(
                             fontSize: 16, fontWeight: FontWeight.w700)),
                   ),
@@ -12200,7 +15975,8 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: TextButton(
-                          onPressed: () => setState(() => _selected = null),
+                          onPressed:
+                              _saving ? null : () => _toggleActive(employee),
                           style: TextButton.styleFrom(
                             backgroundColor: employee.active
                                 ? const Color(0xFFFFF5F5)
@@ -12268,20 +16044,38 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
                                 fontWeight: FontWeight.w800)),
                       ],
                     ),
-                    TextButton(
-                      onPressed: _openAdd,
-                      style: TextButton.styleFrom(
-                        backgroundColor: gold,
-                        foregroundColor: ink,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      TextButton.icon(
+                        onPressed: () => setState(() => _showShifts = true),
+                        icon: const Icon(Icons.access_time, size: 16),
+                        label: const Text('Shifts'),
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: 0.12),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
+                          textStyle: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
                       ),
-                      child: const Text('+ Add',
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w800)),
-                    ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: _openAdd,
+                        style: TextButton.styleFrom(
+                          backgroundColor: gold,
+                          foregroundColor: ink,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                        ),
+                        child: const Text('+ Register',
+                            style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w800)),
+                      ),
+                    ]),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -12307,101 +16101,123 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
-              children: _employees.map((employee) {
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: const [
-                      BoxShadow(
-                          color: Color(0x0F000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 2))
-                    ],
-                  ),
-                  child: InkWell(
-                    onTap: () => setState(() => _selected = employee),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: employee.color,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Text(employee.initials,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w800)),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(employee.name,
-                                  style: const TextStyle(
-                                      color: ink,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w800)),
-                              const SizedBox(height: 4),
-                              Row(
+              children: [
+                if (_error != null)
+                  Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(_error!,
+                          style: const TextStyle(
+                              color: Color(0xFFC62828), fontSize: 12))),
+                if (_loading)
+                  const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: CircularProgressIndicator()))
+                else if (_employees.isEmpty)
+                  const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(
+                          child: Text('No employees registered yet.',
+                              style: TextStyle(color: muted))))
+                else
+                  ..._employees.map((employee) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Color(0x0F000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 2))
+                        ],
+                      ),
+                      child: InkWell(
+                        onTap: () => setState(() => _selected = employee),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: employee.color,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(employee.initials,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w800)),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 7, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: Color.alphaBlend(
-                                          _roleColors[employee.role]!
-                                              .withValues(alpha: 0.12),
-                                          Colors.white),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(employee.role,
-                                        style: TextStyle(
-                                            color: _roleColors[employee.role],
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w800)),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text('${employee.shift} shift',
+                                  Text(employee.name,
                                       style: const TextStyle(
-                                          color: muted, fontSize: 10)),
+                                          color: ink,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800)),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 7, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: Color.alphaBlend(
+                                              _roleColors[employee.role]!
+                                                  .withValues(alpha: 0.12),
+                                              Colors.white),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                        ),
+                                        child: Text(employee.role,
+                                            style: TextStyle(
+                                                color:
+                                                    _roleColors[employee.role],
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w800)),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text('${employee.shift} shift',
+                                          style: const TextStyle(
+                                              color: muted, fontSize: 10)),
+                                    ],
+                                  ),
                                 ],
                               ),
-                            ],
-                          ),
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                                'KSh ${(employee.salary / 1000).toStringAsFixed(0)}K',
-                                style: const TextStyle(
-                                    color: ink,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800)),
-                            const SizedBox(height: 4),
-                            Text(employee.active ? '● Active' : '● Inactive',
-                                style: TextStyle(
-                                    color: employee.active
-                                        ? const Color(0xFF2E7D32)
-                                        : const Color(0xFFD32F2F),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700)),
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                    'KSh ${(employee.salary / 1000).toStringAsFixed(0)}K',
+                                    style: const TextStyle(
+                                        color: ink,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800)),
+                                const SizedBox(height: 4),
+                                Text(
+                                    employee.active ? '● Active' : '● Inactive',
+                                    style: TextStyle(
+                                        color: employee.active
+                                            ? const Color(0xFF2E7D32)
+                                            : const Color(0xFFD32F2F),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700)),
+                              ],
+                            ),
                           ],
                         ),
-                      ],
-                    ),
-                  ),
-                );
-              }).toList(),
+                      ),
+                    );
+                  }).toList()
+              ],
             ),
           ),
         ],
@@ -12477,6 +16293,382 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
           ],
         ),
       );
+}
+
+class ShiftManagementScreen extends StatefulWidget {
+  const ShiftManagementScreen({required this.onBack, super.key});
+  final VoidCallback onBack;
+
+  @override
+  State<ShiftManagementScreen> createState() => _ShiftManagementScreenState();
+}
+
+class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
+  final EmployeeRepository _repository = EmployeeRepository();
+  List<Map<String, dynamic>> _employees = const [];
+  List<Map<String, dynamic>> _types = const [];
+  List<Map<String, dynamic>> _sessions = const [];
+  String _view = 'list';
+  String _selectedEmployee = '';
+  String _selectedType = '';
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await Future.wait([
+        _repository.loadEmployees(),
+        _repository.loadShiftTypes(),
+        _repository.loadCashSessions()
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _employees = data[0] as List<Map<String, dynamic>>;
+        _types = data[1] as List<Map<String, dynamic>>;
+        _sessions = data[2] as List<Map<String, dynamic>>;
+        _selectedEmployee = _selectedEmployee.isNotEmpty
+            ? _selectedEmployee
+            : (_availableEmployees.isEmpty
+                ? ''
+                : _availableEmployees.first['id']?.toString() ?? '');
+        _selectedType = _selectedType.isNotEmpty
+            ? _selectedType
+            : (_availableTypes.isEmpty
+                ? ''
+                : _availableTypes.first['id']?.toString() ?? '');
+        _error = null;
+      });
+      _publishActiveShiftNotice();
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  List<Map<String, dynamic>> get _availableEmployees =>
+      _employees.where((employee) {
+        final role = employee['role']?.toString().toUpperCase();
+        final active = employee['status']?.toString() == 'ACTIVE';
+        final isBusy = _sessions.any((session) =>
+            session['closedAt'] == null &&
+            session['cashierId']?.toString() == employee['id']?.toString());
+        return active && (role == 'CASHIER' || role == 'SUPERVISOR') && !isBusy;
+      }).toList();
+
+  List<Map<String, dynamic>> get _availableTypes =>
+      _types.where(_availableNow).toList();
+  Map<String, dynamic>? get _active {
+    final open = _sessions.where((session) => session['closedAt'] == null);
+    return open.isEmpty ? null : open.first;
+  }
+
+  void _publishActiveShiftNotice() {
+    final active =
+        _sessions.where((session) => session['closedAt'] == null).toList();
+    if (active.isEmpty) {
+      activeShiftNotice.value = null;
+      return;
+    }
+    final cashier = active.first['cashier'] as Map?;
+    activeShiftNotice.value = ActiveShiftNotice(
+      count: active.length,
+      employeeName: cashier?['fullName']?.toString() ?? 'Team member',
+    );
+  }
+
+  bool _availableNow(Map<String, dynamic> type) {
+    int minutes(String raw) {
+      final parts = raw.split(':');
+      return (int.tryParse(parts.first) ?? 0) * 60 +
+          (parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0);
+    }
+
+    final now = TimeOfDay.now();
+    final current = now.hour * 60 + now.minute;
+    final start = minutes(type['scheduledStart']?.toString() ?? '00:00');
+    final end = minutes(type['scheduledEnd']?.toString() ?? '00:00');
+    return start == end ||
+        (start < end
+            ? current >= start && current < end
+            : current >= start || current < end);
+  }
+
+  Future<void> _start() async {
+    if (_selectedEmployee.isEmpty || _selectedType.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await _repository.openShift(
+          employeeId: _selectedEmployee, shiftTypeId: _selectedType);
+      await _load();
+      if (mounted) setState(() => _view = 'active');
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _end(Map<String, dynamic> session) async {
+    setState(() => _saving = true);
+    try {
+      await _repository.closeShift(
+          employeeId: session['cashierId']?.toString() ?? '',
+          sessionId: session['id']?.toString() ?? '');
+      await _load();
+      if (mounted) setState(() => _view = 'list');
+    } catch (error) {
+      if (mounted)
+        setState(
+            () => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  String _time(Object? raw) {
+    final time = DateTime.tryParse(raw?.toString() ?? '');
+    return time == null
+        ? '--:--'
+        : '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _name(Map? row) => row?['fullName']?.toString() ?? 'Unknown employee';
+  Widget _header(String title, {Widget? action}) => Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 52, 16, 18),
+      decoration:
+          const BoxDecoration(gradient: LinearGradient(colors: [ink, navy])),
+      child: Row(children: [
+        IconButton(
+            onPressed: widget.onBack,
+            icon: const Icon(Icons.arrow_back),
+            color: Colors.white,
+            style: IconButton.styleFrom(
+                backgroundColor: Colors.white.withValues(alpha: .12))),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800))),
+        if (action != null) action
+      ]));
+  Widget _card({required Widget child}) => Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+          ]),
+      child: child);
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _active;
+    if (_view == 'start')
+      return Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          body: Column(children: [
+            _header('Start New Shift'),
+            Expanded(
+                child: ListView(padding: const EdgeInsets.all(16), children: [
+              const Text('Shift Type',
+                  style: TextStyle(
+                      color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              _card(
+                  child: Column(
+                      children: _types.map((type) {
+                final available = _availableNow(type);
+                final selected = _selectedType == type['id'];
+                return ListTile(
+                    enabled: available,
+                    onTap: () => available
+                        ? setState(() => _selectedType = type['id'].toString())
+                        : null,
+                    leading:
+                        Icon(Icons.schedule, color: selected ? navy : muted),
+                    title: Text('${type['name']} Shift'),
+                    subtitle: Text(
+                        '${type['scheduledStart']} - ${type['scheduledEnd']}'),
+                    trailing: selected
+                        ? const Icon(Icons.check_circle, color: navy)
+                        : null);
+              }).toList())),
+              const Text('Assign Cashier',
+                  style: TextStyle(
+                      color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              _card(
+                  child: Column(
+                      children: _availableEmployees
+                          .map((employee) => ListTile(
+                              onTap: () => setState(() => _selectedEmployee =
+                                  employee['id'].toString()),
+                              leading: CircleAvatar(
+                                  backgroundColor: navy,
+                                  child: Text(
+                                      _name(employee)
+                                          .split(' ')
+                                          .map((word) =>
+                                              word.isEmpty ? '' : word[0])
+                                          .take(2)
+                                          .join(),
+                                      style: const TextStyle(
+                                          color: Colors.white))),
+                              title: Text(_name(employee)),
+                              subtitle:
+                                  Text(employee['role']?.toString() ?? ''),
+                              trailing: _selectedEmployee == employee['id'] ? const Icon(Icons.check, color: navy) : null))
+                          .toList())),
+              if (_error != null)
+                Text(_error!, style: const TextStyle(color: Color(0xFFC62828))),
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                  onPressed: _saving ? null : _start,
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(_saving ? 'Starting...' : 'Start Shift Now'),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF2E7D32),
+                      padding: const EdgeInsets.symmetric(vertical: 16)))
+            ]))
+          ]));
+    if (_view == 'active' && active != null) {
+      final cashier = active['cashier'] as Map?;
+      final shift = active['shift'] as Map?;
+      return Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          body: Column(children: [
+            _header('Active Shift',
+                action: const Chip(
+                    label: Text('LIVE'),
+                    backgroundColor: Color(0x55388E3C),
+                    labelStyle: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w800))),
+            Expanded(
+                child: ListView(padding: const EdgeInsets.all(16), children: [
+              _card(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(_name(cashier),
+                        style: const TextStyle(
+                            color: ink,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text(
+                        '${shift?['name'] ?? active['shiftType']} Shift · Started ${_time(active['openedAt'])}',
+                        style: const TextStyle(color: muted)),
+                    const SizedBox(height: 16),
+                    Row(children: [
+                      _metric('Sales', '${active['sales'] ?? 0}'),
+                      _metric('Revenue', 'KSh ${active['amount'] ?? 0}'),
+                      _metric('Started', _time(active['openedAt']))
+                    ])
+                  ])),
+              FilledButton.icon(
+                  onPressed: _saving ? null : () => _end(active),
+                  icon: const Icon(Icons.stop),
+                  label: Text(_saving ? 'Ending...' : 'End Shift'),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFD32F2F),
+                      padding: const EdgeInsets.symmetric(vertical: 16)))
+            ]))
+          ]));
+    }
+    final history = _sessions
+        .where((session) => session['closedAt'] != null)
+        .toList()
+        .reversed;
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: Column(children: [
+        _header('Shift Management',
+            action: TextButton.icon(
+              onPressed: () {
+                _load();
+                setState(() => _view = active == null ? 'start' : 'active');
+              },
+              icon: const Icon(Icons.add, color: ink),
+              label: const Text('Start',
+                  style: TextStyle(color: ink, fontWeight: FontWeight.w800)),
+              style: TextButton.styleFrom(backgroundColor: gold),
+            )),
+        Expanded(
+            child: ListView(padding: const EdgeInsets.all(16), children: [
+          if (_error != null)
+            _card(
+                child: Text(_error!,
+                    style: const TextStyle(color: Color(0xFFC62828)))),
+          if (_loading)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(32),
+                    child: CircularProgressIndicator()))
+          else ...[
+            if (active == null)
+              _card(
+                  child: const ListTile(
+                      leading: Icon(Icons.schedule, color: Color(0xFFF9A825)),
+                      title: Text('No Active Shift'),
+                      subtitle:
+                          Text('Start a shift to track cashier performance')))
+            else
+              _card(
+                  child: ListTile(
+                      onTap: () => setState(() => _view = 'active'),
+                      leading: const Icon(Icons.play_circle_fill,
+                          color: Color(0xFF2E7D32)),
+                      title: const Text('Shift in progress'),
+                      subtitle: Text(
+                          '${_name(active['cashier'] as Map?)} · ${_time(active['openedAt'])}'))),
+            const Text('Shift History',
+                style: TextStyle(
+                    color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 10),
+            ...history.map((session) => _card(
+                child: ListTile(
+                    leading: const Icon(Icons.history, color: navy),
+                    title: Text(_name(session['cashier'] as Map?)),
+                    subtitle: Text(
+                        '${session['shiftType'] ?? 'Shift'} · ${_time(session['openedAt'])} - ${_time(session['closedAt'])}'),
+                    trailing: Text('KSh ${session['amount'] ?? 0}',
+                        style: const TextStyle(
+                            color: navy, fontWeight: FontWeight.w800))))),
+          ],
+        ])),
+      ]),
+    );
+  }
+
+  Widget _metric(String label, String value) => Expanded(
+      child: Container(
+          margin: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.all(8),
+          color: const Color(0xFFF0F3F9),
+          child: Column(children: [
+            Text(label, style: const TextStyle(color: muted, fontSize: 10)),
+            Text(value,
+                style: const TextStyle(
+                    color: ink, fontSize: 12, fontWeight: FontWeight.w800))
+          ])));
 }
 
 class NotificationEntry {
@@ -12974,10 +17166,15 @@ class CreditBookScreen extends StatefulWidget {
 
 class _CreditBookScreenState extends State<CreditBookScreen> {
   final CreditService _creditService = CreditService.instance;
-  final SyncService _syncService = SyncService();
+  final TextEditingController _repaymentController = TextEditingController();
   List<CreditAccount> _accounts = const [];
   List<Map<String, dynamic>> _ledger = const [];
   bool _loading = true;
+  bool _savingPayment = false;
+  String _paymentMethod = 'CASH';
+  String? _error;
+  CreditAccount? _selected;
+  bool _showRepayment = false;
 
   @override
   void initState() {
@@ -12986,113 +17183,85 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
   }
 
   Future<void> _loadAccounts() async {
-    final results = await Future.wait<dynamic>([
-      _creditService.loadCreditAccounts(),
-      _creditService.loadCreditLedger(),
-    ]);
-    if (!mounted) return;
-    setState(() {
-      _accounts = results[0] as List<CreditAccount>;
-      _ledger = results[1] as List<Map<String, dynamic>>;
-      _loading = false;
-    });
-    final initialCustomerId = widget.initialCustomerId;
-    if (initialCustomerId != null &&
-        mounted &&
-        _accounts.any((account) => account.customerId == initialCustomerId)) {
-      // The current screen is list-based; preserve the selected customer for the next detail-screen extension.
-      setState(() {});
+    try {
+      final accounts = await _creditService.loadCreditAccounts();
+      if (!mounted) return;
+      setState(() {
+        _accounts = accounts;
+        _loading = false;
+        _error = null;
+      });
+      final initialCustomerId = widget.initialCustomerId;
+      if (initialCustomerId != null) await _openAccount(initialCustomerId);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
     }
   }
 
-  Future<void> _showRepaymentSheet(CreditAccount account) async {
-    final amountController = TextEditingController();
-    final amount = await showModalBottomSheet<double>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) => SizedBox(
-        height: MediaQuery.of(sheetContext).size.height,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-              20, 8, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Receive Debt Repayment',
-                  style: TextStyle(
-                      color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 6),
-              Text(
-                  '${account.customer} · Outstanding KSh ${account.balance.toStringAsFixed(0)}',
-                  style: const TextStyle(color: muted, fontSize: 12)),
-              const SizedBox(height: 16),
-              TextField(
-                controller: amountController,
-                autofocus: true,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                    labelText: 'Collected Repayment Amount',
-                    prefixText: 'KSh ',
-                    border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () {
-                    final value = double.tryParse(amountController.text.trim());
-                    if (value == null || value <= 0 || value > account.balance)
-                      return;
-                    Navigator.of(sheetContext).pop(value);
-                  },
-                  child: const Text('Record Repayment'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    amountController.dispose();
-    if (amount == null) return;
-
-    final updated = await _creditService.recordOfflinePayment(
-        customerId: account.customerId, amount: amount);
-    if (updated == null) {
+  Future<void> _openAccount(String customerId) async {
+    final colorIndex =
+        _accounts.indexWhere((account) => account.customerId == customerId);
+    try {
+      final values = await Future.wait<dynamic>([
+        _creditService.loadCreditAccount(customerId,
+            colorIndex: colorIndex < 0 ? 0 : colorIndex),
+        _creditService.loadCreditLedger(customerId: customerId),
+      ]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Payment exceeds the outstanding balance.')));
+      setState(() {
+        _selected = values[0] as CreditAccount;
+        _ledger = values[1] as List<Map<String, dynamic>>;
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Future<void> _recordRepayment() async {
+    final account = _selected;
+    final amount = double.tryParse(_repaymentController.text.trim());
+    if (account == null ||
+        amount == null ||
+        amount <= 0 ||
+        amount > account.balance) {
+      setState(() =>
+          _error = 'Enter a payment amount within the outstanding balance.');
       return;
     }
+    setState(() => _savingPayment = true);
+    try {
+      await _creditService.recordOfflinePayment(
+        customerId: account.customerId,
+        amount: amount,
+        paymentMethod: _paymentMethod,
+      );
+      await _loadAccounts();
+      await _openAccount(account.customerId);
+      if (!mounted) return;
+      setState(() {
+        _showRepayment = false;
+        _repaymentController.clear();
+        _savingPayment = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _savingPayment = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
 
-    final paymentRecordId =
-        'credit-payment-${DateTime.now().microsecondsSinceEpoch}';
-    await _syncService.queueChange(
-      id: paymentRecordId,
-      entityName: 'Credit',
-      operation: 'UPDATE',
-      payload: {
-        'id': paymentRecordId,
-        'action': 'RECORD_PAYMENT',
-        'businessId': 'demo-business',
-        'customerId': account.customerId,
-        'amount': amount,
-      },
-    );
-    await _loadAccounts();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          backgroundColor: Color(0xFF2E7D32),
-          content: Text('Debt repayment recorded successfully.')),
-    );
-    unawaited(_syncService.processCloudSync(
-        businessId: 'demo-business',
-        deviceId: 'mobile-device',
-        userId: 'demo-owner'));
+  @override
+  void dispose() {
+    _repaymentController.dispose();
+    super.dispose();
   }
 
   int _daysOutstanding(CreditAccount account) {
@@ -13122,6 +17291,183 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
     return const Color(0xFF2E7D32);
   }
 
+  String _money(double amount) => amount
+      .toStringAsFixed(0)
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (match) => ',');
+
+  Widget _repaymentView(CreditAccount account) => Scaffold(
+        backgroundColor: const Color(0xFFF5F7FA),
+        body: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 52, 16, 24),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                    colors: [Color(0xFFD32F2F), Color(0xFFB71C1C)]),
+              ),
+              child: Column(children: [
+                Row(children: [
+                  IconButton(
+                    onPressed: () => setState(() => _showRepayment = false),
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    style:
+                        IconButton.styleFrom(backgroundColor: Colors.white24),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Record Payment',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800)),
+                ]),
+                const SizedBox(height: 18),
+                Text(account.customer,
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 4),
+                const Text('Outstanding Balance',
+                    style: TextStyle(color: Colors.white60, fontSize: 12)),
+                Text('KSh ${_money(account.balance)}',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 36,
+                        fontWeight: FontWeight.w900)),
+              ]),
+            ),
+            Expanded(
+              child: ListView(padding: const EdgeInsets.all(16), children: [
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Payment Amount (KSh)',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _repaymentController,
+                          autofocus: true,
+                          textAlign: TextAlign.center,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          style: const TextStyle(
+                              color: ink,
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800),
+                          decoration: const InputDecoration(
+                              hintText: '0',
+                              prefixText: 'KSh ',
+                              border: OutlineInputBorder()),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                            children: [1000.0, 2000.0, account.balance]
+                                .map((amount) => Expanded(
+                                      child: Padding(
+                                        padding:
+                                            const EdgeInsets.only(right: 6),
+                                        child: TextButton(
+                                          onPressed: () => setState(() =>
+                                              _repaymentController.text =
+                                                  amount.toStringAsFixed(0)),
+                                          style: TextButton.styleFrom(
+                                              backgroundColor:
+                                                  const Color(0xFFEEF3FF),
+                                              foregroundColor: navy,
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          8))),
+                                          child: Text(
+                                              amount == account.balance
+                                                  ? 'Full'
+                                                  : 'KSh ${_money(amount)}',
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 11)),
+                                        ),
+                                      ),
+                                    ))
+                                .toList()),
+                        const SizedBox(height: 18),
+                        const Text('Payment Method',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        Row(
+                            children: ['CASH', 'MPESA']
+                                .map((method) => Expanded(
+                                      child: Padding(
+                                        padding: EdgeInsets.only(
+                                            right: method == 'CASH' ? 8 : 0),
+                                        child: OutlinedButton.icon(
+                                          onPressed: () => setState(
+                                              () => _paymentMethod = method),
+                                          icon: Icon(
+                                              method == 'CASH'
+                                                  ? Icons.payments_outlined
+                                                  : Icons.phone_android,
+                                              size: 17),
+                                          label: Text(method == 'CASH'
+                                              ? 'Cash'
+                                              : 'M-Pesa'),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor:
+                                                _paymentMethod == method
+                                                    ? navy
+                                                    : muted,
+                                            backgroundColor:
+                                                _paymentMethod == method
+                                                    ? const Color(0x140D47A1)
+                                                    : Colors.white,
+                                            side: BorderSide(
+                                                color: _paymentMethod == method
+                                                    ? navy
+                                                    : const Color(0xFFE8ECF4),
+                                                width: _paymentMethod == method
+                                                    ? 2
+                                                    : 1),
+                                            padding: const EdgeInsets.symmetric(
+                                                vertical: 13),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(8)),
+                                          ),
+                                        ),
+                                      ),
+                                    ))
+                                .toList()),
+                      ]),
+                ),
+                const SizedBox(height: 20),
+                TextButton(
+                  onPressed: _savingPayment ? null : _recordRepayment,
+                  style: TextButton.styleFrom(
+                      backgroundColor: const Color(0xFF2E7D32),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8))),
+                  child: Text(
+                      _savingPayment ? 'Recording...' : 'Confirm Payment',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800)),
+                ),
+              ]),
+            ),
+          ],
+        ),
+      );
+
   Widget _focusedAccountView(CreditAccount account) {
     final entries = _ledger
         .where((entry) => entry['customerId'] == account.customerId)
@@ -13138,7 +17484,7 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
             child: Row(
               children: [
                 IconButton(
-                  onPressed: widget.onBack,
+                  onPressed: () => setState(() => _selected = null),
                   icon: const Icon(Icons.arrow_back, color: Colors.white),
                   style: IconButton.styleFrom(
                       backgroundColor: Colors.white.withValues(alpha: 0.12)),
@@ -13195,15 +17541,15 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                 Container(
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                      color: const Color(0xFFFFF8E1),
+                      color: const Color(0xFFFFEBEE),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFFFE082))),
+                      border: Border.all(color: const Color(0xFFEF9A9A))),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('Outstanding Balance',
                           style: TextStyle(
-                              color: Color(0xFF8D6E63),
+                              color: Color(0xFFB71C1C),
                               fontSize: 12,
                               fontWeight: FontWeight.w700)),
                       const SizedBox(height: 4),
@@ -13215,8 +17561,21 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                       const SizedBox(height: 3),
                       Text('${account.transactionCount} credit transactions',
                           style: const TextStyle(
-                              color: Color(0xFF8D6E63), fontSize: 11)),
+                              color: Color(0xFFEF5350), fontSize: 11)),
                     ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextButton.icon(
+                  onPressed: () => setState(() => _showRepayment = true),
+                  icon: const Icon(Icons.payments_outlined),
+                  label: const Text('Record Payment'),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    backgroundColor: const Color(0xFF2E7D32),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
                   ),
                 ),
                 const SizedBox(height: 18),
@@ -13261,14 +17620,10 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
   @override
   Widget build(BuildContext context) {
     final total = _accounts.fold<double>(0, (sum, item) => sum + item.balance);
-
-    final initialCustomerId = widget.initialCustomerId;
-    if (!_loading && initialCustomerId != null) {
-      final account = _accounts.cast<CreditAccount?>().firstWhere(
-            (item) => item?.customerId == initialCustomerId,
-            orElse: () => null,
-          );
-      if (account != null) return _focusedAccountView(account);
+    if (_selected != null) {
+      return _showRepayment
+          ? _repaymentView(_selected!)
+          : _focusedAccountView(_selected!);
     }
 
     return SizedBox.expand(
@@ -13362,148 +17717,149 @@ class _CreditBookScreenState extends State<CreditBookScreen> {
                     ]
                   : _accounts.isEmpty
                       ? [
-                          const Padding(
+                          Padding(
                               padding: EdgeInsets.all(32),
-                              child: Text('No local credit accounts found.',
-                                  style: TextStyle(color: muted, fontSize: 14)))
+                              child: Text(
+                                  _error ?? 'No active credit accounts.',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                      color: muted, fontSize: 14)))
                         ]
-                      : _accounts.map((account) {
-                          final daysOld = _daysOutstanding(account);
-                          final hasOutstanding = account.balance > 0;
-                          final balanceColor = _balanceColor(account.balance);
-                          return Container(
-                            width: double.infinity,
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(14),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x0F000000),
-                                  blurRadius: 8,
-                                  offset: Offset(0, 2),
-                                ),
-                              ],
+                      : [
+                          if (_error != null)
+                            Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFEBEE),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(_error!,
+                                  style: const TextStyle(
+                                      color: Color(0xFFC62828), fontSize: 12)),
                             ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Container(
-                                  width: 46,
-                                  height: 46,
-                                  decoration: BoxDecoration(
-                                    color: Color(account.colorValue),
-                                    borderRadius: BorderRadius.circular(23),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      account.initials,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        account.customer,
-                                        style: const TextStyle(
-                                          color: ink,
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '${account.phone} · ${account.transactionCount} transactions',
-                                        style: const TextStyle(
-                                          color: muted,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        daysOld == 0
-                                            ? 'Added today'
-                                            : '${daysOld}d outstanding',
-                                        style: TextStyle(
-                                          color: hasOutstanding
-                                              ? balanceColor
-                                              : const Color(0xFF2E7D32),
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 5),
-                                      decoration: BoxDecoration(
-                                        color: hasOutstanding
-                                            ? balanceColor.withValues(
-                                                alpha: 0.12)
-                                            : const Color(0xFFE8F5E9),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        'KSh ${account.balance.toStringAsFixed(0)}',
-                                        style: TextStyle(
-                                          color: balanceColor,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      _lastTransactionLabel(account),
-                                      style: const TextStyle(
-                                        color: muted,
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                    if (hasOutstanding) ...[
-                                      const SizedBox(height: 8),
-                                      TextButton(
-                                        onPressed: () =>
-                                            _showRepaymentSheet(account),
-                                        style: TextButton.styleFrom(
-                                          backgroundColor: navy,
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 10, vertical: 6),
-                                          minimumSize: Size.zero,
-                                          tapTargetSize:
-                                              MaterialTapTargetSize.shrinkWrap,
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(8)),
-                                        ),
-                                        child: const Text('Receive Repayment',
-                                            style: TextStyle(
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w800)),
-                                      ),
-                                    ],
+                          ..._accounts.map((account) {
+                            final daysOld = _daysOutstanding(account);
+                            final hasOutstanding = account.balance > 0;
+                            final balanceColor = _balanceColor(account.balance);
+                            return InkWell(
+                              onTap: () => _openAccount(account.customerId),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                width: double.infinity,
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                        color: Color(0x0F000000),
+                                        blurRadius: 8,
+                                        offset: Offset(0, 2))
                                   ],
                                 ),
-                              ],
-                            ),
-                          );
-                        }).toList(),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      width: 46,
+                                      height: 46,
+                                      decoration: BoxDecoration(
+                                        color: Color(account.colorValue),
+                                        borderRadius: BorderRadius.circular(23),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          account.initials,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            account.customer,
+                                            style: const TextStyle(
+                                              color: ink,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            '${account.phone} · ${account.transactionCount} transactions',
+                                            style: const TextStyle(
+                                              color: muted,
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            daysOld == 0
+                                                ? 'Added today'
+                                                : '${daysOld}d outstanding',
+                                            style: TextStyle(
+                                              color: hasOutstanding
+                                                  ? balanceColor
+                                                  : const Color(0xFF2E7D32),
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 5),
+                                          decoration: BoxDecoration(
+                                            color: hasOutstanding
+                                                ? balanceColor.withValues(
+                                                    alpha: 0.12)
+                                                : const Color(0xFFE8F5E9),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            'KSh ${account.balance.toStringAsFixed(0)}',
+                                            style: TextStyle(
+                                              color: balanceColor,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          _lastTransactionLabel(account),
+                                          style: const TextStyle(
+                                            color: muted,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
             ),
           ),
         ],
@@ -13526,40 +17882,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   ReportsData? _reportData;
   bool _loading = true;
   String? _error;
-  final List<double> months = const [
-    1.8,
-    2.1,
-    2.4,
-    2.0,
-    2.7,
-    3.1,
-    2.9,
-    3.4,
-    3.0,
-    3.6,
-    3.2,
-    4.1
-  ];
-  final List<String> monthLabels = const [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec'
-  ];
-  final List<Map<String, dynamic>> categoryData = const [
-    {'name': 'Flour & Grains', 'value': 28, 'color': Color(0xFF123A8F)},
-    {'name': 'Dairy', 'value': 22, 'color': Color(0xFFD4AF37)},
-    {'name': 'Oils & Fats', 'value': 18, 'color': Color(0xFF2E7D32)},
-    {'name': 'Pharma', 'value': 15, 'color': Color(0xFFD32F2F)},
-    {'name': 'Others', 'value': 17, 'color': Color(0xFF6B7A99)},
+  static const List<Color> _categoryColors = [
+    navy,
+    gold,
+    Color(0xFF2E7D32),
+    Color(0xFFD32F2F),
+    muted,
   ];
 
   @override
@@ -13570,7 +17898,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _loadReports() async {
     try {
-      final data = await _reportsService.load(businessId: 'demo-business');
+      final businessId = await AuthService().getActiveBusinessId();
+      if (businessId == null || businessId.isEmpty) {
+        throw Exception('Please sign in to load reports.');
+      }
+      final data = await _reportsService.load(businessId: businessId);
       if (!mounted) return;
       setState(() {
         _reportData = data;
@@ -13592,8 +17924,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) {
     final report = _reportData;
-    final weekSales = report?.totalRevenue ?? 0;
-    final avgMargin = report?.profitMarginPercentage ?? 0;
+    final weekSales = report?.weekSales ?? 0;
+    final avgMargin = report?.avgMargin ?? 0;
+    final today = _trends
+        .where((trend) => trend.isToday)
+        .cast<ReportTrend?>()
+        .firstWhere((trend) => trend != null,
+            orElse: () => _trends.isEmpty ? null : _trends.last);
 
     return Column(
       children: [
@@ -13651,7 +17988,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 alignment: Alignment.centerLeft,
                 child: Padding(
                   padding: EdgeInsets.only(top: 12),
-                  child: Text('Live reporting window · Last 7 days',
+                  child: Text(
+                      'Week of ${report?.currentMonth ?? ''} ${report?.year ?? DateTime.now().year} · Up to ${today?.day ?? 'Today'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: Colors.white60, fontSize: 12)),
                 ),
               ),
@@ -13660,16 +18000,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 children: [
                   _metricCard(
                       "Today's Sales",
-                      'KSh ${_trends.isEmpty ? 0 : (_trends.last.revenue / 1000).round()}K',
-                      _trends.isEmpty ? '—' : _formatDate(_trends.last.date)),
+                      'KSh ${((report?.todaySales ?? 0) / 1000).round()}K',
+                      today?.day ?? 'Today'),
                   _metricCard(
                       'Week Sales',
                       'KSh ${(weekSales / 1000).round()}K',
-                      'COGS ${(report?.totalCostOfGoods ?? 0).round()} · Exp ${(report?.totalExpenses ?? 0).round()}'),
-                  _metricCard(
-                      'Net Profit',
-                      'KSh ${((report?.netProfit ?? 0) / 1000).round()}K',
-                      '${avgMargin.toStringAsFixed(1)}% margin'),
+                      'Mon - ${today?.day ?? 'Today'}'),
+                  _metricCard('Avg Margin', '${avgMargin.toStringAsFixed(1)}%',
+                      'This week'),
                 ],
               ),
             ],
@@ -13775,8 +18113,49 @@ class _ReportsScreenState extends State<ReportsScreen> {
   double get _profitMaxY {
     final maximum = _trends.fold<double>(
         0, (value, item) => item.profit > value ? item.profit : value);
+    return maximum > 0 ? maximum * 1.2 : 1;
+  }
+
+  double get _profitMinY {
+    final minimum = _trends.fold<double>(
+        0, (value, item) => item.profit < value ? item.profit : value);
+    return minimum < 0 ? minimum * 1.2 : 0;
+  }
+
+  double get _profitAxisInterval {
+    final range = _profitMaxY - _profitMinY;
+    return range <= 4 ? 1 : range / 4;
+  }
+
+  List<ReportMonth> get _months => _reportData?.monthly ?? const [];
+  List<double> get months => _months.map((month) => month.sales).toList();
+  List<String> get monthLabels => _months.map((month) => month.month).toList();
+  List<Map<String, dynamic>> get categoryData =>
+      (_reportData?.categories ?? const [])
+          .asMap()
+          .entries
+          .map((entry) => {
+                'name': entry.value.name,
+                'value': entry.value.percent,
+                'color': _categoryColors[entry.key % _categoryColors.length],
+              })
+          .toList();
+  double get _monthMaxY {
+    final maximum =
+        months.fold<double>(0, (value, sales) => sales > value ? sales : value);
     return maximum <= 0 ? 1 : maximum * 1.2;
   }
+
+  double get _monthSalesPeak {
+    final maximum =
+        months.fold<double>(0, (value, sales) => sales > value ? sales : value);
+    return maximum <= 0 ? 1 : maximum;
+  }
+
+  String _money(double value) => value
+      .round()
+      .toString()
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (match) => ',');
 
   Widget _daily() => Column(
         children: [
@@ -13896,8 +18275,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
         title: 'Daily Breakdown',
         child: Column(
           children: List.generate(_trends.length, (index) {
-            final value = _trends[index].revenue;
-            final label = _formatDate(_trends[index].date);
+            final trend = _trends[index];
+            final value = trend.revenue;
+            final label =
+                trend.day.isEmpty ? _formatDate(trend.date) : trend.day;
             final width = (value / _chartMaxY).clamp(0.0, 1.0);
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -13907,11 +18288,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       width: 44,
                       child: Text(label,
                           style: TextStyle(
-                              color: index == _trends.length - 1
+                              color: trend.isToday
                                   ? navy
-                                  : const Color(0xFF6B7A99),
+                                  : trend.future
+                                      ? const Color(0xFFC8D0E0)
+                                      : const Color(0xFF6B7A99),
                               fontSize: 11,
-                              fontWeight: index == _trends.length - 1
+                              fontWeight: trend.isToday
                                   ? FontWeight.w800
                                   : FontWeight.w600))),
                   const SizedBox(width: 6),
@@ -13927,11 +18310,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           ),
                         ),
                         FractionallySizedBox(
-                          widthFactor: width,
+                          widthFactor: trend.future ? 0 : width,
                           child: Container(
                             height: 7,
                             decoration: BoxDecoration(
-                              color: index == _trends.length - 1 ? gold : navy,
+                              color: trend.isToday ? gold : navy,
                               borderRadius: BorderRadius.circular(4),
                             ),
                           ),
@@ -13943,7 +18326,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   SizedBox(
                     width: 58,
                     child: Text(
-                      'KSh ${(value / 1000).round()}K',
+                      trend.future ? '—' : 'KSh ${(value / 1000).round()}K',
                       textAlign: TextAlign.right,
                       style: TextStyle(
                         color: const Color(0xFF0D1B3D),
@@ -14020,12 +18403,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget _monthly() => Column(
         children: [
           Section(
-            title: 'Monthly Sales 2026',
+            title: 'Monthly Sales ${_reportData?.year ?? DateTime.now().year}',
             child: SizedBox(
               height: 210,
               child: BarChart(
                 BarChartData(
-                  maxY: 5,
+                  maxY: _monthMaxY,
                   borderData: FlBorderData(show: false),
                   gridData:
                       const FlGridData(show: true, drawVerticalLine: false),
@@ -14035,7 +18418,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           showTitles: true,
                           reservedSize: 36,
                           getTitlesWidget: (value, meta) => Text(
-                              '${value.toInt()}M',
+                              '${(value / 1000).round()}K',
                               style: const TextStyle(
                                   color: Color(0xFF6B7A99), fontSize: 10))),
                     ),
@@ -14063,7 +18446,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       barRods: [
                         BarChartRodData(
                           toY: entry.value,
-                          color: entry.key == 8 ? gold : navy,
+                          color: _months[entry.key].future
+                              ? const Color(0xFFEDF0F7)
+                              : _months[entry.key].isNow
+                                  ? gold
+                                  : navy,
                           width: 14,
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(4)),
@@ -14080,25 +18467,64 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Column(
               children: List.generate(monthLabels.length, (index) {
                 final label = monthLabels[index];
-                final value = months[index];
+                final month = _months[index];
+                final value = month.sales;
+                final ratio = (value / _monthSalesPeak).clamp(0.0, 1.0);
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.only(bottom: 10),
                   child: Row(
                     children: [
                       SizedBox(
-                          width: 34,
-                          child: Text(label,
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Color(0xFF6B7A99),
-                                  fontWeight: FontWeight.w700))),
+                          width: 38,
+                          child: Row(children: [
+                            Text(label,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: month.future
+                                        ? const Color(0xFFC8D0E0)
+                                        : month.isNow
+                                            ? gold
+                                            : muted,
+                                    fontWeight: month.isNow
+                                        ? FontWeight.w800
+                                        : FontWeight.w700)),
+                            if (month.isNow)
+                              const Padding(
+                                  padding: EdgeInsets.only(left: 3),
+                                  child:
+                                      Icon(Icons.circle, size: 5, color: gold))
+                          ])),
+                      const SizedBox(width: 4),
                       Expanded(
+                        child:
+                            Stack(alignment: Alignment.centerLeft, children: [
+                          Container(
+                              height: 6,
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFF0F3F9),
+                                  borderRadius: BorderRadius.circular(3))),
+                          if (!month.future)
+                            FractionallySizedBox(
+                                widthFactor: ratio,
+                                child: Container(
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                        color: month.isNow ? gold : navy,
+                                        borderRadius:
+                                            BorderRadius.circular(3))))
+                        ]),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 74,
                         child: Text(
-                          'KSh ${value.toStringAsFixed(1)}M',
-                          style: const TextStyle(
+                          month.future ? '—' : 'KSh ${_money(value)}',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
                               fontSize: 11,
-                              color: Color(0xFF0D1B3D),
-                              fontWeight: FontWeight.w700),
+                              color:
+                                  month.future ? const Color(0xFFC8D0E0) : ink,
+                              fontWeight: FontWeight.w800),
                         ),
                       ),
                     ],
@@ -14107,8 +18533,77 @@ class _ReportsScreenState extends State<ReportsScreen> {
               }),
             ),
           ),
+          ..._monthlySummary(),
         ],
       );
+
+  List<Widget> _monthlySummary() {
+    final report = _reportData;
+    final ytd = _months.fold<double>(0, (sum, month) => sum + month.sales);
+    final daysLeft = (report?.daysInMonth ?? 0) - (report?.currentDay ?? 0);
+    final items = [
+      (
+        'Best Month (so far)',
+        report?.bestMonth ?? '-',
+        'Database revenue leader',
+        Icons.emoji_events_outlined,
+        gold
+      ),
+      (
+        'YTD Revenue',
+        'KSh ${_money(ytd)}',
+        'Current calendar year',
+        Icons.trending_up_outlined,
+        const Color(0xFF2E7D32)
+      ),
+      (
+        'Days left in ${report?.currentMonth ?? 'month'}',
+        '$daysLeft days',
+        '${report?.currentDay ?? 0} of ${report?.daysInMonth ?? 0} elapsed',
+        Icons.calendar_today_outlined,
+        navy
+      ),
+    ];
+    return items
+        .map((item) => Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Color(0x0F000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 2))
+                ]),
+            child: Row(children: [
+              Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                      color: item.$5.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Icon(item.$4, color: item.$5, size: 22)),
+              const SizedBox(width: 14),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(item.$1,
+                        style: const TextStyle(color: muted, fontSize: 11)),
+                    const SizedBox(height: 2),
+                    Text(item.$2,
+                        style: TextStyle(
+                            color: item.$5,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800)),
+                    Text(item.$3,
+                        style: const TextStyle(color: muted, fontSize: 11))
+                  ]))
+            ])))
+        .toList();
+  }
 
   Widget _profit() => Column(
         children: [
@@ -14118,15 +18613,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
               height: 190,
               child: BarChart(
                 BarChartData(
+                  minY: _profitMinY,
                   maxY: _profitMaxY,
                   borderData: FlBorderData(show: false),
-                  gridData:
-                      const FlGridData(show: true, drawVerticalLine: false),
+                  gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      horizontalInterval: _profitAxisInterval),
                   titlesData: FlTitlesData(
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
                           showTitles: true,
                           reservedSize: 42,
+                          interval: _profitAxisInterval,
                           getTitlesWidget: (value, meta) => Text(
                               '${(value / 1000).round()}K',
                               style: const TextStyle(
@@ -14156,7 +18655,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       barRods: [
                         BarChartRodData(
                           toY: entry.value.profit,
-                          color: entry.key == 3 ? gold : Colors.green,
+                          color: _trends[entry.key].future
+                              ? const Color(0xFFEDF0F7)
+                              : _trends[entry.key].isToday
+                                  ? gold
+                                  : const Color(0xFF2E7D32),
                           width: 20,
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(5)),
@@ -14168,34 +18671,109 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             ),
           ),
-          Section(
-            title: 'Net Profit (week to date)',
-            child: Row(
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEAF8EE),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text('KSh 181,650',
-                      style: TextStyle(
-                          color: Color(0xFF1B5E20),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800)),
-                ),
-                const SizedBox(width: 12),
-                const Text('26.0% margin',
-                    style: TextStyle(
-                        color: Color(0xFF2E7D32),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700)),
-              ],
-            ),
-          ),
+          ..._profitSummary(),
+          _monthlyProfit(),
         ],
       );
+
+  List<Widget> _profitSummary() {
+    final report = _reportData;
+    final sales = report?.weekSales ?? 0;
+    final gross = report?.weekProfit ?? 0;
+    final expenses = report?.weekExpenses ?? 0;
+    final net = gross - expenses;
+    final rows = [
+      (
+        'Gross Profit (week to date)',
+        gross,
+        sales == 0 ? 0 : gross / sales * 100,
+        const Color(0xFF2E7D32)
+      ),
+      (
+        'Operating Expenses',
+        expenses,
+        sales == 0 ? 0 : expenses / sales * 100,
+        const Color(0xFFD32F2F)
+      ),
+      (
+        'Net Profit (week to date)',
+        net,
+        sales == 0 ? 0 : net / sales * 100,
+        navy
+      ),
+    ];
+    return rows
+        .map((row) => Section(
+            title: row.$1,
+            child: Row(children: [
+              Expanded(
+                  child: Text('KSh ${_money(row.$2)}',
+                      style: TextStyle(
+                          color: row.$4,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800))),
+              Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                      color: row.$4.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(999)),
+                  child: Text('${row.$3.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                          color: row.$4,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800)))
+            ])))
+        .toList();
+  }
+
+  Widget _monthlyProfit() => Section(
+      title: 'Monthly Profit ${_reportData?.year ?? DateTime.now().year}',
+      child: SizedBox(
+          height: 170,
+          child: LineChart(LineChartData(
+              minY: 0,
+              maxY: _months.fold<double>(
+                          0,
+                          (max, item) =>
+                              item.profit > max ? item.profit : max) *
+                      1.2 +
+                  1,
+              gridData: const FlGridData(show: true, drawVerticalLine: false),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 42,
+                          getTitlesWidget: (value, meta) => Text(
+                              '${(value / 1000).round()}K',
+                              style: const TextStyle(
+                                  color: muted, fontSize: 10)))),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 22,
+                          getTitlesWidget: (value, meta) {
+                            final index = value.toInt();
+                            if (index < 0 || index >= _months.length) {
+                              return const SizedBox.shrink();
+                            }
+                            return Text(_months[index].month,
+                                style: const TextStyle(
+                                    color: muted, fontSize: 10));
+                          }))),
+              lineBarsData: [
+                _line(
+                    _months
+                        .map((month) => month.future ? 0.0 : month.profit)
+                        .toList(),
+                    const Color(0xFF2E7D32))
+              ]))));
 }
 
 class Metric extends StatelessWidget {
