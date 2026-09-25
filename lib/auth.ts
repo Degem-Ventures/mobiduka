@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 
 function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
+  const secret = process.env.JWT_SECRET || "mobiduka-local-dev-secret-change-me";
+;
 
   if (!secret) {
     console.error("FATAL BINDING ERROR: The JWT_SECRET environment configuration is completely missing.");
