@@ -7,6 +7,29 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum SyncReceiptStatus {
+  RECEIVED
+  APPLIED
+  REJECTED
+}
+
+model SyncReceipt {
+  id             String            @id @default(uuid())
+  businessId     String
+  entityName     String
+  externalId     String
+  payloadHash    String
+  status         SyncReceiptStatus @default(RECEIVED)
+  sourceDeviceId String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id])
+
+  @@unique([businessId, entityName, externalId])
+  @@index([businessId, payloadHash])
+}
+
 model Business {
   id               String   @id @default(uuid())
   name             String
@@ -40,6 +63,7 @@ model Business {
   mpesaTransactions MpesaTransaction[]
   auditLogs         AuditLog[]
   syncQueues        SyncQueue[]
+  syncReceipts      SyncReceipt[]
   notifications     Notification[]
   notificationSubscriptions NotificationSubscription[]
   scanEvents        ScanEvent[]

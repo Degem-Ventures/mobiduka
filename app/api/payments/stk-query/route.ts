@@ -66,6 +66,7 @@ export async function POST(request: Request) {
     });
     const result = await darajaResponse.json();
     const resultCode = result.ResultCode?.toString();
+    const transientResultCodes = new Set(["1037", "4999", "500.001.1001"]);
 
     if (resultCode === "0") {
       await prisma.mpesaTransaction.update({
@@ -88,7 +89,7 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ source: "live_query", status: "CANCELLED", message: "User cancelled the request." });
     }
-    if (result.ResponseCode === "0" && !result.ResultCode) {
+    if ((result.ResponseCode === "0" && !result.ResultCode) || transientResultCodes.has(resultCode ?? "")) {
       return NextResponse.json({ source: "live_query", status: "PENDING", message: "Awaiting user input on handset." });
     }
 

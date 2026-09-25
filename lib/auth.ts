@@ -1,6 +1,22 @@
 import crypto from "node:crypto";
 
-const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+
+  if (!secret) {
+    console.error("FATAL BINDING ERROR: The JWT_SECRET environment configuration is completely missing.");
+    process.exit(1);
+  }
+
+  if (process.env.NODE_ENV === "production" && secret === "mobiduka-dev-secret-change-me") {
+    console.error("FATAL HARDENING ERROR: Weak developer credential detected within a production tier deployment.");
+    process.exit(1);
+  }
+
+  return secret;
+}
+
+export const JWT_SECRET = getJwtSecret();
 
 type TokenPayload = {
   sub?: unknown;

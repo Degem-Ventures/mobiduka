@@ -2,11 +2,10 @@ import { NextResponse } from "next/server.js";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { requireBusinessAccess } from "@/lib/auth";
+import { JWT_SECRET, requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
 
 const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"] as const;
-const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
 
 type AllowedRole = (typeof ALLOWED_ROLES)[number];
 
