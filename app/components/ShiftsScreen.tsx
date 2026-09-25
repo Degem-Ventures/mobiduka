@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
+
 type ShiftType = { id: string; code: string; name: string; scheduledStart: string; scheduledEnd: string; icon: string | null; color: string | null }
 
 interface ShiftRecord {
