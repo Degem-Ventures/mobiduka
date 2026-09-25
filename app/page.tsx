@@ -187,6 +187,15 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
+    const handleAuthExpired = () => {
+      setLoggedIn(false);
+      setScreen("login");
+    };
+    window.addEventListener("mobiduka-auth-expired", handleAuthExpired);
+    return () => window.removeEventListener("mobiduka-auth-expired", handleAuthExpired);
+  }, []);
+
+  useEffect(() => {
     if (!loggedIn) {
       setActiveShiftCount(0);
       setActiveShiftNames([]);

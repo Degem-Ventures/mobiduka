@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
@@ -7,8 +8,14 @@ interface SyncRecord {
   id: string;
   entityName: "Category" | "Supplier" | "Product" | "Customer" | "Sale" | "Expense" | "Credit" | "Employee";
   operation: "CREATE" | "UPDATE" | "DELETE";
+  payloadHash?: string;
   payload: any;
+  externalId?: string;
   createdAt: string;
+}
+
+function computePayloadHash(payload: unknown): string {
+  return crypto.createHash("sha256").update(JSON.stringify(payload ?? {})).digest("hex");
 }
 
 export async function POST(request: Request) {
@@ -57,7 +64,17 @@ export async function POST(request: Request) {
       select: { id: true },
     });
 
-    const effectiveDeviceId = resolvedDeviceId?.id ?? deviceId ?? null;
+    const resolvedUserId = userId
+      ? await prisma.user.findFirst({
+          where: {
+            id: userId,
+            businessId: resolvedBusinessId,
+          },
+          select: { id: true },
+        }).then((user) => user?.id ?? null)
+      : null;
+
+    const effectiveDeviceId = resolvedDeviceId?.id ?? null;
     const processedIds: string[] = [];
     const syncedSales: Array<{ id: string; saleNumber: string; total: number }> = [];
 
@@ -67,7 +84,48 @@ export async function POST(request: Request) {
       );
 
       for (const record of sortedRecords) {
-        const { entityName, operation, payload, id: clientRecordId } = record;
+        const entityName = record.entityName;
+        const operation = record.operation;
+        const payload = record.payload ?? {};
+        const clientRecordId = record.id;
+        const externalId = String(record.externalId ?? record.id ?? "").trim();
+        const payloadHash = String(record.payloadHash ?? computePayloadHash(payload)).trim();
+
+        if (!externalId) {
+          throw new Error(`Record for ${entityName} is missing a valid externalId.`);
+        }
+
+        const receiptKey = {
+          businessId: resolvedBusinessId,
+          entityName,
+          externalId,
+        };
+
+        const existingReceipt = await tx.syncReceipt.findUnique({
+          where: {
+            businessId_entityName_externalId: receiptKey,
+          },
+        });
+
+        if (existingReceipt) {
+          if (existingReceipt.payloadHash === payloadHash) {
+            processedIds.push(clientRecordId);
+            continue;
+          }
+          throw new Error(`Payload collision for ${entityName}:${externalId}. Duplicate logical key with divergent payload.`);
+        }
+
+        await tx.syncReceipt.create({
+          data: {
+            businessId: resolvedBusinessId,
+            entityName,
+            externalId,
+            payloadHash,
+            status: "RECEIVED",
+            sourceDeviceId: effectiveDeviceId ?? deviceId ?? null,
+          },
+        });
+
         const dataPayload = { ...payload, businessId: resolvedBusinessId };
 
         switch (entityName) {
@@ -238,7 +296,7 @@ export async function POST(request: Request) {
             await tx.creditLedgerEntry.create({
               data: {
                 id: dataPayload.id,
-                businessId,
+                businessId: resolvedBusinessId,
                 customerId: dataPayload.customerId,
                 type: "PAYMENT",
                 amount: paymentAmount,
@@ -263,7 +321,7 @@ export async function POST(request: Request) {
               where: { id: dataPayload.id },
               create: {
                 id: dataPayload.id,
-                businessId,
+                businessId: resolvedBusinessId,
                 fullName: dataPayload.fullName,
                 email: dataPayload.email || null,
                 phone: dataPayload.phone || null,
@@ -286,9 +344,16 @@ export async function POST(request: Request) {
             throw new Error(`Unsupported ledger entity: ${entityName}`);
         }
 
+        await tx.syncReceipt.update({
+          where: {
+            businessId_entityName_externalId: receiptKey,
+          },
+          data: { status: "APPLIED" },
+        });
+
         await tx.syncQueue.create({
           data: {
-            businessId,
+            businessId: resolvedBusinessId,
             tableName: entityName,
             recordId: dataPayload.id,
             operation,
@@ -302,8 +367,8 @@ export async function POST(request: Request) {
 
       await tx.auditLog.create({
         data: {
-          businessId,
-          userId,
+          businessId: resolvedBusinessId,
+          userId: resolvedUserId,
           action: "DEVICE_SYNC",
           tableName: "sync_queue",
           recordId: deviceId,

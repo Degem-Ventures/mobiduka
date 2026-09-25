@@ -2,8 +2,7 @@ import { NextResponse } from "next/server.js";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-
-const JWT_SECRET = process.env.JWT_SECRET || "mobiduka-dev-secret-change-me";
+import { JWT_SECRET } from "@/lib/auth";
 
 function signToken(payload: Record<string, unknown>) {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");

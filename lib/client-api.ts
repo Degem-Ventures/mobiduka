@@ -72,6 +72,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const response = await fetch(path, { ...init, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      clearClientSession();
+      clearLastScreen();
+      window.dispatchEvent(new Event("mobiduka-auth-expired"));
+    }
     throw new Error(typeof payload.error === "string" ? payload.error : `Request failed (${response.status})`);
   }
   return payload as T;

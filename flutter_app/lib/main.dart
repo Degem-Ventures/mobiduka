@@ -3809,12 +3809,15 @@ class _POSScreenState extends State<POSScreen> {
   final CreditService _creditService = CreditService.instance;
   final CustomerService _customerService = CustomerService();
   final SyncService _syncService = SyncService();
+  final EmployeeRepository _employeeRepository = EmployeeRepository();
   final MpesaService _mpesaService = MpesaService();
   final SmsWatcherService _smsWatcherService = SmsWatcherService();
   final PrinterService _printerService = PrinterService();
   final TextEditingController _mpesaPhoneController =
       TextEditingController(text: '254');
   List<BluetoothDevice> _pairedPrinters = const [];
+  List<Map<String, String>> _activeOperators = const [];
+  String? _selectedOperatorId;
   BluetoothDevice? _selectedPrinter;
   bool _isSearchingPrinters = false;
   String search = '';
@@ -3823,6 +3826,8 @@ class _POSScreenState extends State<POSScreen> {
   CreditAccount? _selectedCreditAccount;
   Map<String, dynamic> _lastReceiptSnapshot = const {};
   bool _mpesaRequestPending = false;
+  String? _paymentInlineStatus;
+  String? _paymentInlineError;
   String? _receiptToken;
   String? _completedSaleId;
   String? _receiptNumber;
@@ -3852,6 +3857,44 @@ class _POSScreenState extends State<POSScreen> {
   void initState() {
     super.initState();
     _loadPairedPrinters();
+    _loadActiveOperators();
+  }
+
+  Future<void> _loadActiveOperators() async {
+    try {
+      final sessions = await _employeeRepository.loadCashSessions();
+      final operators = sessions
+          .where((session) => session['closedAt'] == null)
+          .map((session) {
+            final cashier = session['cashier'];
+            final shift = session['shift'];
+            if (cashier is! Map || cashier['id'] == null) return null;
+            return <String, String>{
+              'id': cashier['id'].toString(),
+              'name': cashier['fullName']?.toString() ?? 'Unassigned',
+              'shift': shift is Map
+                  ? shift['name']?.toString() ??
+                      session['shiftType']?.toString() ??
+                      'Active shift'
+                  : session['shiftType']?.toString() ?? 'Active shift',
+            };
+          })
+          .whereType<Map<String, String>>()
+          .toList();
+      if (!mounted) return;
+      final activeUserId = await _authService.getActiveUserId();
+      setState(() {
+        _activeOperators = operators;
+        _selectedOperatorId =
+            operators.any((operator) => operator['id'] == activeUserId)
+                ? activeUserId
+                : operators.length == 1
+                    ? operators.first['id']
+                    : _selectedOperatorId;
+      });
+    } catch (_) {
+      // Payment remains usable offline; the operator section stays empty until the API is reachable.
+    }
   }
 
   Future<void> _loadPairedPrinters() async {
@@ -4243,8 +4286,10 @@ class _POSScreenState extends State<POSScreen> {
     nameController.dispose();
     phoneController.dispose();
     if (result == null || result.first.isEmpty) return null;
+    final businessId = await _authService.getActiveBusinessId();
+    if (businessId == null || businessId.isEmpty) return null;
     final customerId = await _customerService.onboardOfflineCustomer(
-        businessId: 'demo-business', name: result.first, phone: result.last);
+        businessId: businessId, name: result.first, phone: result.last);
     final account = CreditAccount(
         customerId: customerId,
         customer: result.first,
@@ -4339,14 +4384,34 @@ class _POSScreenState extends State<POSScreen> {
   Future<void> _completeSale() async {
     if (cart.isEmpty) return;
 
+    final businessId = await _authService.getActiveBusinessId();
+    final attributedUserId =
+        _selectedOperatorId ?? await _authService.getActiveUserId();
+    if (businessId == null ||
+        businessId.isEmpty ||
+        attributedUserId == null ||
+        attributedUserId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          backgroundColor: Color(0xFFD32F2F),
+          content: Text(
+              'Sign in and select an active shift before completing the sale.'),
+        ));
+      }
+      return;
+    }
+
     if (paymentMethod == 'credit') {
       _selectedCreditAccount ??= await _selectCreditCustomer();
       if (!mounted || _selectedCreditAccount == null) return;
     }
 
     if (paymentMethod == 'mpesa') {
-      setState(() => _mpesaRequestPending = true);
-      final businessId = await _authService.getActiveBusinessId();
+      setState(() {
+        _mpesaRequestPending = true;
+        _paymentInlineStatus = null;
+        _paymentInlineError = null;
+      });
       if (!mounted) return;
       if (businessId == null || businessId.isEmpty) {
         setState(() => _mpesaRequestPending = false);
@@ -4367,47 +4432,25 @@ class _POSScreenState extends State<POSScreen> {
       );
       if (!mounted) return;
       if (result['success'] != true) {
-        setState(() => _mpesaRequestPending = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              backgroundColor: const Color(0xFFD32F2F),
-              content: Text(
-                  result['message'] as String? ?? 'M-Pesa request failed.')),
-        );
+        setState(() {
+          _mpesaRequestPending = false;
+          _paymentInlineError =
+              result['message'] as String? ?? 'M-Pesa request failed.';
+        });
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            backgroundColor: navy,
-            content: Text('Awaiting Customer PIN Entry...')),
-      );
+      setState(() {
+        _paymentInlineStatus =
+            'Awaiting Customer PIN Entry ...\nAwaiting Customer PIN Entry ... (60sec)';
+      });
 
       final checkoutRequestId = result['checkoutRequestId'] as String?;
       if (checkoutRequestId == null || checkoutRequestId.isEmpty) {
-        setState(() => _mpesaRequestPending = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              backgroundColor: Color(0xFFD32F2F),
-              content: Text('M-Pesa did not return a verification ID.')),
-        );
+        setState(() {
+          _mpesaRequestPending = false;
+          _paymentInlineError = 'M-Pesa did not return a verification ID.';
+        });
         return;
-      }
-
-      if (mounted) {
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) => const AlertDialog(
-            title: Text('Awaiting Customer PIN Entry...'),
-            content: Row(
-              children: [
-                CircularProgressIndicator(color: navy),
-                SizedBox(width: 16),
-                Expanded(child: Text('Awaiting Customer PIN Entry... (60s)')),
-              ],
-            ),
-          ),
-        );
       }
 
       final confirmation = await _awaitMpesaConfirmation(
@@ -4417,24 +4460,15 @@ class _POSScreenState extends State<POSScreen> {
       );
       if (!mounted) return;
       _smsWatcherService.stopSmsWatcher();
-      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-      setState(() => _mpesaRequestPending = false);
+      setState(() {
+        _mpesaRequestPending = false;
+        _paymentInlineStatus = null;
+      });
       if (confirmation['status'] != 'SUCCESS') {
-        await showDialog<void>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Payment not confirmed',
-                style: TextStyle(color: Color(0xFFD32F2F))),
-            content: Text(confirmation['message'] as String? ??
-                'Neither M-Pesa confirmation source verified this payment.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('Keep Cart'),
-              ),
-            ],
-          ),
-        );
+        setState(() {
+          _paymentInlineError =
+              'Payment not confirmed.\nThe transaction is still under processing. Keep cart.';
+        });
         return;
       }
       _receiptToken = confirmation['receipt']?.toString() ?? 'MPESA_VERIFIED';
@@ -4489,9 +4523,9 @@ class _POSScreenState extends State<POSScreen> {
     }
     final salePayload = {
       'id': saleId,
-      'businessId': 'demo-business',
+      'businessId': businessId,
       'deviceId': 'mobile-device',
-      'userId': 'demo-owner',
+      'userId': attributedUserId,
       'paymentMethod': salePaymentMethod,
       'customerId': creditAccount?.customerId,
       'saleNumber': receiptNumber,
@@ -4519,7 +4553,7 @@ class _POSScreenState extends State<POSScreen> {
         payload: {
           'id': 'credit-sale-$receiptNumber',
           'action': 'RECORD_SALE',
-          'businessId': 'demo-business',
+          'businessId': businessId,
           'customerId': creditAccount!.customerId,
           'amount': saleTotal,
           'invoiceNo': receiptNumber,
@@ -4556,9 +4590,9 @@ class _POSScreenState extends State<POSScreen> {
     if (!kIsWeb) {
       await ProductRepository.instance.saveProducts(products);
       await _syncService.processCloudSync(
-        businessId: 'demo-business',
+        businessId: businessId,
         deviceId: 'mobile-device',
-        userId: 'demo-owner',
+        userId: attributedUserId,
       );
     }
 
@@ -5143,6 +5177,8 @@ class _POSScreenState extends State<POSScreen> {
                               cart.clear();
                               discount = 0;
                               _receiptToken = null;
+                              _paymentInlineStatus = null;
+                              _paymentInlineError = null;
                               _completedSaleId = null;
                               _receiptNumber = null;
                               _completedAt = null;
@@ -5179,29 +5215,76 @@ class _POSScreenState extends State<POSScreen> {
         color: const Color(0xFFF5F7FA),
         child: Column(
           children: [
+            if (_activeOperators.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                color: Colors.white,
+                child: Row(
+                  children: [
+                    const Icon(Icons.circle,
+                        size: 10, color: Color(0xFF2E7D32)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_activeOperators.length} shift${_activeOperators.length == 1 ? '' : 's'} in progress · ${_activeOperators.map((operator) => operator['name']).join(', ')}',
+                        style: const TextStyle(
+                            color: Color(0xFF205B2D),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _loadActiveOperators,
+                      style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 4)),
+                      child: const Text('Manage ›',
+                          style: TextStyle(
+                              color: navy, fontWeight: FontWeight.w700)),
+                    ),
+                  ],
+                ),
+              ),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(16, 52, 16, 18),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(colors: [ink, navy]),
               ),
-              child: Row(
+              child: Column(
                 children: [
-                  IconButton(
-                    onPressed: () => setState(() => view = 'cart'),
-                    style: IconButton.styleFrom(
-                      backgroundColor: Colors.white.withValues(alpha: 0.12),
-                      foregroundColor: Colors.white,
-                      fixedSize: const Size(36, 36),
-                    ),
-                    icon: const Icon(Icons.arrow_back),
+                  Row(
+                    children: [
+                      IconButton(
+                        onPressed: () => setState(() => view = 'cart'),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: 0.12),
+                          foregroundColor: Colors.white,
+                          fixedSize: const Size(36, 36),
+                        ),
+                        icon: const Icon(Icons.arrow_back),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Payment',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800)),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  const Text('Payment',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 20),
+                  const Text('Total Amount Due',
+                      style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  Text('KSh $total',
+                      style: const TextStyle(
+                          color: gold,
+                          fontSize: 36,
+                          fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 4),
+                  Text('$cartCount items',
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 12)),
                 ],
               ),
             ),
@@ -5209,35 +5292,6 @@ class _POSScreenState extends State<POSScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [
-                        BoxShadow(
-                            color: Color(0x0F000000),
-                            blurRadius: 8,
-                            offset: Offset(0, 2))
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        const Text('Total Amount Due',
-                            style: TextStyle(color: muted, fontSize: 12)),
-                        const SizedBox(height: 8),
-                        Text('KSh $total',
-                            style: const TextStyle(
-                                color: Color(0xFFD4AF37),
-                                fontSize: 36,
-                                fontWeight: FontWeight.w900)),
-                        const SizedBox(height: 6),
-                        Text('$cartCount items',
-                            style: const TextStyle(color: muted, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
                   const Text('Select Payment Method',
                       style: TextStyle(
                           color: muted,
@@ -5254,12 +5308,75 @@ class _POSScreenState extends State<POSScreen> {
                       controller: _mpesaPhoneController,
                       keyboardType: TextInputType.phone,
                       decoration: const InputDecoration(
-                        labelText: 'Customer phone number',
+                        labelText: 'Customer M-Pesa Phone',
                         hintText: '2547XXXXXXXX',
                         prefixIcon: Icon(Icons.phone_android),
                         border: OutlineInputBorder(),
                       ),
                     ),
+                    if (_paymentInlineStatus != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F1FF),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFB8DAFF)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _paymentInlineStatus!,
+                                style: const TextStyle(
+                                    color: Color(0xFF174A8B),
+                                    fontSize: 13,
+                                    height: 1.35,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (_paymentInlineError != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF4F4),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFFFCDD2)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.error_outline,
+                                color: Color(0xFFD32F2F), size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _paymentInlineError!,
+                                style: const TextStyle(
+                                    color: Color(0xFFB71C1C),
+                                    fontSize: 13,
+                                    height: 1.35,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                   ],
                   _paymentOption(
@@ -5312,9 +5429,67 @@ class _POSScreenState extends State<POSScreen> {
                       );
                     }).toList(),
                   ),
+                  if (_activeOperators.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    const Text('Sale Attributed To',
+                        style: TextStyle(
+                            color: muted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 10),
+                    ..._activeOperators.map((operator) {
+                      final selected = _selectedOperatorId == operator['id'];
+                      return GestureDetector(
+                        onTap: () => setState(
+                            () => _selectedOperatorId = operator['id']),
+                        child: Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? const Color(0xFFE8EEF9)
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color:
+                                    selected ? navy : const Color(0xFFE8ECF4),
+                                width: selected ? 2 : 1),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(operator['name'] ?? 'Unassigned',
+                                        style: const TextStyle(
+                                            color: ink,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w800)),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                        '${operator['shift'] ?? 'Active shift'} · Active',
+                                        style: const TextStyle(
+                                            color: muted, fontSize: 11)),
+                                  ],
+                                ),
+                              ),
+                              if (selected)
+                                const Icon(Icons.check, color: navy, size: 20),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
                   const SizedBox(height: 18),
                   TextButton(
-                    onPressed: _mpesaRequestPending ? null : _completeSale,
+                    onPressed: _mpesaRequestPending ||
+                            (_activeOperators.isNotEmpty &&
+                                _selectedOperatorId == null)
+                        ? null
+                        : _completeSale,
                     style: TextButton.styleFrom(
                       backgroundColor: navy,
                       foregroundColor: Colors.white,
@@ -5328,7 +5503,11 @@ class _POSScreenState extends State<POSScreen> {
                             height: 20,
                             child: CircularProgressIndicator(
                                 color: Colors.white, strokeWidth: 2))
-                        : Text('Complete Sale · KSh $total',
+                        : Text(
+                            _activeOperators.isNotEmpty &&
+                                    _selectedOperatorId == null
+                                ? 'Select an active shift operator'
+                                : 'Complete Sale · KSh $total',
                             style: const TextStyle(
                                 fontSize: 16, fontWeight: FontWeight.w800)),
                   ),
