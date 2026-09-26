@@ -25,6 +25,7 @@ interface Props {
   initialCartItem?: Omit<CartItem, 'qty'>
 }
 
+
 export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [products, setProducts] = useState<ProductItem[]>([])
   const [categoryRows, setCategoryRows] = useState<Array<{ id: string; name: string; emoji: string | null }>>([])
