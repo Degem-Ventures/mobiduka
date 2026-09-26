@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
+
 type ProductItem = { id: string; name: string; price: number; category: string; stock: number; emoji: string; barcode?: string | null }
 type CreditCustomer = { id: string; name: string; phone: string; balance: number }
 type CartItem = Pick<ProductItem, 'id' | 'name' | 'price' | 'emoji'> & { qty: number }
