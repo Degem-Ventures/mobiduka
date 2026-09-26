@@ -7,6 +7,18 @@ type CreditCustomer = { id: string; name: string; phone: string; balance: number
 type CartItem = Pick<ProductItem, 'id' | 'name' | 'price' | 'emoji'> & { qty: number }
 type ActiveOperator = { id: string; name: string; shift: string }
 type ReceiptInfo = { saleNumber: string; createdAt: string; cashierName: string; businessName: string; businessBranch: string | null }
+type PosDraft = {
+  cart: CartItem[]
+  view: 'pos' | 'cart' | 'payment'
+  paymentMethod: 'cash' | 'mpesa' | 'credit'
+  mpesaPhone: string
+  discount: number
+  selectedCreditor: { id: string; name: string; phone: string } | null
+  selectedOperatorId: string
+}
+
+const cartDraftKey = (businessId: string, userId: string) =>
+  `mobiduka.pos_draft.v1:${businessId}:${userId}`
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -37,10 +49,64 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [selectedOperatorId, setSelectedOperatorId] = useState('')
   const [isCompletingSale, setIsCompletingSale] = useState(false)
   const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
+  const [isCartDraftReady, setIsCartDraftReady] = useState(false)
   const c = useColors()
   const session = getClientSession()
   const currentBusinessId = session?.user.businessId ?? ''
+  const currentUserId = session?.user.id ?? ''
   const categories = [{ name: 'All', emoji: null }, ...categoryRows]
+
+  // POSScreen is intentionally allowed to unmount while the user visits
+  // Dashboard or Stock. Restore the cashier's unfinished sale before writing
+  // any state back to browser storage, so navigation never clears the cart.
+  useEffect(() => {
+    setIsCartDraftReady(false)
+    if (!currentBusinessId || !currentUserId) {
+      setIsCartDraftReady(true)
+      return
+    }
+    try {
+      const raw = window.localStorage.getItem(cartDraftKey(currentBusinessId, currentUserId))
+      const draft = raw ? JSON.parse(raw) as Partial<PosDraft> : null
+      const cartItems = Array.isArray(draft?.cart)
+        ? draft.cart.filter((item): item is CartItem =>
+          Boolean(item) && typeof item.id === 'string' && typeof item.name === 'string' &&
+          Number.isFinite(Number(item.price)) && Number.isInteger(item.qty) && item.qty > 0,
+        )
+        : []
+      setCart(cartItems)
+      setView(draft?.view === 'cart' || draft?.view === 'payment' ? draft.view : 'pos')
+      setPaymentMethod(draft?.paymentMethod === 'mpesa' || draft?.paymentMethod === 'credit' ? draft.paymentMethod : 'cash')
+      setMpesaPhone(typeof draft?.mpesaPhone === 'string' ? draft.mpesaPhone : '254')
+      setDiscount([0, 5, 10, 15, 20].includes(Number(draft?.discount)) ? Number(draft?.discount) : 0)
+      setSelectedCreditor(draft?.selectedCreditor?.id ? draft.selectedCreditor : null)
+      setSelectedOperatorId(typeof draft?.selectedOperatorId === 'string' ? draft.selectedOperatorId : '')
+    } catch {
+      window.localStorage.removeItem(cartDraftKey(currentBusinessId, currentUserId))
+    } finally {
+      setIsCartDraftReady(true)
+    }
+  }, [currentBusinessId, currentUserId])
+
+  useEffect(() => {
+    if (!isCartDraftReady || !currentBusinessId || !currentUserId) return
+    const key = cartDraftKey(currentBusinessId, currentUserId)
+    // A completed receipt must never be restored as an unpaid cart.
+    if (cart.length === 0 || view === 'receipt') {
+      window.localStorage.removeItem(key)
+      return
+    }
+    const draft: PosDraft = {
+      cart,
+      view,
+      paymentMethod,
+      mpesaPhone,
+      discount,
+      selectedCreditor,
+      selectedOperatorId,
+    }
+    window.localStorage.setItem(key, JSON.stringify(draft))
+  }, [cart, currentBusinessId, currentUserId, discount, isCartDraftReady, mpesaPhone, paymentMethod, selectedCreditor, selectedOperatorId, view])
 
   useEffect(() => {
     if (!session) {

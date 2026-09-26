@@ -29,6 +29,7 @@ import 'services/dashboard_service.dart';
 import 'services/mpesa_service.dart';
 import 'services/mpesa_sms_ingestion_service.dart';
 import 'services/product_repository.dart';
+import 'services/pos_cart_draft_service.dart';
 import 'services/product_catalog_service.dart';
 import 'services/inventory_api_service.dart';
 import 'services/purchase_order_service.dart';
@@ -153,7 +154,7 @@ class MobiDukaApp extends StatefulWidget {
   State<MobiDukaApp> createState() => _MobiDukaAppState();
 }
 
-class _MobiDukaAppState extends State<MobiDukaApp> {
+class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
   final CashService _cashService = CashService();
   final AuthService _authService = AuthService();
   final GlobalKey<_POSScreenState> _posScreenKey = GlobalKey<_POSScreenState>();
@@ -161,6 +162,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   NotificationReceiverService? _notificationService;
   int tab = 0;
   bool loggedIn = false;
+  bool _restoringSession = true;
   bool showingSmartScan = false;
   bool showingGlobalShiftManagement = false;
   bool isDarkMode = false;
@@ -171,12 +173,40 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      unawaited(_loadCatalog());
-      unawaited(_loadActiveRole());
-      unawaited(_refreshActiveShiftNotice());
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_restorePersistedSession());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_restorePersistedSession(showLoading: false));
+    }
+  }
+
+  Future<void> _restorePersistedSession({bool showLoading = true}) async {
+    final session = await _authService.readSession();
+    if (!mounted) return;
+    if (session == null) {
+      if (showLoading) setState(() => _restoringSession = false);
+      return;
+    }
+    final role = await _authService.getActiveUserRole();
+    if (!mounted) return;
+    setState(() {
+      loggedIn = true;
+      activeRole = role;
+      tab = role == 'CASHIER' ? 1 : tab;
+      _restoringSession = false;
     });
+    unawaited(_loadCatalog());
+    unawaited(_refreshActiveShiftNotice());
   }
 
   Future<void> _loadActiveRole() async {
@@ -510,7 +540,9 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
   @override
   Widget build(BuildContext context) {
     final Widget body;
-    if (!loggedIn) {
+    if (_restoringSession) {
+      body = const Scaffold(body: Center(child: CircularProgressIndicator()));
+    } else if (!loggedIn) {
       body = LoginScreen(onLogin: _handleLoginAttempt);
     } else if (showingGlobalShiftManagement) {
       body = ShiftManagementScreen(
@@ -529,37 +561,43 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
         onThemeChanged: (value) => setState(() => isDarkMode = value),
       );
     } else if (activeRole == 'CASHIER') {
-      body = tab == 3
-          ? MoreScreen(
-              onOpen: open,
-              role: activeRole,
-              isDarkMode: isDarkMode,
-              onLogout: _logout,
-              onCloseShift: _handleCloseShift,
-            )
-          : POSScreen(key: _posScreenKey);
-    } else {
-      switch (tab.clamp(0, 3).toInt()) {
-        case 0:
-          body = DashboardScreen(
-            onProductScanned: _addScannedProductToPos,
-            onOpenSmartScan: _showSmartScan,
-            onQuickAction: _handleDashboardQuickAction,
-            onOpenNotifications: () => open('Notifications'),
-          );
-        case 1:
-          body = POSScreen(key: _posScreenKey);
-        case 2:
-          body = const ProductScreen(title: 'Inventory & Stock');
-        default:
-          body = MoreScreen(
+      body = IndexedStack(
+        index: tab == 3 ? 1 : 0,
+        children: [
+          POSScreen(key: _posScreenKey),
+          MoreScreen(
             onOpen: open,
             role: activeRole,
             isDarkMode: isDarkMode,
             onLogout: _logout,
             onCloseShift: _handleCloseShift,
-          );
-      }
+          ),
+        ],
+      );
+    } else {
+      // Keeping all primary tabs mounted means the cashier's live cart stays
+      // intact during ordinary navigation; the persisted draft covers a full
+      // process restart as well.
+      body = IndexedStack(
+        index: tab.clamp(0, 3).toInt(),
+        children: [
+          DashboardScreen(
+            onProductScanned: _addScannedProductToPos,
+            onOpenSmartScan: _showSmartScan,
+            onQuickAction: _handleDashboardQuickAction,
+            onOpenNotifications: () => open('Notifications'),
+          ),
+          POSScreen(key: _posScreenKey),
+          const ProductScreen(title: 'Inventory & Stock'),
+          MoreScreen(
+            onOpen: open,
+            role: activeRole,
+            isDarkMode: isDarkMode,
+            onLogout: _logout,
+            onCloseShift: _handleCloseShift,
+          ),
+        ],
+      );
     }
 
     return MaterialApp(
@@ -739,9 +777,9 @@ class _MobiDukaAppState extends State<MobiDukaApp> {
     );
   }
 
-  void _logout() {
-    _deactivateNotifications();
-    _authService.clearSession();
+  Future<void> _logout() async {
+    await _deactivateNotifications();
+    await _authService.clearSession();
     activeShiftNotice.value = null;
     setState(() {
       loggedIn = false;
@@ -3846,6 +3884,8 @@ class _POSScreenState extends State<POSScreen> {
       MpesaSmsIngestionService();
   final SmsWatcherService _smsWatcherService = SmsWatcherService();
   final PrinterService _printerService = PrinterService();
+  final PosCartDraftService _cartDraftService = PosCartDraftService();
+  final ProfileService _profileService = ProfileService();
   final TextEditingController _mpesaPhoneController =
       TextEditingController(text: '254');
   List<BluetoothDevice> _pairedPrinters = const [];
@@ -3871,6 +3911,8 @@ class _POSScreenState extends State<POSScreen> {
   int _completedTotal = 0;
   int _completedDiscount = 0;
   String _completedPaymentMethod = 'cash';
+  String _receiptBusinessName = 'MobiDuka POS';
+  String? _receiptBusinessBranch;
   int discount = 0;
   String view = 'pos';
   bool showProductTiles = true;
@@ -3892,6 +3934,90 @@ class _POSScreenState extends State<POSScreen> {
     _loadPairedPrinters();
     _loadActiveOperators();
     _startMpesaInboxIngestion();
+    _restoreCartDraft();
+    unawaited(_loadReceiptBusiness());
+  }
+
+  String get _receiptBusinessLabel => [
+        _receiptBusinessName,
+        _receiptBusinessBranch,
+      ].whereType<String>().where((value) => value.isNotEmpty).join(' · ');
+
+  Future<void> _loadReceiptBusiness() async {
+    try {
+      final profile = await _profileService.load();
+      final business = profile['business'];
+      if (business is! Map) return;
+      final name = business['name']?.toString().trim();
+      final branch = business['branch']?.toString().trim();
+      if (!mounted) return;
+      setState(() {
+        if (name != null && name.isNotEmpty) _receiptBusinessName = name;
+        _receiptBusinessBranch =
+            branch == null || branch.isEmpty ? null : branch;
+      });
+    } on Object {
+      // The receipt remains printable with the app label until a profile has
+      // been cached for this signed-in business.
+    }
+  }
+
+  Future<void> _restoreCartDraft() async {
+    final businessId = await _authService.getActiveBusinessId();
+    final userId = await _authService.getActiveUserId();
+    if (businessId == null ||
+        businessId.isEmpty ||
+        userId == null ||
+        userId.isEmpty) return;
+    final draft =
+        await _cartDraftService.load(businessId: businessId, userId: userId);
+    final rawCart = draft?['cart'];
+    if (!mounted || rawCart is! Map) return;
+    final restored = <String, int>{};
+    rawCart.forEach((name, quantity) {
+      final parsed = quantity is num
+          ? quantity.toInt()
+          : int.tryParse(quantity.toString()) ?? 0;
+      if (parsed > 0) restored[name.toString()] = parsed;
+    });
+    if (restored.isEmpty) return;
+    setState(() {
+      cart
+        ..clear()
+        ..addAll(restored);
+      paymentMethod = draft?['paymentMethod']?.toString() ?? 'cash';
+      discount = draft?['discount'] is num
+          ? (draft!['discount'] as num).toInt()
+          : int.tryParse(draft?['discount']?.toString() ?? '') ?? 0;
+    });
+  }
+
+  Future<void> _persistCartDraft() async {
+    final businessId = await _authService.getActiveBusinessId();
+    final userId = await _authService.getActiveUserId();
+    if (businessId == null ||
+        businessId.isEmpty ||
+        userId == null ||
+        userId.isEmpty) return;
+    await _cartDraftService.save(
+      businessId: businessId,
+      userId: userId,
+      cart: Map<String, int>.from(cart),
+      paymentMethod: paymentMethod,
+      discount: discount,
+    );
+  }
+
+  void _saveCartDraftSoon() => unawaited(_persistCartDraft());
+
+  Future<void> _clearCartDraft() async {
+    final businessId = await _authService.getActiveBusinessId();
+    final userId = await _authService.getActiveUserId();
+    if (businessId == null ||
+        businessId.isEmpty ||
+        userId == null ||
+        userId.isEmpty) return;
+    await _cartDraftService.clear(businessId: businessId, userId: userId);
   }
 
   Future<void> _loadActiveOperators() async {
@@ -3968,7 +4094,7 @@ class _POSScreenState extends State<POSScreen> {
     unawaited(_printerService
         .printReceipt(
       device: printer,
-      storeName: 'MobiDuka Store',
+      storeName: _receiptBusinessLabel,
       invoiceNo: _completedSaleId ??
           'RCPT-${DateTime.now().millisecondsSinceEpoch % 100000}',
       totalAmount: _completedTotal.toDouble(),
@@ -4021,7 +4147,7 @@ class _POSScreenState extends State<POSScreen> {
                 color: green,
                 child: pw.Column(
                   children: [
-                    pw.Text('MobiDuka POS',
+                    pw.Text(_receiptBusinessName,
                         style: pw.TextStyle(
                             color: pdf.PdfColors.white,
                             fontSize: 17,
@@ -4034,7 +4160,7 @@ class _POSScreenState extends State<POSScreen> {
                 ),
               ),
               pw.SizedBox(height: 10),
-              pw.Text('MobiDuka Store · Nairobi CBD',
+              pw.Text(_receiptBusinessLabel,
                   style: pw.TextStyle(
                       color: mutedGrey,
                       fontSize: 9,
@@ -4169,6 +4295,7 @@ class _POSScreenState extends State<POSScreen> {
       _upsertProductForCart(product);
       cart[product.name] = (cart[product.name] ?? 0) + 1;
     });
+    _saveCartDraftSoon();
   }
 
   void addToCartAndOpenCart(Product product) {
@@ -4180,6 +4307,7 @@ class _POSScreenState extends State<POSScreen> {
       cart[product.name] = (cart[product.name] ?? 0) + 1;
       view = 'cart';
     });
+    _saveCartDraftSoon();
   }
 
   void _upsertProductForCart(Product product) {
@@ -4202,6 +4330,7 @@ class _POSScreenState extends State<POSScreen> {
       _selectedCreditAccount = account;
       paymentMethod = 'credit';
     });
+    _saveCartDraftSoon();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
           content: Text('Customer attached: ${account.customer}'),
@@ -4218,6 +4347,7 @@ class _POSScreenState extends State<POSScreen> {
         cart[name] = next;
       }
     });
+    _saveCartDraftSoon();
   }
 
   List<Product> get visibleProducts => products.where((product) {
@@ -4230,9 +4360,16 @@ class _POSScreenState extends State<POSScreen> {
 
   int get cartCount => cart.values.fold<int>(0, (sum, count) => sum + count);
 
+  Product? _productForCartName(String name) {
+    for (final product in products) {
+      if (product.name == name) return product;
+    }
+    return null;
+  }
+
   int get subtotal => cart.entries.fold<int>(0, (sum, entry) {
-        final product = products.firstWhere((item) => item.name == entry.key);
-        return sum + (product.price * entry.value);
+        final product = _productForCartName(entry.key);
+        return product == null ? sum : sum + (product.price * entry.value);
       });
 
   int get discountAmount => (subtotal * discount / 100).round();
@@ -4546,8 +4683,9 @@ class _POSScreenState extends State<POSScreen> {
     final saleId = 'sale-${DateTime.now().millisecondsSinceEpoch}';
     final receiptNumber = 'RCPT-${saleId.substring(5)}';
     final saleItems = cartItems;
-    if (saleItems
-        .any((item) => item['productId']?.toString().isEmpty != false)) {
+    if (saleItems.length != cart.length ||
+        saleItems
+            .any((item) => item['productId']?.toString().isEmpty != false)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           backgroundColor: Color(0xFFD32F2F),
@@ -4666,11 +4804,14 @@ class _POSScreenState extends State<POSScreen> {
         discount = 0;
         view = 'receipt';
       });
+      unawaited(_clearCartDraft());
     }
   }
 
-  List<Map<String, dynamic>> get cartItems => cart.entries.map((entry) {
-        final product = products.firstWhere((item) => item.name == entry.key);
+  List<Map<String, dynamic>> get cartItems => cart.entries
+      .map((entry) {
+        final product = _productForCartName(entry.key);
+        if (product == null) return null;
         return {
           'productId': product.id,
           'name': product.name,
@@ -4678,7 +4819,9 @@ class _POSScreenState extends State<POSScreen> {
           'qty': entry.value,
           'emoji': product.emoji,
         };
-      }).toList();
+      })
+      .whereType<Map<String, dynamic>>()
+      .toList();
 
   List<Map<String, dynamic>> get receiptItems => _completedSaleItems;
 
@@ -4881,7 +5024,11 @@ class _POSScreenState extends State<POSScreen> {
       {VoidCallback? onTap}) {
     final selected = paymentMethod == key;
     return GestureDetector(
-      onTap: onTap ?? () => setState(() => paymentMethod = key),
+      onTap: onTap ??
+          () {
+            setState(() => paymentMethod = key);
+            _saveCartDraftSoon();
+          },
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(12),
@@ -4987,8 +5134,8 @@ class _POSScreenState extends State<POSScreen> {
                     ),
                     child: Column(
                       children: [
-                        const Text('MobiDuka Store · Nairobi CBD',
-                            style: TextStyle(
+                        Text(_receiptBusinessLabel,
+                            style: const TextStyle(
                                 color: muted,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700)),
@@ -5242,6 +5389,7 @@ class _POSScreenState extends State<POSScreen> {
                               view = 'pos';
                               paymentMethod = 'cash';
                             });
+                            unawaited(_clearCartDraft());
                           },
                           style: TextButton.styleFrom(
                             backgroundColor: navy,
@@ -5442,11 +5590,16 @@ class _POSScreenState extends State<POSScreen> {
                     const Color(0xFFD32F2F),
                     onTap: () async {
                       setState(() => paymentMethod = 'credit');
+                      _saveCartDraftSoon();
                       final account = await _selectCreditCustomer();
-                      if (mounted && account == null)
+                      if (mounted && account == null) {
                         setState(() => paymentMethod = 'cash');
-                      if (mounted && account != null)
+                        _saveCartDraftSoon();
+                      }
+                      if (mounted && account != null) {
                         setState(() => _selectedCreditAccount = account);
+                        _saveCartDraftSoon();
+                      }
                     },
                   ),
                   const SizedBox(height: 20),
@@ -5462,7 +5615,10 @@ class _POSScreenState extends State<POSScreen> {
                     children: [0, 5, 10, 15, 20].map((value) {
                       final selected = discount == value;
                       return GestureDetector(
-                        onTap: () => setState(() => discount = value),
+                        onTap: () {
+                          setState(() => discount = value);
+                          _saveCartDraftSoon();
+                        },
                         child: Container(
                           width: 58,
                           padding: const EdgeInsets.symmetric(vertical: 10),
