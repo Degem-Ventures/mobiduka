@@ -129,10 +129,10 @@ describe("Sync ingestion collision ledger", () => {
 
     const savedReceipt = await prisma.syncReceipt.findUnique({
       where: {
-        businessId_entityName_externalId: {
-          businessId: mockBusinessId,
-          entityName: mockEntity,
-          externalId: mockExternalId,
+          businessId_entityName_externalId: {
+            businessId: mockBusinessId,
+            entityName: mockEntity,
+            externalId: "client_id_001",
         },
       },
     });
@@ -155,7 +155,6 @@ describe("Sync ingestion collision ledger", () => {
 
     const compromisedRecord = {
       ...initialRecord,
-      id: "client_id_002",
       payloadHash: "hash_signature_compromised_999",
       payload: createSalePayload(mockExternalId, 99999),
     };

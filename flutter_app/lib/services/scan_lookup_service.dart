@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../main.dart';
 import 'api_config.dart';
 import 'auth_service.dart';
+import 'catalog_mutation_service.dart';
 
 /// Resolves barcodes against the same server endpoint used by web SmartScan.
 class ScanLookupResult {
@@ -15,12 +16,17 @@ class ScanLookupResult {
 }
 
 class ScanLookupService {
-  ScanLookupService({http.Client? client, AuthService? authService})
-      : _client = client ?? http.Client(),
-        _authService = authService ?? AuthService();
+  ScanLookupService({
+    http.Client? client,
+    AuthService? authService,
+    CatalogMutationService? catalogMutations,
+  })  : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService(),
+        _catalogMutations = catalogMutations ?? CatalogMutationService();
 
   final http.Client _client;
   final AuthService _authService;
+  final CatalogMutationService _catalogMutations;
 
   Future<ScanLookupResult> lookup(String barcode,
       {required bool manual}) async {
@@ -57,36 +63,27 @@ class ScanLookupService {
   Future<ScanLookupResult> restock(Product product, int quantity) async {
     final session = await _authService.readSession();
     if (session == null) throw Exception('Please sign in to restock products.');
-    final response = await _client
-        .post(
-          Uri.parse('${ApiConfig.origin}/api/scans'),
-          headers: {
-            'Authorization': 'Bearer ${session.token}',
-            'Content-Type': 'application/json'
-          },
-          body: jsonEncode({
-            'businessId': session.user['businessId'],
-            'userId': session.user['id'],
-            'barcode': product.barcode,
-            'action': 'RESTOCK',
-            'quantity': quantity,
-          }),
-        )
-        .timeout(const Duration(seconds: 10));
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic> ||
-        response.statusCode < 200 ||
-        response.statusCode >= 300) {
-      throw Exception(decoded is Map
-          ? decoded['error']?.toString() ?? 'Unable to restock product.'
-          : 'Unable to restock product.');
+    final businessId = session.user['businessId']?.toString();
+    final userId = session.user['id']?.toString();
+    if (businessId == null ||
+        businessId.isEmpty ||
+        userId == null ||
+        userId.isEmpty) {
+      throw Exception('Your session is missing a business or user identity.');
     }
-    return _resultFromProduct(decoded['product'], product.barcode ?? '');
+    final updated = await _catalogMutations.adjustStock(
+      businessId: businessId,
+      product: product,
+      delta: quantity,
+      userId: userId,
+    );
+    return ScanLookupResult(product: updated, supplier: null);
   }
 
   ScanLookupResult _resultFromProduct(Object? product, String fallbackBarcode) {
-    if (product is! Map)
+    if (product is! Map) {
       return const ScanLookupResult(product: null, supplier: null);
+    }
     final value = Map<String, dynamic>.from(product);
     final stock = _number(value['stock']).toInt();
     final minimumStock = _number(value['minimumStock']).toInt();
@@ -101,6 +98,7 @@ class ScanLookupService {
         stock,
         minimumStock,
         '📦',
+        id: value['id']?.toString(),
         status: status,
         barcode: value['barcode']?.toString() ?? fallbackBarcode,
       ),

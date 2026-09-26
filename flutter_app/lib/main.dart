@@ -24,8 +24,10 @@ import 'services/notification_receiver.dart';
 import 'services/notification_service.dart';
 import 'services/roster_sync_worker.dart';
 import 'services/cache_optimizer_service.dart';
+import 'services/catalog_mutation_service.dart';
 import 'services/dashboard_service.dart';
 import 'services/mpesa_service.dart';
+import 'services/mpesa_sms_ingestion_service.dart';
 import 'services/product_repository.dart';
 import 'services/product_catalog_service.dart';
 import 'services/inventory_api_service.dart';
@@ -40,6 +42,7 @@ import 'services/settings_service.dart';
 import 'services/profile_service.dart';
 import 'widgets/barcode_scanner_view.dart';
 import 'widgets/smart_scan_screen.dart';
+import 'widgets/observability_dashboard_panel.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -101,9 +104,11 @@ class Product {
     this.stock,
     this.reorder,
     this.emoji, {
+    this.id,
     this.status = 'good',
     this.barcode,
   });
+  final String? id;
   final String name;
   final String category;
   final int cost;
@@ -2429,6 +2434,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _loading = true;
   String? _error;
   String _userName = 'there';
+  String? _businessId;
   int _unreadNotifications = 0;
 
   @override
@@ -2459,6 +2465,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _userName = session?.user['name']?.toString().trim().isNotEmpty == true
             ? session!.user['name'].toString()
             : 'there';
+        _businessId = session?.user['businessId']?.toString();
         _loading = false;
         _error = null;
       });
@@ -2841,7 +2848,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 fontWeight: FontWeight.w800)),
                         SizedBox(height: 2),
                         Text(
-                            '${_dashboard.metadata['name'] ?? 'MobiDuka Store'} · Live data',
+                            '${_dashboard.metadata['name'] ?? 'MobiDuka Store'} · ${_dashboard.isOfflineSnapshot ? 'Offline cached data' : 'Live data'}',
                             style: TextStyle(
                                 color: Color(0xFFE7C75B),
                                 fontSize: 12,
@@ -2978,6 +2985,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Column(
                   children: [
                     if (_loading) const LinearProgressIndicator(color: gold),
+                    if (_dashboard.isOfflineSnapshot)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF3CD),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Offline mode: showing cached dashboard data${_dashboard.cachedAt == null ? '' : ' from ${_friendlyTransactionTime(_dashboard.cachedAt!.toIso8601String())}'}.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Color(0xFF795548),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
                     if (_error != null)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 12),
@@ -2986,6 +3012,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             style: const TextStyle(
                                 color: Color(0xFFD32F2F), fontSize: 12)),
                       ),
+                    if (_businessId?.isNotEmpty == true) ...[
+                      ObservabilityDashboardPanel(businessId: _businessId!),
+                      const SizedBox(height: 16),
+                    ],
                     GridView.count(
                       crossAxisCount: 2,
                       shrinkWrap: true,
@@ -3809,8 +3839,11 @@ class _POSScreenState extends State<POSScreen> {
   final CreditService _creditService = CreditService.instance;
   final CustomerService _customerService = CustomerService();
   final SyncService _syncService = SyncService();
+  final CatalogMutationService _catalogMutations = CatalogMutationService();
   final EmployeeRepository _employeeRepository = EmployeeRepository();
   final MpesaService _mpesaService = MpesaService();
+  final MpesaSmsIngestionService _mpesaSmsIngestion =
+      MpesaSmsIngestionService();
   final SmsWatcherService _smsWatcherService = SmsWatcherService();
   final PrinterService _printerService = PrinterService();
   final TextEditingController _mpesaPhoneController =
@@ -3858,6 +3891,7 @@ class _POSScreenState extends State<POSScreen> {
     super.initState();
     _loadPairedPrinters();
     _loadActiveOperators();
+    _startMpesaInboxIngestion();
   }
 
   Future<void> _loadActiveOperators() async {
@@ -4096,8 +4130,38 @@ class _POSScreenState extends State<POSScreen> {
   @override
   void dispose() {
     _smsWatcherService.stopSmsWatcher();
+    _smsWatcherService.stopMpesaInboxIngestion();
     _mpesaPhoneController.dispose();
     super.dispose();
+  }
+
+  Future<void> _startMpesaInboxIngestion() async {
+    if (kIsWeb) return;
+    final businessId = await _authService.getActiveBusinessId();
+    final userId = await _authService.getActiveUserId();
+    if (businessId == null ||
+        businessId.isEmpty ||
+        userId == null ||
+        userId.isEmpty) {
+      return;
+    }
+    await _smsWatcherService.startMpesaInboxIngestion(
+      onMpesaMessage: (message) async {
+        final result = await _mpesaSmsIngestion.ingestRawMessage(
+          businessId: businessId,
+          userId: userId,
+          message: message,
+        );
+        if (result?.wasNew == true && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            backgroundColor: const Color(0xFF2E7D32),
+            content: Text(result!.wasMatched
+                ? 'M-Pesa ${result.receiptCode} reconciled to customer credit.'
+                : 'M-Pesa ${result.receiptCode} recorded for reconciliation.'),
+          ));
+        }
+      },
+    );
   }
 
   void addToCart(Product product) {
@@ -4482,6 +4546,17 @@ class _POSScreenState extends State<POSScreen> {
     final saleId = 'sale-${DateTime.now().millisecondsSinceEpoch}';
     final receiptNumber = 'RCPT-${saleId.substring(5)}';
     final saleItems = cartItems;
+    if (saleItems
+        .any((item) => item['productId']?.toString().isEmpty != false)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          backgroundColor: Color(0xFFD32F2F),
+          content: Text(
+              'One or more products need a catalogue refresh before sale completion.'),
+        ));
+      }
+      return;
+    }
     final saleSubtotal = subtotal;
     final saleDiscountAmount = discountAmount;
     final saleTotal = total;
@@ -4537,29 +4612,15 @@ class _POSScreenState extends State<POSScreen> {
       'mpesaRef': _receiptToken,
       'items': saleItems.map((item) {
         return {
+          'productId': item['productId'],
           'name': item['name'],
-          'price': item['price'],
-          'qty': item['qty'],
+          'quantity': item['qty'],
+          'unitPrice': item['price'],
+          'total': (item['price'] as num) * (item['qty'] as num),
         };
       }).toList(),
       'createdAt': DateTime.now().toIso8601String(),
     };
-
-    if (salePaymentMethod == 'credit' && !kIsWeb) {
-      await _syncService.queueChange(
-        id: 'credit-sale-$receiptNumber',
-        entityName: 'Credit',
-        operation: 'CREATE',
-        payload: {
-          'id': 'credit-sale-$receiptNumber',
-          'action': 'RECORD_SALE',
-          'businessId': businessId,
-          'customerId': creditAccount!.customerId,
-          'amount': saleTotal,
-          'invoiceNo': receiptNumber,
-        },
-      );
-    }
 
     if (!kIsWeb) {
       await _syncService.queueChange(
@@ -4570,21 +4631,14 @@ class _POSScreenState extends State<POSScreen> {
       );
     }
 
-    for (final entry in cart.entries) {
-      final index = products.indexWhere((item) => item.name == entry.key);
-      if (index == -1) continue;
-      final product = products[index];
-      final updatedStock = product.stock - entry.value;
-      products[index] = Product(
-        product.name,
-        product.category,
-        product.cost,
-        product.price,
-        updatedStock < 0 ? 0 : updatedStock,
-        product.reorder,
-        product.emoji,
-        status: updatedStock <= product.reorder ? 'low' : 'good',
-      );
+    final stockUpdates = await _catalogMutations.applySaleStock(
+      businessId: businessId,
+      items: saleItems,
+      userId: attributedUserId,
+    );
+    for (final updated in stockUpdates) {
+      final index = products.indexWhere((item) => item.id == updated.id);
+      if (index >= 0) products[index] = updated;
     }
 
     if (!kIsWeb) {
@@ -4618,6 +4672,7 @@ class _POSScreenState extends State<POSScreen> {
   List<Map<String, dynamic>> get cartItems => cart.entries.map((entry) {
         final product = products.firstWhere((item) => item.name == entry.key);
         return {
+          'productId': product.id,
           'name': product.name,
           'price': product.price,
           'qty': entry.value,
@@ -6192,12 +6247,14 @@ class _ProductScreenState extends State<ProductScreen> {
     final reorder = int.tryParse(productForm['reorder'] ?? '') ?? 10;
     final emoji = productForm['emoji'] ?? '📦';
     final categoryId = inventoryCategoryIds[categoryValue];
+    String? createdProductId;
     if (name.isEmpty || categoryId == null) return;
     try {
       if (editProduct == null) {
-        await InventoryApiService().createProduct({
+        createdProductId = await InventoryApiService().createProduct({
           'name': name,
           'categoryId': categoryId,
+          'categoryName': categoryValue,
           'barcode': barcode,
           'costPrice': cost,
           'sellingPrice': price,
@@ -6225,6 +6282,7 @@ class _ProductScreenState extends State<ProductScreen> {
 
     final nextProduct = Product(
         name, categoryValue, cost, price, stock, reorder, emoji,
+        id: editProduct?.id ?? createdProductId,
         status: status,
         barcode: barcode == null || barcode.isEmpty ? null : barcode);
     setState(() {

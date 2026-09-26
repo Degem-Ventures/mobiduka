@@ -4,22 +4,35 @@ import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
 import 'auth_service.dart';
+import 'auxiliary_directory_service.dart';
 
 class SupplierService {
-  SupplierService({http.Client? client, AuthService? authService})
+  SupplierService(
+      {http.Client? client,
+      AuthService? authService,
+      AuxiliaryDirectoryService? directory})
       : _client = client ?? http.Client(),
-        _authService = authService ?? AuthService();
+        _authService = authService ?? AuthService(),
+        _directory = directory ?? AuxiliaryDirectoryService();
 
   final http.Client _client;
   final AuthService _authService;
+  final AuxiliaryDirectoryService _directory;
 
   Future<List<Map<String, dynamic>>> loadSuppliers() async {
-    final response = await _request('GET', '/api/suppliers');
-    if (response is! List) throw Exception('Unable to load suppliers.');
-    return response
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
+    final businessId = await _businessId();
+    try {
+      final response = await _request('GET', '/api/suppliers');
+      if (response is! List) throw Exception('Unable to load suppliers.');
+      final suppliers = response
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+      await _directory.cacheSuppliers(businessId, suppliers);
+      return suppliers;
+    } on Object {
+      return _directory.loadSuppliers(businessId);
+    }
   }
 
   Future<Map<String, dynamic>> createSupplier({
@@ -29,15 +42,22 @@ class SupplierService {
     required String phone,
     required String email,
   }) async {
-    final response = await _request('POST', '/api/suppliers', body: {
-      'name': name,
-      'category': category,
-      'contactPerson': contact,
-      'phone': phone,
-      'email': email,
-    });
-    if (response is! Map) throw Exception('Unable to save supplier.');
-    return Map<String, dynamic>.from(response);
+    return _directory.createSupplier(
+        businessId: await _businessId(),
+        name: name,
+        category: category,
+        contact: contact,
+        phone: phone,
+        email: email);
+  }
+
+  Future<String> _businessId() async {
+    final session = await _authService.readSession();
+    final businessId = session?.user['businessId']?.toString();
+    if (session == null || businessId == null || businessId.isEmpty) {
+      throw Exception('Please sign in to manage suppliers.');
+    }
+    return businessId;
   }
 
   Future<Object?> _request(String method, String path,

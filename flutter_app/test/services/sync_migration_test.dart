@@ -8,7 +8,7 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
-  group('SyncService schema migration and deduplication', () {
+  group('SyncService schema migration and ordered events', () {
     late Database db;
 
     setUp(() async {
@@ -20,7 +20,7 @@ void main() {
     });
 
     test(
-      'normalizes legacy NULL values and preserves the newest record per logical key',
+      'normalizes legacy NULL values without removing chronological events',
       () async {
         await db.execute('''
           CREATE TABLE sync_queue (
@@ -34,8 +34,10 @@ void main() {
         await db.execute("ALTER TABLE sync_queue ADD COLUMN entityName TEXT;");
         await db.execute("ALTER TABLE sync_queue ADD COLUMN externalId TEXT;");
 
-        final String olderTime = DateTime.now().subtract(const Duration(hours: 2)).toIso8601String();
-        final String intermediateTime = DateTime.now().subtract(const Duration(hours: 1)).toIso8601String();
+        final String olderTime =
+            DateTime.now().subtract(const Duration(hours: 2)).toIso8601String();
+        final String intermediateTime =
+            DateTime.now().subtract(const Duration(hours: 1)).toIso8601String();
         final String newestTime = DateTime.now().toIso8601String();
 
         await db.insert('sync_queue', {
@@ -93,15 +95,16 @@ void main() {
         final int migratedCount = Sqflite.firstIntValue(
           await db.rawQuery('SELECT COUNT(*) AS count FROM sync_queue'),
         )!;
-        expect(migratedCount, 3);
+        expect(migratedCount, 5);
 
         final List<Map<String, dynamic>> cleanCheck = await db.query(
           'sync_queue',
-          where: "businessId = 'biz_01' AND entityName = 'Sale' AND externalId = 'ext_999'",
+          where:
+              "businessId = 'biz_01' AND entityName = 'Sale' AND externalId = 'ext_999'",
         );
-        expect(cleanCheck.length, 1);
-        expect(cleanCheck.first['id'], 'rec_a2');
-        expect(cleanCheck.first['createdAt'], newestTime);
+        expect(cleanCheck.length, 3);
+        expect(cleanCheck.map((row) => row['id']),
+            containsAll(<String>['rec_a1', 'rec_a2', 'rec_a3']));
 
         final List<Map<String, dynamic>> nullCheck = await db.query(
           'sync_queue',
@@ -113,17 +116,22 @@ void main() {
         expect(nullCheck.first['externalId'], '');
         expect(nullCheck.first['status'], 'PENDING');
 
-        expect(
-          () async => db.insert('sync_queue', {
-            'id': 'rec_collision',
-            'payload': '{}',
-            'createdAt': DateTime.now().toIso8601String(),
-            'businessId': 'biz_01',
-            'entityName': 'Sale',
-            'externalId': 'ext_999',
-          }),
-          throwsA(isA<DatabaseException>()),
-        );
+        // The queue preserves separate events for the same entity. Server-side
+        // receipts deduplicate immutable event IDs, while this local queue
+        // keeps chronologically distinct updates (for example a restock after
+        // an earlier sale) available to the scheduler.
+        await db.insert('sync_queue', {
+          'id': 'rec_later_event',
+          'payload': '{}',
+          'createdAt': DateTime.now().toIso8601String(),
+          'businessId': 'biz_01',
+          'entityName': 'Sale',
+          'externalId': 'ext_999',
+        });
+        final eventCount = Sqflite.firstIntValue(await db.rawQuery(
+          "SELECT COUNT(*) FROM sync_queue WHERE businessId = 'biz_01' AND entityName = 'Sale' AND externalId = 'ext_999'",
+        ));
+        expect(eventCount, 4);
       },
     );
   });

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
 import 'auth_service.dart';
+import 'customer_repository.dart';
 
 class CreditAccount {
   const CreditAccount({
@@ -44,9 +45,13 @@ class CreditAccount {
 }
 
 class CreditService {
-  CreditService({http.Client? client, AuthService? authService})
-      : _client = client ?? http.Client(),
-        _authService = authService ?? AuthService();
+  CreditService({
+    http.Client? client,
+    AuthService? authService,
+    CustomerRepository? customerRepository,
+  })  : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService(),
+        _customerRepository = customerRepository ?? CustomerRepository();
 
   static final CreditService instance = CreditService();
   static const _avatarColors = <int>[
@@ -61,37 +66,66 @@ class CreditService {
 
   final http.Client _client;
   final AuthService _authService;
+  final CustomerRepository _customerRepository;
 
   Future<List<CreditAccount>> loadCreditAccounts() async {
-    final response = await _request('GET', '/api/customers');
-    if (response is! List) throw Exception('Unable to load credit accounts.');
-    return response
-        .whereType<Map>()
-        .toList()
-        .asMap()
-        .entries
-        .map((entry) => _accountFromCustomer(
-              Map<String, dynamic>.from(entry.value),
-              entry.key,
-            ))
-        .where((account) => account.balance > 0)
-        .toList();
+    final session = await _session();
+    final businessId = session.user['businessId']!.toString();
+    try {
+      final response = await _request('GET', '/api/customers');
+      if (response is! List) throw Exception('Unable to load credit accounts.');
+      final customers = response
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+      await _customerRepository.cacheRemoteCustomers(businessId, customers);
+      return customers
+          .asMap()
+          .entries
+          .map((entry) => _accountFromCustomer(entry.value, entry.key))
+          .where((account) => account.balance > 0)
+          .toList();
+    } on Object {
+      return (await _customerRepository.loadLocalCreditAccounts(businessId))
+          .map(_accountFromLocal)
+          .where((account) => account.balance > 0)
+          .toList();
+    }
   }
 
   Future<CreditAccount> loadCreditAccount(String customerId,
       {int colorIndex = 0}) async {
-    final response = await _request('GET', '/api/customers',
-        query: {'customerId': customerId});
-    if (response is! Map) throw Exception('Unable to load credit history.');
-    return _accountFromCustomer(
-        Map<String, dynamic>.from(response), colorIndex);
+    final session = await _session();
+    try {
+      final response = await _request('GET', '/api/customers',
+          query: {'customerId': customerId});
+      if (response is! Map) throw Exception('Unable to load credit history.');
+      return _accountFromCustomer(
+          Map<String, dynamic>.from(response), colorIndex);
+    } on Object {
+      final local = await _customerRepository.loadLocalCreditAccount(
+        session.user['businessId']!.toString(),
+        customerId,
+      );
+      if (local == null) rethrow;
+      return _accountFromLocal(local);
+    }
   }
 
   Future<List<Map<String, dynamic>>> loadCreditLedger(
       {String? customerId}) async {
     if (customerId == null) return const [];
-    final response = await _request('GET', '/api/customers',
-        query: {'customerId': customerId});
+    final session = await _session();
+    Object? response;
+    try {
+      response = await _request('GET', '/api/customers',
+          query: {'customerId': customerId});
+    } on Object {
+      return _customerRepository.loadLocalCreditLedger(
+        session.user['businessId']!.toString(),
+        customerId,
+      );
+    }
     if (response is! Map) throw Exception('Unable to load credit history.');
     final customer = Map<String, dynamic>.from(response);
     final sales = (customer['sales'] as List? ?? const [])
@@ -128,11 +162,8 @@ class CreditService {
   }
 
   Future<void> saveCreditAccount(CreditAccount account) async {
-    await _request('POST', '/api/customers', body: {
-      'id': account.customerId,
-      'name': account.customer,
-      'phone': account.phone,
-    });
+    // CustomerRepository already committed this local profile and queued its
+    // Customer event. Do not send a second direct request that breaks offline.
   }
 
   Future<CreditAccount?> recordOfflinePayment({
@@ -142,14 +173,15 @@ class CreditService {
   }) async {
     if (amount <= 0) return null;
     final session = await _session();
-    await _request('POST', '/api/customers/credit', body: {
-      'action': 'RECORD_PAYMENT',
-      'customerId': customerId,
-      'amount': amount,
-      'userId': session.user['id']?.toString(),
-      'paymentMethod': paymentMethod,
-    });
-    return loadCreditAccount(customerId);
+    final row = await _customerRepository.recordLocalCredit(
+      businessId: session.user['businessId']!.toString(),
+      customerId: customerId,
+      amount: amount,
+      isPayment: true,
+      paymentMethod: paymentMethod,
+      userId: session.user['id']?.toString() ?? '',
+    );
+    return row == null ? null : _accountFromLocal(row);
   }
 
   Future<CreditAccount?> recordOfflineCreditSale({
@@ -158,13 +190,16 @@ class CreditService {
     required String invoiceNo,
   }) async {
     if (amount <= 0) return null;
-    await _request('POST', '/api/customers/credit', body: {
-      'action': 'CHARGE_CREDIT',
-      'customerId': customerId,
-      'amount': amount,
-      'creditBookId': 'credit-sale-$invoiceNo',
-    });
-    return loadCreditAccount(customerId);
+    final session = await _session();
+    final row = await _customerRepository.recordLocalCredit(
+      businessId: session.user['businessId']!.toString(),
+      customerId: customerId,
+      amount: amount,
+      isPayment: false,
+      paymentMethod: 'CREDIT',
+      userId: session.user['id']?.toString() ?? '',
+    );
+    return row == null ? null : _accountFromLocal(row);
   }
 
   CreditAccount _accountFromCustomer(Map<String, dynamic> row, int index) {
@@ -195,6 +230,30 @@ class CreditService {
           .join()
           .toUpperCase(),
       colorValue: _avatarColors[index % _avatarColors.length],
+    );
+  }
+
+  CreditAccount _accountFromLocal(Map<String, dynamic> row) {
+    final name = row['name']?.toString().trim();
+    final normalizedName = name == null || name.isEmpty ? 'Customer' : name;
+    return CreditAccount(
+      customerId: row['id']?.toString() ?? '',
+      customer: normalizedName,
+      phone: row['phone']?.toString() ?? '',
+      balance: _number(row['balance'] ?? row['currentDebt']),
+      lastTransactionAt: row['lastTransactionAt']?.toString(),
+      transactionCount: _integer(row['transactionCount']),
+      initials: row['initials']?.toString() ??
+          normalizedName
+              .split(RegExp(r'\s+'))
+              .where((part) => part.isNotEmpty)
+              .take(2)
+              .map((part) => part[0])
+              .join()
+              .toUpperCase(),
+      colorValue: _integer(row['colorValue']) == 0
+          ? _avatarColors[0]
+          : _integer(row['colorValue']),
     );
   }
 

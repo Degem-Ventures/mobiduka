@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -51,7 +50,8 @@ class ProductRepository {
         ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) await db.execute('ALTER TABLE products ADD COLUMN barcode TEXT');
+        if (oldVersion < 2)
+          await db.execute('ALTER TABLE products ADD COLUMN barcode TEXT');
       },
     );
   }
@@ -69,7 +69,7 @@ class ProductRepository {
       batch.insert(
         'products',
         {
-          'id': product.name,
+          'id': product.id ?? product.name,
           'name': product.name,
           'category': product.category,
           'cost': product.cost,
@@ -100,6 +100,7 @@ class ProductRepository {
         row['stock'] as int? ?? 0,
         row['reorder'] as int? ?? 10,
         row['emoji'] as String? ?? '📦',
+        id: row['id'] as String?,
         status: status,
         barcode: row['barcode'] as String?,
       );
@@ -120,7 +121,7 @@ class ProductRepository {
     await db.insert(
       'products',
       {
-        'id': product.name,
+        'id': product.id ?? product.name,
         'name': product.name,
         'category': product.category,
         'cost': product.cost,
@@ -152,6 +153,7 @@ class ProductRepository {
         row['stock'] as int? ?? 0,
         row['reorder'] as int? ?? 10,
         row['emoji'] as String? ?? '📦',
+        id: row['id'] as String?,
         status: status,
         barcode: row['barcode'] as String?,
       );
@@ -166,7 +168,8 @@ class ProductRepository {
       return null;
     }
     final db = await database;
-    final rows = await db.query('products', where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+    final rows = await db.query('products',
+        where: 'barcode = ?', whereArgs: [barcode], limit: 1);
     if (rows.isEmpty) return null;
     final row = rows.first;
     return Product(
@@ -177,6 +180,7 @@ class ProductRepository {
       row['stock'] as int? ?? 0,
       row['reorder'] as int? ?? 10,
       row['emoji'] as String? ?? '📦',
+      id: row['id'] as String?,
       status: row['status'] as String? ?? 'good',
       barcode: row['barcode'] as String?,
     );
@@ -187,6 +191,7 @@ class ProductRepository {
     final rows = await db.query('products');
     return rows.map((row) {
       return {
+        'id': row['id'],
         'name': row['name'],
         'category': row['category'],
         'cost': row['cost'],
