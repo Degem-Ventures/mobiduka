@@ -61,6 +61,7 @@ model Business {
   purchaseOrders    PurchaseOrder[]
   creditEntries     CreditLedgerEntry[]
   mpesaTransactions MpesaTransaction[]
+  mpesaSmsReceipts  MpesaSmsReceipt[]
   auditLogs         AuditLog[]
   syncQueues        SyncQueue[]
   syncReceipts      SyncReceipt[]
@@ -374,6 +375,23 @@ model MpesaTransaction {
   updatedAt         DateTime @updatedAt
 
   business Business @relation(fields: [businessId], references: [id])
+}
+
+model MpesaSmsReceipt {
+  id           String   @id @default(uuid())
+  businessId   String
+  receiptCode  String
+  senderPhone  String?
+  customerName String?
+  amount       Float
+  customerId   String?
+  isMatched    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+
+  @@unique([businessId, receiptCode])
+  @@index([businessId, createdAt])
 }
 
 model Sale {

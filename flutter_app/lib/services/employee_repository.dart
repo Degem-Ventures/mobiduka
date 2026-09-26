@@ -4,15 +4,21 @@ import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
 import 'auth_service.dart';
+import 'cash_service.dart';
 
 /// Authenticated API client for the shared web/mobile staff and shift flows.
 class EmployeeRepository {
-  EmployeeRepository({http.Client? client, AuthService? authService})
-      : _client = client ?? http.Client(),
-        _authService = authService ?? AuthService();
+  EmployeeRepository({
+    http.Client? client,
+    AuthService? authService,
+    CashService? cashService,
+  })  : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService(),
+        _cashService = cashService ?? CashService();
 
   final http.Client _client;
   final AuthService _authService;
+  final CashService _cashService;
 
   Future<List<Map<String, dynamic>>> loadEmployees() async {
     final response = await _request('GET', '/api/employees');
@@ -60,39 +66,64 @@ class EmployeeRepository {
   }
 
   Future<List<Map<String, dynamic>>> loadCashSessions() async {
-    final response = await _request('GET', '/api/cash/session');
-    if (response is! Map || response['sessions'] is! List) return const [];
-    return (response['sessions'] as List)
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
+    final session = await _session();
+    final businessId = session.user['businessId']!.toString();
+    try {
+      final response = await _request('GET', '/api/cash/session');
+      if (response is! Map || response['sessions'] is! List) return const [];
+      final sessions = (response['sessions'] as List)
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+      await _cashService.cacheRemoteSessions(
+        businessId: businessId,
+        sessions: sessions,
+      );
+      return sessions;
+    } on Object {
+      return _cashService.loadLocalSessions(businessId);
+    }
   }
 
-  Future<void> openShift(
-          {required String employeeId, required String shiftTypeId}) =>
-      _request('POST', '/api/cash/session', body: {
-        'action': 'OPEN',
-        'userId': employeeId,
-        'shiftTypeId': shiftTypeId,
-        'openingCash': 0,
-      });
+  Future<void> openShift({
+    required String employeeId,
+    required String shiftTypeId,
+  }) async {
+    final session = await _session();
+    await _cashService.openSession(
+      businessId: session.user['businessId']!.toString(),
+      userId: employeeId,
+      openingCash: 0,
+      shiftTypeId: shiftTypeId,
+    );
+  }
 
-  Future<void> closeShift(
-          {required String employeeId, required String sessionId}) =>
-      _request('POST', '/api/cash/session', body: {
-        'action': 'CLOSE',
-        'userId': employeeId,
-        'sessionId': sessionId,
-        'closingCash': 0,
-      });
+  Future<void> closeShift({
+    required String employeeId,
+    required String sessionId,
+  }) async {
+    final session = await _session();
+    await _cashService.closeSession(
+      sessionId: sessionId,
+      businessId: session.user['businessId']!.toString(),
+      userId: employeeId,
+      closingCash: 0,
+    );
+  }
+
+  Future<AuthSession> _session() async {
+    final session = await _authService.readSession();
+    if (session == null ||
+        session.user['businessId']?.toString().isEmpty != false) {
+      throw Exception('Please sign in to manage employees.');
+    }
+    return session;
+  }
 
   Future<dynamic> _request(String method, String path,
       {Map<String, Object?>? body}) async {
-    final session = await _authService.readSession();
-    final businessId = session?.user['businessId']?.toString();
-    if (session == null || businessId == null || businessId.isEmpty) {
-      throw Exception('Please sign in to manage employees.');
-    }
+    final session = await _session();
+    final businessId = session.user['businessId']!.toString();
     final uri = Uri.parse('${ApiConfig.origin}$path').replace(
       queryParameters: method == 'GET' ? {'businessId': businessId} : null,
     );

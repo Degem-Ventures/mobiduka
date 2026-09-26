@@ -4,29 +4,59 @@ import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
 import 'auth_service.dart';
+import 'customer_repository.dart';
 
 class CustomerApiService {
-  CustomerApiService({http.Client? client, AuthService? authService})
-      : _client = client ?? http.Client(),
-        _authService = authService ?? AuthService();
+  CustomerApiService({
+    http.Client? client,
+    AuthService? authService,
+    CustomerRepository? customerRepository,
+  })  : _client = client ?? http.Client(),
+        _authService = authService ?? AuthService(),
+        _customerRepository = customerRepository ?? CustomerRepository();
 
   final http.Client _client;
   final AuthService _authService;
+  final CustomerRepository _customerRepository;
 
   Future<List<Map<String, dynamic>>> loadCustomers() async {
-    final response = await _request('GET', '/api/customers');
-    if (response is! List) throw Exception('Unable to load customers.');
-    return response
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
+    final session = await _session();
+    final businessId = session.user['businessId']!.toString();
+    try {
+      final response = await _request('GET', '/api/customers');
+      if (response is! List) throw Exception('Unable to load customers.');
+      final customers = response
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+      await _customerRepository.cacheRemoteCustomers(businessId, customers);
+      return customers;
+    } on Object {
+      return _customerRepository.searchLocalCustomers('',
+          businessId: businessId);
+    }
   }
 
   Future<Map<String, dynamic>> loadCustomer(String customerId) async {
-    final response = await _request('GET', '/api/customers',
-        query: {'customerId': customerId});
-    if (response is! Map) throw Exception('Unable to load customer history.');
-    return Map<String, dynamic>.from(response);
+    final session = await _session();
+    try {
+      final response = await _request('GET', '/api/customers',
+          query: {'customerId': customerId});
+      if (response is! Map) throw Exception('Unable to load customer history.');
+      return Map<String, dynamic>.from(response);
+    } on Object {
+      final customers = await _customerRepository.searchLocalCustomers('',
+          businessId: session.user['businessId']!.toString());
+      Map<String, dynamic>? customer;
+      for (final candidate in customers) {
+        if (candidate['id']?.toString() == customerId) {
+          customer = candidate;
+          break;
+        }
+      }
+      if (customer == null) rethrow;
+      return customer;
+    }
   }
 
   Future<void> createCustomer({
@@ -34,11 +64,13 @@ class CustomerApiService {
     String? phone,
     required double initialCreditLimit,
   }) async {
-    await _request('POST', '/api/customers', body: {
-      'name': name,
-      'phone': phone,
-      'initialCreditLimit': initialCreditLimit,
-    });
+    final session = await _session();
+    await _customerRepository.createOfflineCustomer(
+      businessId: session.user['businessId']!.toString(),
+      name: name,
+      phone: phone,
+      initialCreditLimit: initialCreditLimit,
+    );
   }
 
   Future<void> recordPayment({
@@ -47,13 +79,17 @@ class CustomerApiService {
     String paymentMethod = 'CASH',
   }) async {
     final session = await _session();
-    await _request('POST', '/api/customers/credit', body: {
-      'action': 'RECORD_PAYMENT',
-      'customerId': customerId,
-      'amount': amount,
-      'userId': session.user['id']?.toString(),
-      'paymentMethod': paymentMethod,
-    });
+    final result = await _customerRepository.recordLocalCredit(
+      businessId: session.user['businessId']!.toString(),
+      customerId: customerId,
+      amount: amount,
+      isPayment: true,
+      paymentMethod: paymentMethod,
+      userId: session.user['id']?.toString() ?? '',
+    );
+    if (result == null) {
+      throw Exception('Repayment exceeds the outstanding balance.');
+    }
   }
 
   Future<Object?> _request(String method, String path,

@@ -20,6 +20,10 @@ class SyncService {
   Future<Database> get database async {
     if (_database != null) return _database!;
     _database = await _initDatabase();
+    // The local schema is evolved additively. Existing installations can have
+    // the current database version while still missing a table introduced by
+    // a later offline feature, so run the idempotent evolution pass on open.
+    await migrateAndEvolveSchema(_database!);
     return _database!;
   }
 
@@ -35,7 +39,7 @@ class SyncService {
 
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE sync_queue (
@@ -87,19 +91,93 @@ class SyncService {
       )
     ''');
 
-    final List<Map<String, dynamic>> columnInfo = await db.rawQuery("PRAGMA table_info(sync_queue)");
+    // Generic snapshots are deliberately schema-light. They give every
+    // feature a durable, tenant-scoped cache while its typed repository is
+    // migrated to the local-first boundary.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS offline_collection_cache (
+        businessId TEXT NOT NULL,
+        cacheKey TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        PRIMARY KEY (businessId, cacheKey)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS offline_entity_cache (
+        businessId TEXT NOT NULL,
+        entityName TEXT NOT NULL,
+        entityId TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        isPendingSync INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (businessId, entityName, entityId)
+      )
+    ''');
+
+    // Incoming M-Pesa confirmations are immutable financial evidence. Keep a
+    // separate receipt ledger so repeated inbox scans never double-credit a
+    // customer while the device is offline.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS mpesa_sms_cache (
+        receiptCode TEXT PRIMARY KEY,
+        businessId TEXT NOT NULL,
+        senderPhone TEXT,
+        customerName TEXT,
+        amount REAL NOT NULL,
+        customerId TEXT,
+        isMatched INTEGER NOT NULL DEFAULT 0,
+        isPendingSync INTEGER NOT NULL DEFAULT 1,
+        rawMessage TEXT,
+        createdAt TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS local_supplier_directory (
+        id TEXT PRIMARY KEY,
+        businessId TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        isPendingSync INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS local_purchase_orders (
+        id TEXT PRIMARY KEY,
+        businessId TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        isPendingSync INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_mpesa_sms_cache_business_receipt
+      ON mpesa_sms_cache (businessId, receiptCode)
+    ''');
+
+    final List<Map<String, dynamic>> columnInfo =
+        await db.rawQuery("PRAGMA table_info(sync_queue)");
     final existingColumns = columnInfo.map((c) => c['name'] as String).toSet();
 
     final modifications = {
-      'businessId': "ALTER TABLE sync_queue ADD COLUMN businessId TEXT DEFAULT '';",
-      'entityName': "ALTER TABLE sync_queue ADD COLUMN entityName TEXT DEFAULT '';",
-      'externalId': "ALTER TABLE sync_queue ADD COLUMN externalId TEXT DEFAULT '';",
-      'payloadHash': "ALTER TABLE sync_queue ADD COLUMN payloadHash TEXT DEFAULT '';",
-      'status': "ALTER TABLE sync_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING';",
-      'attemptCount': "ALTER TABLE sync_queue ADD COLUMN attemptCount INTEGER NOT NULL DEFAULT 0;",
+      'businessId':
+          "ALTER TABLE sync_queue ADD COLUMN businessId TEXT DEFAULT '';",
+      'entityName':
+          "ALTER TABLE sync_queue ADD COLUMN entityName TEXT DEFAULT '';",
+      'externalId':
+          "ALTER TABLE sync_queue ADD COLUMN externalId TEXT DEFAULT '';",
+      'payloadHash':
+          "ALTER TABLE sync_queue ADD COLUMN payloadHash TEXT DEFAULT '';",
+      'status':
+          "ALTER TABLE sync_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING';",
+      'attemptCount':
+          "ALTER TABLE sync_queue ADD COLUMN attemptCount INTEGER NOT NULL DEFAULT 0;",
       'nextRetryAt': "ALTER TABLE sync_queue ADD COLUMN nextRetryAt TEXT;",
       'lastError': "ALTER TABLE sync_queue ADD COLUMN lastError TEXT;",
-      'isSynced': "ALTER TABLE sync_queue ADD COLUMN isSynced INTEGER NOT NULL DEFAULT 0;",
+      'isSynced':
+          "ALTER TABLE sync_queue ADD COLUMN isSynced INTEGER NOT NULL DEFAULT 0;",
     };
 
     for (final entry in modifications.entries) {
@@ -120,39 +198,13 @@ class SyncService {
         nextRetryAt = COALESCE(nextRetryAt, createdAt);
     ''');
 
+    // Idempotency belongs to the immutable outbox event (`id`), not the
+    // mutable entity ID. Keeping this index non-unique preserves ordered
+    // updates such as OPEN then CLOSE for a cash session or repeated restocks.
+    await db.execute('DROP INDEX IF EXISTS idx_sync_queue_idempotency_v4');
     await db.execute('''
-      DELETE FROM sync_queue
-      WHERE id NOT IN (
-        SELECT s1.id
-        FROM sync_queue AS s1
-        INNER JOIN (
-          SELECT
-            COALESCE(businessId, '') AS bId,
-            COALESCE(entityName, '') AS eName,
-            COALESCE(externalId, '') AS exId,
-            MAX(createdAt) AS maxCreatedAt
-          FROM sync_queue
-          WHERE COALESCE(businessId, '') != ''
-            AND COALESCE(entityName, '') != ''
-            AND COALESCE(externalId, '') != ''
-          GROUP BY
-            COALESCE(businessId, ''),
-            COALESCE(entityName, ''),
-            COALESCE(externalId, '')
-        ) AS s2
-        ON s1.businessId = s2.bId
-       AND s1.entityName = s2.eName
-       AND s1.externalId = s2.exId
-       AND s1.createdAt = s2.maxCreatedAt
-      )
-      AND COALESCE(businessId, '') != ''
-      AND COALESCE(entityName, '') != ''
-      AND COALESCE(externalId, '') != '';
-    ''');
-
-    await db.execute('''
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_queue_idempotency_v4 
-      ON sync_queue (businessId, entityName, externalId);
+      CREATE INDEX IF NOT EXISTS idx_sync_queue_pending_order_v5
+      ON sync_queue (businessId, entityName, externalId, createdAt);
     ''');
   }
 
@@ -209,17 +261,68 @@ class SyncService {
     required Map<String, dynamic> payload,
   }) async {
     final db = await database;
+    final timestamp = DateTime.now().toIso8601String();
+    final jsonPayload = jsonEncode(payload);
+    final externalId = payload['id']?.toString().trim().isNotEmpty == true
+        ? payload['id'].toString()
+        : payload['sessionId']?.toString().trim().isNotEmpty == true
+            ? payload['sessionId'].toString()
+            : id;
     await db.insert(
       'sync_queue',
       {
         'id': id,
+        'businessId': payload['businessId']?.toString() ?? '',
         'entityName': entityName,
         'operation': operation,
-        'payload': jsonEncode(payload),
-        'createdAt': DateTime.now().toIso8601String(),
+        'externalId': externalId,
+        'payloadHash': computeFailsafeHash(jsonPayload),
+        'payload': jsonPayload,
+        'status': 'PENDING',
+        'attemptCount': 0,
+        'nextRetryAt': timestamp,
+        'isSynced': 0,
+        'createdAt': timestamp,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<void> cacheCollection({
+    required String businessId,
+    required String cacheKey,
+    required Object payload,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'offline_collection_cache',
+      {
+        'businessId': businessId,
+        'cacheKey': cacheKey,
+        'payload': jsonEncode(payload),
+        'updatedAt': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Object?> readCachedCollection({
+    required String businessId,
+    required String cacheKey,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'offline_collection_cache',
+      where: 'businessId = ? AND cacheKey = ?',
+      whereArgs: [businessId, cacheKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    try {
+      return jsonDecode(rows.first['payload'] as String);
+    } on FormatException {
+      return null;
+    }
   }
 
   Future<bool> processCloudSync({
