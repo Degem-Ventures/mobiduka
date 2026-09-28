@@ -79,8 +79,19 @@ class ObservabilityDashboardService {
   void start(String businessId,
       {Duration interval = const Duration(seconds: 15)}) {
     _timer?.cancel();
-    refresh(businessId);
-    _timer = Timer.periodic(interval, (_) => refresh(businessId));
+    unawaited(_refreshAndPublish(businessId));
+    _timer = Timer.periodic(
+        interval, (_) => unawaited(_refreshAndPublish(businessId)));
+  }
+
+  Future<void> _refreshAndPublish(String businessId) async {
+    try {
+      await refresh(businessId);
+    } on Object catch (error, stackTrace) {
+      // Diagnostics must never block the operational dashboard. Consumers can
+      // choose to hide this optional panel until local storage is available.
+      if (!_controller.isClosed) _controller.addError(error, stackTrace);
+    }
   }
 
   void dispose() {

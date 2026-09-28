@@ -184,6 +184,8 @@ model Category {
   icon             String?
   emoji            String?
   parentCategoryId String?
+  status           String   @default("ACTIVE")
+  deletedAt        DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

@@ -22,7 +22,7 @@ class ProductCatalogService {
   final AuthService _authService;
   final OfflineSnapshotCache _cache;
 
-  Future<List<Product>> load() async {
+  Future<List<Product>> load({bool includeDeleted = false}) async {
     final session = await _authService.readSession();
     final businessId = session?.user['businessId']?.toString();
     if (session == null || businessId == null || businessId.isEmpty) {
@@ -32,13 +32,15 @@ class ProductCatalogService {
     try {
       final response = await _client.get(
         Uri.parse(
-            '${ApiConfig.origin}/api/products?businessId=${Uri.encodeQueryComponent(businessId)}'),
+            '${ApiConfig.origin}/api/products?businessId=${Uri.encodeQueryComponent(businessId)}${includeDeleted ? '&includeDeleted=true' : ''}'),
         headers: {
           'Authorization': 'Bearer ${session.token}',
           'Content-Type': 'application/json',
         },
       ).timeout(const Duration(seconds: 10));
-      if (response.statusCode >= 500) return await _loadCached(businessId);
+      if (response.statusCode >= 500 && !includeDeleted) {
+        return await _loadCached(businessId);
+      }
 
       final decoded = jsonDecode(response.body);
       if (response.statusCode < 200 ||
@@ -56,10 +58,12 @@ class ProductCatalogService {
       } on Object {
         // A live response remains valid when browser storage is unavailable.
       }
-      return _productsFromJson(decoded);
+      return _productsFromJson(decoded, includeDeleted: includeDeleted);
     } on http.ClientException {
+      if (includeDeleted) rethrow;
       return _loadCached(businessId);
     } on TimeoutException {
+      if (includeDeleted) rethrow;
       return _loadCached(businessId);
     }
   }
@@ -78,8 +82,11 @@ class ProductCatalogService {
         'Products are unavailable offline. Connect once to refresh the catalogue.');
   }
 
-  List<Product> _productsFromJson(List decoded) {
-    return decoded.whereType<Map>().map((row) {
+  List<Product> _productsFromJson(List decoded, {bool includeDeleted = false}) {
+    return decoded.whereType<Map>().where((row) {
+      final deletedAt = row['deletedAt'];
+      return includeDeleted ? deletedAt != null : deletedAt == null;
+    }).map((row) {
       final product = Map<String, dynamic>.from(row);
       final category = product['category'] as Map?;
       final inventory = product['inventory'] as Map?;

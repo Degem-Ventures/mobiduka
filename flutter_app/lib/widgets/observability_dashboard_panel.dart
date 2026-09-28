@@ -39,10 +39,10 @@ class _ObservabilityDashboardPanelState
   Widget build(BuildContext context) => StreamBuilder<StoreFinancialSnapshot>(
         stream: _service.snapshots,
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const SizedBox(
-                height: 80, child: Center(child: CircularProgressIndicator()));
-          }
+          // This is an optional diagnostics card, not dashboard content. Do
+          // not reserve space or show an endless loader while its local data
+          // store is starting, unavailable, or unsupported on this platform.
+          if (!snapshot.hasData) return const SizedBox.shrink();
           final data = snapshot.data!;
           return Card(
             child: Padding(

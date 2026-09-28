@@ -258,24 +258,6 @@ export default function SettingsScreen({ onNavigate }: Props) {
           ))}
         </div>
 
-        {/* ── Security ── */}
-        <SectionLabel>Security</SectionLabel>
-        <div className="card" style={{ overflow: 'hidden', marginBottom: 16, background: card }}>
-          {[
-            { label: 'Active Sessions', sub: '1 device logged in', icon: '📱', color: '#123A8F', nav: 'sessions' },
-            { label: 'Two-Factor Auth', sub: 'Not enabled', icon: '🛡️', color: '#2E7D32', nav: 'twofa' },
-          ].map((item, i, arr) => (
-            <button key={i} className="btn" onClick={() => onNavigate(item.nav)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? border : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-              <div style={{ width: 40, height: 40, borderRadius: 11, background: `${item.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{item.icon}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: text }}>{item.label}</div>
-                <div style={{ fontSize: 11, color: muted, marginTop: 1 }}>{item.sub}</div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B0BAD3" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
-            </button>
-          ))}
-        </div>
-
         {/* ── Data Management ── */}
         <SectionLabel>Data Management</SectionLabel>
         <div className="card" style={{ overflow: 'hidden', marginBottom: 16, background: card }}>
