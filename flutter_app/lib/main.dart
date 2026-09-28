@@ -27,6 +27,7 @@ import 'services/cache_optimizer_service.dart';
 import 'services/catalog_mutation_service.dart';
 import 'services/dashboard_service.dart';
 import 'services/mpesa_service.dart';
+import 'services/mpesa_sms_consent_service.dart';
 import 'services/mpesa_sms_ingestion_service.dart';
 import 'services/product_repository.dart';
 import 'services/pos_cart_draft_service.dart';
@@ -95,6 +96,9 @@ class ActiveShiftNotice {
 
 /// Updated by Shift Management and rendered by the app shell above every view.
 final ValueNotifier<ActiveShiftNotice?> activeShiftNotice = ValueNotifier(null);
+
+/// Lets the persistent More tab refresh its header after profile/store edits.
+final ValueNotifier<int> profileChangeNotice = ValueNotifier(0);
 
 class Product {
   const Product(
@@ -169,6 +173,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
   String activeRole = 'CASHIER';
   String? detail;
   String? activeSessionId;
+  Offset _shiftNoticeOffset = const Offset(12, 0);
 
   @override
   void initState() {
@@ -407,6 +412,9 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
     );
   }
 
+  void _openActiveShift() =>
+      setState(() => showingGlobalShiftManagement = true);
+
   bool _canOpen(String value) {
     if (activeRole == 'OWNER' || activeRole == 'ADMIN') return true;
     if (activeRole == 'CASHIER')
@@ -546,6 +554,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
       body = LoginScreen(onLogin: _handleLoginAttempt);
     } else if (showingGlobalShiftManagement) {
       body = ShiftManagementScreen(
+        openActiveShift: true,
         onBack: () => setState(() => showingGlobalShiftManagement = false),
       );
     } else if (showingSmartScan) {
@@ -570,7 +579,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
             role: activeRole,
             isDarkMode: isDarkMode,
             onLogout: _logout,
-            onCloseShift: _handleCloseShift,
+            onCloseShift: _openActiveShift,
           ),
         ],
       );
@@ -594,7 +603,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
             role: activeRole,
             isDarkMode: isDarkMode,
             onLogout: _logout,
-            onCloseShift: _handleCloseShift,
+            onCloseShift: _openActiveShift,
           ),
         ],
       );
@@ -696,61 +705,6 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
                               )
                             : null,
                   ),
-                  if (loggedIn && !showingGlobalShiftManagement)
-                    Positioned(
-                      left: 12,
-                      right: 12,
-                      top: 42,
-                      child: ValueListenableBuilder<ActiveShiftNotice?>(
-                        valueListenable: activeShiftNotice,
-                        builder: (context, notice, _) {
-                          if (notice == null) return const SizedBox.shrink();
-                          final label =
-                              '${notice.count} ${notice.count == 1 ? 'shift' : 'shifts'} in progress · ${notice.employeeName}';
-                          return Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: () => setState(
-                                  () => showingGlobalShiftManagement = true),
-                              borderRadius: BorderRadius.circular(10),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 11),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF0F6634),
-                                  borderRadius: BorderRadius.circular(10),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                        color: Color(0x33000000),
-                                        blurRadius: 10,
-                                        offset: Offset(0, 4))
-                                  ],
-                                ),
-                                child: Row(children: [
-                                  const Icon(Icons.access_time_filled,
-                                      color: Color(0xFFA5D6A7), size: 17),
-                                  const SizedBox(width: 9),
-                                  Expanded(
-                                      child: Text(label,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w700))),
-                                  const SizedBox(width: 8),
-                                  const Text('Manage ›',
-                                      style: TextStyle(
-                                          color: Color(0xFFA5D6A7),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w800)),
-                                ]),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
                   // Keep the device-style top speaker detail above the app shell.
                   Positioned(
                     top: 0,
@@ -768,6 +722,72 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
                       ),
                     ),
                   ),
+                  if (loggedIn && !showingGlobalShiftManagement)
+                    Positioned(
+                      left: _shiftNoticeOffset.dx,
+                      top: _shiftNoticeOffset.dy,
+                      child: ValueListenableBuilder<ActiveShiftNotice?>(
+                        valueListenable: activeShiftNotice,
+                        builder: (context, notice, _) {
+                          if (notice == null) return const SizedBox.shrink();
+                          final label =
+                              '${notice.count} ${notice.count == 1 ? 'shift' : 'shifts'} in progress · ${notice.employeeName}';
+                          return GestureDetector(
+                            onPanUpdate: (details) => setState(() {
+                              _shiftNoticeOffset = Offset(
+                                (_shiftNoticeOffset.dx + details.delta.dx)
+                                    .clamp(0.0, 32.0)
+                                    .toDouble(),
+                                (_shiftNoticeOffset.dy + details.delta.dy)
+                                    .clamp(0.0, 720.0)
+                                    .toDouble(),
+                              );
+                            }),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _openActiveShift,
+                                borderRadius: BorderRadius.circular(10),
+                                child: Container(
+                                  width: 349,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 11),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0F6634),
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                          color: Color(0x33000000),
+                                          blurRadius: 10,
+                                          offset: Offset(0, 4))
+                                    ],
+                                  ),
+                                  child: Row(children: [
+                                    const Icon(Icons.access_time_filled,
+                                        color: Color(0xFFA5D6A7), size: 17),
+                                    const SizedBox(width: 9),
+                                    Expanded(
+                                        child: Text(label,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700))),
+                                    const SizedBox(width: 8),
+                                    const Text('Manage ›',
+                                        style: TextStyle(
+                                            color: Color(0xFFA5D6A7),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w800)),
+                                  ]),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                 ]),
               ),
             ),
@@ -3882,6 +3902,7 @@ class _POSScreenState extends State<POSScreen> {
   final MpesaService _mpesaService = MpesaService();
   final MpesaSmsIngestionService _mpesaSmsIngestion =
       MpesaSmsIngestionService();
+  final MpesaSmsConsentService _mpesaSmsConsent = MpesaSmsConsentService();
   final SmsWatcherService _smsWatcherService = SmsWatcherService();
   final PrinterService _printerService = PrinterService();
   final PosCartDraftService _cartDraftService = PosCartDraftService();
@@ -3927,13 +3948,17 @@ class _POSScreenState extends State<POSScreen> {
       ];
 
   final Map<String, int> cart = {};
+  // The View Cart shortcut floats over the POS catalogue, not inside its
+  // scroll view. This offset is measured from the lower-left corner.
+  Offset _viewCartOffset = const Offset(12, 16);
 
   @override
   void initState() {
     super.initState();
     _loadPairedPrinters();
     _loadActiveOperators();
-    _startMpesaInboxIngestion();
+    MpesaSmsConsentService.changes.addListener(_updateMpesaInboxIngestion);
+    _updateMpesaInboxIngestion();
     _restoreCartDraft();
     unawaited(_loadReceiptBusiness());
   }
@@ -4255,6 +4280,7 @@ class _POSScreenState extends State<POSScreen> {
 
   @override
   void dispose() {
+    MpesaSmsConsentService.changes.removeListener(_updateMpesaInboxIngestion);
     _smsWatcherService.stopSmsWatcher();
     _smsWatcherService.stopMpesaInboxIngestion();
     _mpesaPhoneController.dispose();
@@ -4288,6 +4314,17 @@ class _POSScreenState extends State<POSScreen> {
         }
       },
     );
+  }
+
+  Future<void> _updateMpesaInboxIngestion() async {
+    if (kIsWeb) return;
+    final businessId = await _authService.getActiveBusinessId();
+    if (businessId == null || businessId.isEmpty) return;
+    if (await _mpesaSmsConsent.isEnabled(businessId)) {
+      await _startMpesaInboxIngestion();
+    } else {
+      _smsWatcherService.stopMpesaInboxIngestion();
+    }
   }
 
   void addToCart(Product product) {
@@ -4525,7 +4562,7 @@ class _POSScreenState extends State<POSScreen> {
     required String checkoutRequestId,
     required double amount,
     required String phone,
-  }) {
+  }) async {
     final completer = Completer<Map<String, dynamic>>();
     var finishedSources = 0;
     Map<String, dynamic>? lastFailure;
@@ -4559,27 +4596,105 @@ class _POSScreenState extends State<POSScreen> {
         'message': 'Online M-Pesa verification failed: $error'
       });
     });
-    _smsWatcherService
-        .startSmsIncomingWatcher(
-          targetAmount: amount,
-          customerPhone: phone,
-          onPaymentVerified: (_) {},
-        )
-        .then((code) => handleResult({
-              'status': code == null ? 'TIMEOUT' : 'SUCCESS',
-              'receipt': code,
-              'message': code == null
-                  ? 'Offline SMS verification timed out.'
-                  : 'Payment verified from M-Pesa SMS.',
-            }))
-        .catchError((error) {
-      handleResult({
-        'status': 'FAILED',
-        'message': 'Offline SMS verification failed: $error'
+    final businessId = await _authService.getActiveBusinessId();
+    final smsEnabled = businessId != null &&
+        businessId.isNotEmpty &&
+        await _mpesaSmsConsent.isEnabled(businessId);
+    if (!smsEnabled) {
+      // Server verification is the sole source while SMS reconciliation is
+      // disabled. Manual receipt entry remains available at checkout.
+      finishedSources = 1;
+    } else {
+      _smsWatcherService
+          .startSmsIncomingWatcher(
+            targetAmount: amount,
+            customerPhone: phone,
+            onPaymentVerified: (_) {},
+          )
+          .then((code) => handleResult({
+                'status': code == null ? 'TIMEOUT' : 'SUCCESS',
+                'receipt': code,
+                'message': code == null
+                    ? 'Offline SMS verification timed out.'
+                    : 'Payment verified from M-Pesa SMS.',
+              }))
+          .catchError((error) {
+        handleResult({
+          'status': 'FAILED',
+          'message': 'Offline SMS verification failed: $error'
+        });
       });
-    });
+    }
 
     return completer.future;
+  }
+
+  Future<void> _enterMpesaReceiptCode() async {
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enter M-Pesa receipt code'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            hintText: 'e.g. QAB12C3D4E',
+            helperText: 'Use the confirmation code from the M-Pesa message.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('Record code'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (code == null || code.isEmpty || !mounted) return;
+    final normalized = code.toUpperCase();
+    if (!RegExp(r'^[A-Z0-9]{10}$').hasMatch(normalized)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        backgroundColor: Color(0xFFD32F2F),
+        content: Text('Enter the 10-character M-Pesa confirmation code.'),
+      ));
+      return;
+    }
+    final businessId = await _authService.getActiveBusinessId();
+    final userId = await _authService.getActiveUserId();
+    if (businessId == null || userId == null || !mounted) return;
+    if (!kIsWeb) {
+      try {
+        await _mpesaSmsIngestion.ingestConfirmation(
+          businessId: businessId,
+          userId: userId,
+          receiptCode: normalized,
+          amount: total.toDouble(),
+        );
+      } on Object {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Color(0xFFD32F2F),
+            content: Text('Unable to record the M-Pesa receipt code locally.'),
+          ));
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _receiptToken = normalized;
+      _paymentInlineError = null;
+      _paymentInlineStatus =
+          'Receipt code recorded. Complete the sale when ready.';
+    });
   }
 
   Future<void> _completeSale() async {
@@ -4874,20 +4989,25 @@ class _POSScreenState extends State<POSScreen> {
     );
   }
 
-  Widget _pill(String text, bool selected, Color color, {VoidCallback? onTap}) {
-    return GestureDetector(
+  Widget _categoryChip(String label,
+      {required bool selected, required VoidCallback onTap}) {
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: selected ? color : Colors.white,
+          color: selected ? gold : Colors.white.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: selected ? color : const Color(0xFFE8ECF4)),
+          border: Border.all(
+            color: selected ? gold : Colors.white.withValues(alpha: 0.16),
+          ),
         ),
         child: Text(
-          text,
+          label,
           style: TextStyle(
-            color: selected ? Colors.white : muted,
+            color: selected ? ink : const Color(0xCCFFFFFF),
             fontSize: 12,
             fontWeight: FontWeight.w700,
           ),
@@ -4928,14 +5048,14 @@ class _POSScreenState extends State<POSScreen> {
 
     return InkWell(
       onTap: () => addToCart(product),
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(14),
       child: Ink(
-        // Matches the web tile's compact 10px rhythm while leaving room for
-        // the stock label.
+        // Mirrors the web card's compact rhythm while leaving room for the
+        // stock label and the selected-cart outline.
         padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
           border: quantity > 0 ? Border.all(color: navy, width: 2) : null,
           boxShadow: const [
             BoxShadow(
@@ -5517,6 +5637,15 @@ class _POSScreenState extends State<POSScreen> {
                         border: OutlineInputBorder(),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _enterMpesaReceiptCode,
+                        icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                        label: const Text('Enter M-Pesa receipt code manually'),
+                      ),
+                    ),
                     if (_paymentInlineStatus != null) ...[
                       const SizedBox(height: 10),
                       Container(
@@ -5961,289 +6090,401 @@ class _POSScreenState extends State<POSScreen> {
 
     return Container(
       color: const Color(0xFFF5F7FA),
-      child: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 52, 16, 14),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [ink, navy]),
-            ),
-            child: Column(
+      child: LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          children: [
+            Column(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        height: 44,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.12)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.search,
-                                color: Color(0xCCFFFFFF), size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: TextField(
-                                onChanged: (value) =>
-                                    setState(() => search = value),
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 14),
-                                decoration: const InputDecoration(
-                                  hintText: 'Search products...',
-                                  hintStyle:
-                                      TextStyle(color: Color(0xCCFFFFFF)),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                ),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 52, 16, 14),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(colors: [ink, navy]),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              height: 44,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                    color:
+                                        Colors.white.withValues(alpha: 0.12)),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.search,
+                                      color: Color(0xCCFFFFFF), size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: TextField(
+                                      onChanged: (value) =>
+                                          setState(() => search = value),
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 14),
+                                      decoration: const InputDecoration(
+                                        hintText: 'Search products...',
+                                        hintStyle:
+                                            TextStyle(color: Color(0xCCFFFFFF)),
+                                        border: InputBorder.none,
+                                        isDense: true,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _openBarcodeScanner,
-                      tooltip: 'Open SmartScan',
-                      color: gold,
-                      icon: const Icon(Icons.qr_code_scanner),
-                    ),
-                    const SizedBox(width: 10),
-                    InkWell(
-                      onTap: () => setState(() => view = 'cart'),
-                      child: Container(
-                        width: 52,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: gold,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            const Icon(Icons.shopping_cart_outlined,
-                                color: ink, size: 20),
-                            if (cartCount > 0)
-                              Positioned(
-                                right: 8,
-                                top: 6,
-                                child: Container(
-                                  width: 18,
-                                  height: 18,
-                                  decoration: BoxDecoration(
-                                      color: const Color(0xFFD32F2F),
-                                      shape: BoxShape.circle),
-                                  child: Center(
-                                      child: Text('$cartCount',
-                                          style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w800))),
-                                ),
+                          ),
+                          IconButton(
+                            onPressed: _openBarcodeScanner,
+                            tooltip: 'Open SmartScan',
+                            color: gold,
+                            icon: const Icon(Icons.qr_code_scanner),
+                          ),
+                          const SizedBox(width: 10),
+                          InkWell(
+                            onTap: () => setState(() => view = 'cart'),
+                            child: Container(
+                              width: 52,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: gold,
+                                borderRadius: BorderRadius.circular(14),
                               ),
-                          ],
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  const Icon(Icons.shopping_cart_outlined,
+                                      color: ink, size: 20),
+                                  if (cartCount > 0)
+                                    Positioned(
+                                      right: 8,
+                                      top: 6,
+                                      child: Container(
+                                        width: 18,
+                                        height: 18,
+                                        decoration: BoxDecoration(
+                                            color: const Color(0xFFD32F2F),
+                                            shape: BoxShape.circle),
+                                        child: Center(
+                                            child: Text('$cartCount',
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 10,
+                                                    fontWeight:
+                                                        FontWeight.w800))),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      // Keep category filters on their own line as on the web POS.
+                      // The view switcher belongs with the product content below.
+                      SizedBox(
+                        height: 36,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: categories.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                          itemBuilder: (context, index) {
+                            final value = categories[index];
+                            return _categoryChip(
+                              value,
+                              selected: category == value,
+                              onTap: () => setState(() => category = value),
+                            );
+                          },
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _metricTile('$cartCount', 'Items', Colors.white),
-                    const SizedBox(width: 8),
-                    _metricTile(
-                        'KSh $subtotal', 'Subtotal', const Color(0xFFE0C35B)),
-                    const SizedBox(width: 8),
-                    _metricTile('KSh $total', 'Total', const Color(0xFFB8F0C3)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Container(
-            color: Colors.white,
-            height: 48,
-            child: Row(
-              children: [
-                Expanded(
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    itemCount: categories.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 8),
-                    itemBuilder: (context, index) {
-                      final value = categories[index];
-                      final selected = category == value;
-                      return _pill(
-                        value,
-                        selected,
-                        navy,
-                        onTap: () => setState(() => category = value),
-                      );
-                    },
-                  ),
-                ),
-                Container(
-                  margin: const EdgeInsets.only(right: 12, top: 6, bottom: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF0F3F9),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      _productViewButton(
-                        icon: Icons.grid_view_rounded,
-                        selected: showProductTiles,
-                        tooltip: 'Tile view',
-                        onTap: () => setState(() => showProductTiles = true),
-                      ),
-                      _productViewButton(
-                        icon: Icons.view_list_rounded,
-                        selected: !showProductTiles,
-                        tooltip: 'List view',
-                        onTap: () => setState(() => showProductTiles = false),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          _metricTile('$cartCount', 'Items', Colors.white),
+                          const SizedBox(width: 8),
+                          _metricTile('KSh $subtotal', 'Subtotal',
+                              const Color(0xFFE0C35B)),
+                          const SizedBox(width: 8),
+                          _metricTile(
+                              'KSh $total', 'Total', const Color(0xFFB8F0C3)),
+                        ],
                       ),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: showProductTiles
-                ? LayoutBuilder(
-                    builder: (context, constraints) {
-                      // Three cards match the web POS at normal mobile widths.
-                      // Compact devices need two wider cards so names, prices,
-                      // and stock labels always fit without overflow.
-                      final compact = constraints.maxWidth < 360;
-                      return GridView.builder(
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: compact ? 2 : 3,
-                          // A fixed height safely accommodates the tallest
-                          // two-line names, price, and stock label. Deriving
-                          // height from narrow card widths caused overflow.
-                          mainAxisExtent: 140,
-                          crossAxisSpacing: 10,
-                          mainAxisSpacing: 10,
+                Container(
+                  color: Colors.white,
+                  height: 48,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: Text(
+                            visibleProducts.isEmpty
+                                ? 'Products'
+                                : '${visibleProducts.length} products',
+                            style: const TextStyle(
+                                color: muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700),
+                          ),
                         ),
-                        itemCount: visibleProducts.isEmpty
-                            ? 1
-                            : visibleProducts.length,
-                        itemBuilder: (context, index) => visibleProducts.isEmpty
-                            ? Center(
-                                child: Text(
-                                  search.isEmpty && category == 'All'
-                                      ? 'No products in your catalogue yet.'
-                                      : 'No products match your search.',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                      color: muted, fontSize: 13),
-                                ),
-                              )
-                            : _productTile(visibleProducts[index]),
-                      );
-                    },
-                  )
-                : ListView(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
-                    children: visibleProducts.map((product) {
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        padding: const EdgeInsets.all(12),
+                      ),
+                      Container(
+                        margin:
+                            const EdgeInsets.only(right: 12, top: 6, bottom: 6),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          boxShadow: const [
-                            BoxShadow(
-                                color: Color(0x0F000000),
-                                blurRadius: 8,
-                                offset: Offset(0, 2))
-                          ],
+                          color: const Color(0xFFF0F3F9),
+                          borderRadius: BorderRadius.circular(10),
                         ),
                         child: Row(
                           children: [
-                            Container(
-                              width: 44,
-                              height: 44,
-                              decoration: const BoxDecoration(
-                                  color: Color(0xFFE3EAF8),
-                                  borderRadius:
-                                      BorderRadius.all(Radius.circular(12))),
-                              child: Center(
-                                  child: Text(product.emoji,
-                                      style: const TextStyle(fontSize: 22))),
+                            _productViewButton(
+                              icon: Icons.grid_view_rounded,
+                              selected: showProductTiles,
+                              tooltip: 'Tile view',
+                              onTap: () =>
+                                  setState(() => showProductTiles = true),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(product.name,
-                                      style: const TextStyle(
-                                          color: ink,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w800)),
-                                  const SizedBox(height: 4),
-                                  Text(product.category,
-                                      style: const TextStyle(
-                                          color: muted, fontSize: 11)),
-                                ],
-                              ),
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text('KSh ${product.price}',
-                                    style: const TextStyle(
-                                        color: ink,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w800)),
-                                const SizedBox(height: 6),
-                                Text(
-                                  '${product.stock} in stock',
-                                  style: TextStyle(
-                                    color: product.stock <= 5
-                                        ? const Color(0xFFD32F2F)
-                                        : muted,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(width: 10),
-                            TextButton(
-                              onPressed: () => addToCart(product),
-                              style: TextButton.styleFrom(
-                                backgroundColor: navy,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size(64, 36),
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                              ),
-                              child: const Text('Add',
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800)),
+                            _productViewButton(
+                              icon: Icons.view_list_rounded,
+                              selected: !showProductTiles,
+                              tooltip: 'List view',
+                              onTap: () =>
+                                  setState(() => showProductTiles = false),
                             ),
                           ],
                         ),
-                      );
-                    }).toList(),
+                      ),
+                    ],
                   ),
-          ),
-        ],
+                ),
+                Expanded(
+                  child: showProductTiles
+                      ? LayoutBuilder(
+                          builder: (context, constraints) {
+                            // Three cards match the web POS at normal mobile widths.
+                            // Compact devices need two wider cards so names, prices,
+                            // and stock labels always fit without overflow.
+                            final compact = constraints.maxWidth < 360;
+                            return GridView.builder(
+                              padding:
+                                  const EdgeInsets.fromLTRB(12, 12, 12, 112),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: compact ? 2 : 3,
+                                // A fixed height safely accommodates the tallest
+                                // two-line names, price, and stock label. Deriving
+                                // height from narrow card widths caused overflow.
+                                mainAxisExtent: 140,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                              ),
+                              itemCount: visibleProducts.isEmpty
+                                  ? 1
+                                  : visibleProducts.length,
+                              itemBuilder: (context, index) =>
+                                  visibleProducts.isEmpty
+                                      ? Center(
+                                          child: Text(
+                                            search.isEmpty && category == 'All'
+                                                ? 'No products in your catalogue yet.'
+                                                : 'No products match your search.',
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(
+                                                color: muted, fontSize: 13),
+                                          ),
+                                        )
+                                      : _productTile(visibleProducts[index]),
+                            );
+                          },
+                        )
+                      : ListView(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 112),
+                          children: visibleProducts.map((product) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                boxShadow: const [
+                                  BoxShadow(
+                                      color: Color(0x0F000000),
+                                      blurRadius: 8,
+                                      offset: Offset(0, 2))
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 44,
+                                    height: 44,
+                                    decoration: const BoxDecoration(
+                                        color: Color(0xFFE3EAF8),
+                                        borderRadius: BorderRadius.all(
+                                            Radius.circular(12))),
+                                    child: Center(
+                                        child: Text(product.emoji,
+                                            style:
+                                                const TextStyle(fontSize: 22))),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(product.name,
+                                            style: const TextStyle(
+                                                color: ink,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w800)),
+                                        const SizedBox(height: 4),
+                                        Text(product.category,
+                                            style: const TextStyle(
+                                                color: muted, fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text('KSh ${product.price}',
+                                          style: const TextStyle(
+                                              color: ink,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800)),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '${product.stock} in stock',
+                                        style: TextStyle(
+                                          color: product.stock <= 5
+                                              ? const Color(0xFFD32F2F)
+                                              : muted,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 10),
+                                  TextButton(
+                                    onPressed: () => addToCart(product),
+                                    style: TextButton.styleFrom(
+                                      backgroundColor: navy,
+                                      foregroundColor: Colors.white,
+                                      minimumSize: const Size(64, 36),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10)),
+                                    ),
+                                    child: const Text('Add',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w800)),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                ),
+              ],
+            ),
+            if (cartCount > 0)
+              Positioned(
+                left: _viewCartOffset.dx.clamp(0.0, 24.0).toDouble(),
+                bottom: _viewCartOffset.dy
+                    .clamp(0.0, constraints.maxHeight - 76)
+                    .toDouble(),
+                child: GestureDetector(
+                  onPanUpdate: (details) => setState(() {
+                    _viewCartOffset = Offset(
+                      (_viewCartOffset.dx + details.delta.dx)
+                          .clamp(0.0, 24.0)
+                          .toDouble(),
+                      (_viewCartOffset.dy - details.delta.dy)
+                          .clamp(0.0, constraints.maxHeight - 76)
+                          .toDouble(),
+                    );
+                  }),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                      child: Material(
+                        color: navy.withValues(alpha: .62),
+                        child: InkWell(
+                          onTap: () => setState(() => view = 'cart'),
+                          child: Container(
+                            // Preserve a 12px visible edge on either side at
+                            // every allowed horizontal drag position.
+                            width: constraints.maxWidth - 48,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 14),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: .22)),
+                              boxShadow: const [
+                                BoxShadow(
+                                    color: Color(0x44123A8F),
+                                    blurRadius: 18,
+                                    offset: Offset(0, 5)),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: .2),
+                                      borderRadius: BorderRadius.circular(6)),
+                                  child: Center(
+                                      child: Text('$cartCount',
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w800))),
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Text('View Cart',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700)),
+                                ),
+                                Text('KSh $subtotal',
+                                    style: const TextStyle(
+                                        color: gold,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w800)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -6279,9 +6520,16 @@ class _ProductScreenState extends State<ProductScreen> {
   String category = 'All';
   String filter = 'all';
   final Map<String, int> cart = {};
+  // Measured from the lower-left edge of the POS product area.
+  Offset _cartBarOffset = const Offset(12, 16);
   Product? selected;
   bool showAddProduct = false;
   bool showAddCategory = false;
+  bool showManageCategories = false;
+  bool showDeletedProducts = false;
+  bool isInventoryMutationInProgress = false;
+  List<Product> deletedProducts = <Product>[];
+  List<InventoryCategory> deletedInventoryCategories = <InventoryCategory>[];
   Product? editProduct;
   final Map<String, String> productForm = {
     'name': '',
@@ -6300,6 +6548,7 @@ class _ProductScreenState extends State<ProductScreen> {
   void initState() {
     super.initState();
     unawaited(_loadApiCategories());
+    unawaited(_loadDeletedProducts());
   }
 
   Future<void> _loadApiCategories() async {
@@ -6321,6 +6570,206 @@ class _ProductScreenState extends State<ProductScreen> {
       });
     } catch (_) {
       // The already loaded catalogue categories remain available offline.
+    }
+  }
+
+  void _inventoryFeedback(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor:
+          isError ? const Color(0xFFD32F2F) : const Color(0xFF2E7D32),
+    ));
+  }
+
+  Future<void> _toggleDeletedProducts() async {
+    if (showDeletedProducts) {
+      setState(() => showDeletedProducts = false);
+      return;
+    }
+    await _loadDeletedProducts(show: true);
+  }
+
+  Future<void> _loadDeletedProducts({bool show = false}) async {
+    try {
+      final deleted = await ProductCatalogService().load(includeDeleted: true);
+      if (!mounted) return;
+      setState(() {
+        deletedProducts = deleted;
+        if (show) showDeletedProducts = true;
+      });
+    } catch (error) {
+      if (show) {
+        _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+            isError: true);
+      }
+    }
+  }
+
+  Future<void> _softDeleteProduct(Product product) async {
+    final id = product.id;
+    if (id == null || id.isEmpty) return;
+    final approved = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Delete product?'),
+            content: Text('"${product.name}" can be restored later.'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Delete')),
+            ],
+          ),
+        ) ??
+        false;
+    if (!approved) return;
+    setState(() => isInventoryMutationInProgress = true);
+    try {
+      await InventoryApiService().deleteProduct(id: id);
+      if (!mounted) return;
+      setState(() {
+        products.removeWhere((item) => item.id == id);
+        // The deleted list is the source of the counter displayed in the
+        // inventory footer. Update it in the same transaction as the active
+        // list so the count does not wait for a later API refresh.
+        deletedProducts.removeWhere((item) => item.id == id);
+        deletedProducts.insert(0, product);
+      });
+      _inventoryFeedback('Product moved to deleted items.');
+    } catch (error) {
+      _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+          isError: true);
+    } finally {
+      if (mounted) setState(() => isInventoryMutationInProgress = false);
+    }
+  }
+
+  Future<void> _restoreProduct(Product product) async {
+    final id = product.id;
+    if (id == null || id.isEmpty) return;
+    setState(() => isInventoryMutationInProgress = true);
+    try {
+      await InventoryApiService().restoreProduct(id: id);
+      if (!mounted) return;
+      setState(() {
+        deletedProducts.removeWhere((item) => item.id == id);
+        products.insert(0, product);
+      });
+      _inventoryFeedback('Product restored.');
+    } catch (error) {
+      _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+          isError: true);
+    } finally {
+      if (mounted) setState(() => isInventoryMutationInProgress = false);
+    }
+  }
+
+  Future<void> _openManageCategories() async {
+    setState(() => showManageCategories = true);
+    try {
+      final deleted =
+          await InventoryApiService().loadCategories(includeDeleted: true);
+      if (mounted) setState(() => deletedInventoryCategories = deleted);
+    } catch (_) {
+      // The active directory remains usable if deleted records are unavailable.
+    }
+  }
+
+  Future<void> _editCategory(String name) async {
+    final controller = TextEditingController(text: name);
+    final nextName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit category'),
+        content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Category name')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Save'))
+        ],
+      ),
+    );
+    if (nextName == null || nextName.isEmpty || nextName == name) return;
+    final id = inventoryCategoryIds[name];
+    if (id == null) return;
+    try {
+      await InventoryApiService().updateCategory(id: id, name: nextName);
+      if (!mounted) return;
+      setState(() {
+        final index = inventoryCategories.indexOf(name);
+        if (index >= 0) inventoryCategories[index] = nextName;
+        inventoryCategoryIds.remove(name);
+        inventoryCategoryIds[nextName] = id;
+        inventoryCategoryEmojis[nextName] =
+            inventoryCategoryEmojis.remove(name) ?? '📦';
+      });
+      _inventoryFeedback('Category updated.');
+    } catch (error) {
+      _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+          isError: true);
+    }
+  }
+
+  Future<void> _deleteCategory(String name) async {
+    final id = inventoryCategoryIds[name];
+    if (id == null) return;
+    try {
+      await InventoryApiService().deleteCategory(id: id);
+      if (!mounted) return;
+      setState(() {
+        inventoryCategories.remove(name);
+        inventoryCategoryIds.remove(name);
+        inventoryCategoryEmojis.remove(name);
+      });
+      _inventoryFeedback('Category moved to deleted items.');
+      unawaited(_openManageCategories());
+    } catch (error) {
+      _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+          isError: true);
+    }
+  }
+
+  Future<void> _restoreCategory(InventoryCategory category) async {
+    try {
+      await InventoryApiService().restoreCategory(id: category.id);
+      if (!mounted) return;
+      setState(() => deletedInventoryCategories
+          .removeWhere((item) => item.id == category.id));
+      await _loadApiCategories();
+      _inventoryFeedback('Category restored.');
+    } catch (error) {
+      _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+          isError: true);
+    }
+  }
+
+  Future<void> _createManagedCategory() async {
+    final name = newCategoryName.trim();
+    if (name.isEmpty) return;
+    try {
+      final category = await InventoryApiService()
+          .createCategory(name: name, emoji: newCategoryEmoji);
+      if (!mounted) return;
+      setState(() {
+        inventoryCategories.add(category.name);
+        inventoryCategoryIds[category.name] = category.id;
+        inventoryCategoryEmojis[category.name] = category.emoji ?? '📦';
+        newCategoryName = '';
+        newCategoryEmoji = '📦';
+      });
+      _inventoryFeedback('Category added.');
+    } catch (error) {
+      _inventoryFeedback(error.toString().replaceFirst('Exception: ', ''),
+          isError: true);
     }
   }
 
@@ -6418,6 +6867,18 @@ class _ProductScreenState extends State<ProductScreen> {
           'minimumStock': reorder,
           'emoji': emoji,
         });
+      } else if (editProduct!.id != null) {
+        await InventoryApiService().updateProduct({
+          'id': editProduct!.id,
+          'name': name,
+          'categoryId': categoryId,
+          'barcode': barcode,
+          'costPrice': cost,
+          'sellingPrice': price,
+          'stock': stock,
+          'minimumStock': reorder,
+          'emoji': emoji,
+        });
       }
     } catch (error) {
       if (mounted) {
@@ -6484,6 +6945,7 @@ class _ProductScreenState extends State<ProductScreen> {
     if (widget.title == 'Inventory & Stock') {
       if (showAddCategory) return _inventoryAddCategory();
       if (showAddProduct) return _inventoryAddProduct();
+      if (showManageCategories) return _inventoryManageCategories();
       if (selected != null) return _inventoryDetail(selected!);
       return _inventoryList();
     }
@@ -6498,108 +6960,161 @@ class _ProductScreenState extends State<ProductScreen> {
     final cartTotal = products
         .where((p) => cart.containsKey(p.name))
         .fold(0, (sum, p) => sum + p.price * cart[p.name]!);
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(widget.title,
-                style:
-                    const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: TextField(
-            onChanged: (value) => setState(() => search = value),
-            decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.search),
-              hintText: 'Search products...',
-              filled: true,
-              border: OutlineInputBorder(borderSide: BorderSide.none),
-            ),
-          ),
-        ),
-        if (widget.title == 'Point of Sale')
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cartBarWidth = constraints.maxWidth - 24;
+        return Stack(
+          children: [
+            Column(
               children: [
-                'All',
-                'Flour',
-                'Oils',
-                'Sugar',
-                'Dairy',
-                'Pharma',
-                'Beverages',
-                'Spreads',
-                'Spices',
-                'Bakery'
-              ]
-                  .map((value) => Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(
-                            label: Text(value),
-                            selected: category == value,
-                            onSelected: (_) =>
-                                setState(() => category = value)),
-                      ))
-                  .toList(),
-            ),
-          ),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.all(12),
-            children: visible.map((product) {
-              return Card(
-                child: ListTile(
-                  onTap: widget.title == 'Inventory & Stock'
-                      ? () => setState(() => selected = product)
-                      : null,
-                  leading:
-                      Text(product.emoji, style: const TextStyle(fontSize: 26)),
-                  title: Text(product.name),
-                  subtitle: Text('${product.category} · KSh ${product.price}'),
-                  trailing: widget.title == 'Point of Sale'
-                      ? FilledButton(
-                          onPressed: () => setState(() => cart[product.name] =
-                              (cart[product.name] ?? 0) + 1),
-                          child: Text('KSh ${product.price}'))
-                      : Text('${product.stock} in stock',
-                          style: TextStyle(
-                              color: product.stock <= 5 ? Colors.red : muted,
-                              fontWeight: FontWeight.w600)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(widget.title,
+                        style: const TextStyle(
+                            fontSize: 24, fontWeight: FontWeight.w800)),
+                  ),
                 ),
-              );
-            }).toList(),
-          ),
-        ),
-        if (widget.title == 'Point of Sale' && cartCount > 0)
-          Material(
-            color: navy,
-            child: ListTile(
-              leading: const Icon(Icons.shopping_bag, color: Colors.white),
-              title: Text('$cartCount items in cart',
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: Text('KSh $cartTotal',
-                  style: const TextStyle(color: Colors.white70)),
-              trailing: FilledButton.tonal(
-                  onPressed: () => _showCheckout(context, cartTotal),
-                  child: const Text('Checkout')),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextField(
+                    onChanged: (value) => setState(() => search = value),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'Search products...',
+                      filled: true,
+                      border: OutlineInputBorder(borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                if (widget.title == 'Point of Sale')
+                  SizedBox(
+                    height: 44,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 6),
+                      children: [
+                        'All',
+                        'Flour',
+                        'Oils',
+                        'Sugar',
+                        'Dairy',
+                        'Pharma',
+                        'Beverages',
+                        'Spreads',
+                        'Spices',
+                        'Bakery'
+                      ]
+                          .map((value) => Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ChoiceChip(
+                                    label: Text(value),
+                                    selected: category == value,
+                                    onSelected: (_) =>
+                                        setState(() => category = value)),
+                              ))
+                          .toList(),
+                    ),
+                  ),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.all(12),
+                    children: visible.map((product) {
+                      return Card(
+                        child: ListTile(
+                          onTap: widget.title == 'Inventory & Stock'
+                              ? () => setState(() => selected = product)
+                              : null,
+                          leading: Text(product.emoji,
+                              style: const TextStyle(fontSize: 26)),
+                          title: Text(product.name),
+                          subtitle: Text(
+                              '${product.category} · KSh ${product.price}'),
+                          trailing: widget.title == 'Point of Sale'
+                              ? FilledButton(
+                                  onPressed: () => setState(() =>
+                                      cart[product.name] =
+                                          (cart[product.name] ?? 0) + 1),
+                                  child: Text('KSh ${product.price}'))
+                              : Text('${product.stock} in stock',
+                                  style: TextStyle(
+                                      color: product.stock <= 5
+                                          ? Colors.red
+                                          : muted,
+                                      fontWeight: FontWeight.w600)),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
             ),
-          ),
-      ],
+            if (widget.title == 'Point of Sale' && cartCount > 0)
+              Positioned(
+                left: _cartBarOffset.dx.clamp(0.0, 24.0).toDouble(),
+                bottom: _cartBarOffset.dy
+                    .clamp(0.0, constraints.maxHeight - 72)
+                    .toDouble(),
+                child: GestureDetector(
+                  onPanUpdate: (details) => setState(() {
+                    // The vertical offset is measured from the bottom, hence
+                    // the inverse delta when the customer drags downward.
+                    _cartBarOffset = Offset(
+                      (_cartBarOffset.dx + details.delta.dx)
+                          .clamp(0.0, 24.0)
+                          .toDouble(),
+                      (_cartBarOffset.dy - details.delta.dy)
+                          .clamp(0.0, constraints.maxHeight - 72)
+                          .toDouble(),
+                    );
+                  }),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                      child: Material(
+                        color: navy.withValues(alpha: .78),
+                        child: Container(
+                          width: cartBarWidth,
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                                color: Colors.white.withValues(alpha: .22)),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: ListTile(
+                            leading: const Icon(Icons.shopping_bag,
+                                color: Colors.white),
+                            title: Text('$cartCount items in cart',
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold)),
+                            subtitle: Text('KSh $cartTotal',
+                                style: const TextStyle(color: Colors.white70)),
+                            trailing: FilledButton.tonal(
+                              onPressed: () =>
+                                  _showCheckout(context, cartTotal),
+                              child: const Text('View cart'),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
   Widget _inventoryList() {
     final criticalCount = products.where((p) => p.status == 'critical').length;
     final lowCount = products.where((p) => p.status == 'low').length;
-    final filtered = products.where((p) {
+    final inventoryProducts = showDeletedProducts ? deletedProducts : products;
+    final filtered = inventoryProducts.where((p) {
       final matchSearch = p.name.toLowerCase().contains(search.toLowerCase());
       final matchFilter = filter == 'all' ||
           p.status == filter ||
@@ -6634,8 +7149,7 @@ class _ProductScreenState extends State<ProductScreen> {
                         Row(
                           children: [
                             TextButton(
-                              onPressed: () =>
-                                  setState(() => showAddCategory = true),
+                              onPressed: () => _openManageCategories,
                               style: TextButton.styleFrom(
                                 backgroundColor:
                                     Colors.white.withValues(alpha: 0.12),
@@ -6645,31 +7159,32 @@ class _ProductScreenState extends State<ProductScreen> {
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 12, vertical: 8),
                               ),
-                              child: const Text('+ Category',
+                              child: const Text('Categories',
                                   style: TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w700)),
                             ),
                             const SizedBox(width: 8),
-                            TextButton(
-                              onPressed: () {
-                                _resetProductForm();
-                                editProduct = null;
-                                setState(() => showAddProduct = true);
-                              },
-                              style: TextButton.styleFrom(
-                                backgroundColor: gold,
-                                foregroundColor: ink,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
+                            if (!showDeletedProducts)
+                              TextButton(
+                                onPressed: () {
+                                  _resetProductForm();
+                                  editProduct = null;
+                                  setState(() => showAddProduct = true);
+                                },
+                                style: TextButton.styleFrom(
+                                  backgroundColor: gold,
+                                  foregroundColor: ink,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 8),
+                                ),
+                                child: const Text('+ Product',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800)),
                               ),
-                              child: const Text('+ Product',
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800)),
-                            ),
                           ],
                         ),
                       ],
@@ -6753,7 +7268,7 @@ class _ProductScreenState extends State<ProductScreen> {
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
-                  children: filtered.map((product) {
+                  children: filtered.map<Widget>((product) {
                     final badgeColor = _statusBadgeBg(product.status);
                     final badgeTextColor = _statusBadgeText(product.status);
                     return Container(
@@ -6770,7 +7285,9 @@ class _ProductScreenState extends State<ProductScreen> {
                         ],
                       ),
                       child: InkWell(
-                        onTap: () => setState(() => selected = product),
+                        onTap: showDeletedProducts
+                            ? null
+                            : () => setState(() => selected = product),
                         child: Row(
                           children: [
                             Container(
@@ -6833,30 +7350,154 @@ class _ProductScreenState extends State<ProductScreen> {
                                 ),
                               ],
                             ),
+                            const SizedBox(width: 6),
+                            if (showDeletedProducts)
+                              TextButton(
+                                onPressed: isInventoryMutationInProgress
+                                    ? null
+                                    : () => _restoreProduct(product),
+                                style: TextButton.styleFrom(
+                                  backgroundColor: const Color(0xFFE9F7EE),
+                                  foregroundColor: const Color(0xFF2E7D32),
+                                  minimumSize: const Size(0, 32),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10),
+                                ),
+                                child: const Text('Restore',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700)),
+                              )
+                            else
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Edit ${product.name}',
+                                    onPressed: () {
+                                      productForm
+                                        ..update('name', (_) => product.name)
+                                        ..update(
+                                            'category', (_) => product.category)
+                                        ..update('barcode',
+                                            (_) => product.barcode ?? '')
+                                        ..update('cost',
+                                            (_) => product.cost.toString())
+                                        ..update('price',
+                                            (_) => product.price.toString())
+                                        ..update('stock',
+                                            (_) => product.stock.toString())
+                                        ..update('reorder',
+                                            (_) => product.reorder.toString())
+                                        ..update('emoji', (_) => product.emoji);
+                                      setState(() {
+                                        editProduct = product;
+                                        showAddProduct = true;
+                                      });
+                                    },
+                                    style: IconButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFFE3EAF8),
+                                        foregroundColor: navy,
+                                        fixedSize: const Size(30, 30)),
+                                    icon: const Icon(Icons.edit_outlined,
+                                        size: 15),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  IconButton(
+                                    tooltip: 'Delete ${product.name}',
+                                    onPressed: isInventoryMutationInProgress
+                                        ? null
+                                        : () => _softDeleteProduct(product),
+                                    style: IconButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFFFFEBEE),
+                                        foregroundColor:
+                                            const Color(0xFFD32F2F),
+                                        fixedSize: const Size(30, 30)),
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 15),
+                                  ),
+                                ],
+                              ),
                           ],
                         ),
                       ),
                     );
-                  }).toList(),
+                  }).toList()
+                    ..addAll([
+                      Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        padding: const EdgeInsets.only(top: 12),
+                        decoration: const BoxDecoration(
+                            border: Border(
+                                top: BorderSide(color: Color(0xFFF0F3F9)))),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                                '${showDeletedProducts ? deletedProducts.length : deletedProducts.length} deleted product${deletedProducts.length == 1 ? '' : 's'}',
+                                style: const TextStyle(
+                                    color: muted,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500)),
+                            TextButton(
+                              onPressed: _toggleDeletedProducts,
+                              style: TextButton.styleFrom(
+                                  backgroundColor: showDeletedProducts
+                                      ? const Color(0xFFE3EAF8)
+                                      : const Color(0xFFF0F3F9),
+                                  foregroundColor:
+                                      showDeletedProducts ? navy : muted,
+                                  minimumSize: const Size(0, 32),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12)),
+                              child: Text(
+                                  showDeletedProducts
+                                      ? 'Hide deleted'
+                                      : 'Show deleted',
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextButton.icon(
+                        onPressed: _openManageCategories,
+                        style: TextButton.styleFrom(
+                            backgroundColor: const Color(0xFFF0F3F9),
+                            foregroundColor: muted,
+                            minimumSize: const Size(double.infinity, 46),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12))),
+                        icon: const Icon(Icons.format_list_bulleted, size: 16),
+                        label: const Text('Manage Categories',
+                            style: TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w700)),
+                      ),
+                    ]),
                 ),
               ),
             ],
           ),
-          Positioned(
-            right: 16,
-            bottom: 80,
-            child: FloatingActionButton(
-              onPressed: () {
-                _resetProductForm();
-                editProduct = null;
-                setState(() => showAddProduct = true);
-              },
-              backgroundColor: const Color(0xFFD4AF37),
-              foregroundColor: ink,
-              tooltip: 'Add Product',
-              child: const Icon(Icons.add),
+          if (!showDeletedProducts)
+            Positioned(
+              right: 16,
+              bottom: 80,
+              child: FloatingActionButton(
+                onPressed: () {
+                  _resetProductForm();
+                  editProduct = null;
+                  setState(() => showAddProduct = true);
+                },
+                backgroundColor: const Color(0xFFD4AF37),
+                foregroundColor: ink,
+                tooltip: 'Add Product',
+                child: const Icon(Icons.add),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -7099,6 +7740,173 @@ class _ProductScreenState extends State<ProductScreen> {
                     color: ink, fontSize: 12, fontWeight: FontWeight.w700)),
           ],
         ),
+      );
+
+  Widget _inventoryManageCategories() => Container(
+        color: const Color(0xFFF5F7FA),
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 52, 16, 18),
+              decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [ink, navy])),
+              child: Row(children: [
+                IconButton(
+                  onPressed: () => setState(() => showManageCategories = false),
+                  style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.12),
+                      foregroundColor: Colors.white,
+                      fixedSize: const Size(36, 36)),
+                  icon: const Icon(Icons.arrow_back),
+                ),
+                const SizedBox(width: 12),
+                const Text('Manage Categories',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                children: [
+                  _categoryDirectoryCard(
+                      'Active Categories',
+                      inventoryCategories
+                          .map((name) => Row(
+                                children: [
+                                  Text(_categoryEmoji(name),
+                                      style: const TextStyle(fontSize: 18)),
+                                  const SizedBox(width: 9),
+                                  Expanded(
+                                      child: Text(name,
+                                          style: const TextStyle(
+                                              color: ink,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600))),
+                                  Text('${_categoryItemCount(name)} items',
+                                      style: const TextStyle(
+                                          color: muted, fontSize: 11)),
+                                  IconButton(
+                                      onPressed: () => _editCategory(name),
+                                      style: IconButton.styleFrom(
+                                          backgroundColor:
+                                              const Color(0xFFE3EAF8),
+                                          foregroundColor: navy,
+                                          fixedSize: const Size(30, 30)),
+                                      icon: const Icon(Icons.edit_outlined,
+                                          size: 15)),
+                                  const SizedBox(width: 6),
+                                  IconButton(
+                                      onPressed: () => _deleteCategory(name),
+                                      style: IconButton.styleFrom(
+                                          backgroundColor:
+                                              const Color(0xFFFFEBEE),
+                                          foregroundColor:
+                                              const Color(0xFFD32F2F),
+                                          fixedSize: const Size(30, 30)),
+                                      icon: const Icon(Icons.delete_outline,
+                                          size: 15)),
+                                ],
+                              ))
+                          .toList()),
+                  const SizedBox(height: 14),
+                  _categoryDirectoryCard(
+                      'Deleted Categories',
+                      deletedInventoryCategories
+                          .map((category) => Row(children: [
+                                Expanded(
+                                    child: Text(
+                                        '${category.emoji ?? '📦'} ${category.name}',
+                                        style: const TextStyle(
+                                            color: muted,
+                                            fontSize: 13,
+                                            decoration:
+                                                TextDecoration.lineThrough))),
+                                TextButton(
+                                    onPressed: () => _restoreCategory(category),
+                                    style: TextButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFFE9F7EE),
+                                        foregroundColor:
+                                            const Color(0xFF2E7D32),
+                                        minimumSize: const Size(0, 32),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10)),
+                                    child: const Text('Restore',
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700))),
+                              ]))
+                          .toList()),
+                  const SizedBox(height: 14),
+                  _categoryDirectoryCard('Add New Category', [
+                    Row(children: [
+                      Expanded(
+                        child: TextField(
+                          onChanged: (value) => newCategoryName = value,
+                          onSubmitted: (_) => _createManagedCategory(),
+                          decoration: const InputDecoration(
+                            hintText: 'Category name...',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: _createManagedCategory,
+                        style: IconButton.styleFrom(
+                            backgroundColor: navy,
+                            foregroundColor: Colors.white,
+                            fixedSize: const Size(42, 42)),
+                        icon: const Icon(Icons.add),
+                      ),
+                    ]),
+                  ]),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
+  Widget _categoryDirectoryCard(String title, List<Widget> rows) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))
+            ]),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title,
+              style: const TextStyle(
+                  color: muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 8),
+          if (rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('No categories yet.',
+                  style: TextStyle(color: muted, fontSize: 13)),
+            )
+          else
+            ...List.generate(
+                rows.length,
+                (index) => Column(children: [
+                      Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          child: rows[index]),
+                      if (index < rows.length - 1)
+                        const Divider(height: 1, color: Color(0xFFF0F3F9)),
+                    ])),
+        ]),
       );
 
   Widget _inventoryAddCategory() => Container(
@@ -8838,7 +9646,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
     }).fold<double>(0, (sum, sale) => sum + _asDouble(sale['total']));
   }
 
-  Widget _header(String title, {Widget? action}) => Container(
+  Widget _header(String title, {String? subtitle, Widget? action}) => Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(16, 46, 16, 16),
         decoration:
@@ -9409,7 +10217,14 @@ class _MoreScreenState extends State<MoreScreen> {
   @override
   void initState() {
     super.initState();
+    profileChangeNotice.addListener(_loadProfile);
     _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    profileChangeNotice.removeListener(_loadProfile);
+    super.dispose();
   }
 
   Future<void> _loadProfile() async {
@@ -9696,26 +10511,36 @@ class _MoreScreenState extends State<MoreScreen> {
                 ? null
                 : _menuSection(section['section'] as String, items);
           }).whereType<Widget>(),
-          const SizedBox(height: 12),
-          TextButton.icon(
-            onPressed: widget.onCloseShift,
-            icon: const Icon(Icons.lock_clock, color: Color(0xFF2E7D32)),
-            label: const Text('Close Shift Session',
-                style: TextStyle(
-                    color: Color(0xFF2E7D32),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700)),
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFFE8F5E9),
-              foregroundColor: const Color(0xFF2E7D32),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-                side: const BorderSide(color: Color(0xFFC8E6C9)),
-              ),
-            ),
+          ValueListenableBuilder<ActiveShiftNotice?>(
+            valueListenable: activeShiftNotice,
+            builder: (context, activeShift, _) {
+              if (activeShift == null) return const SizedBox.shrink();
+              return Column(children: [
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: widget.onCloseShift,
+                  icon: const Icon(Icons.lock_clock,
+                      color: Color(0xFF2E7D32), size: 17),
+                  label: const Text('Close Shift Session',
+                      style: TextStyle(
+                          color: Color(0xFF2E7D32),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700)),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size.fromHeight(42),
+                    backgroundColor: const Color(0xFFE8F5E9),
+                    foregroundColor: const Color(0xFF2E7D32),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: Color(0xFFC8E6C9)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ]);
+            },
           ),
-          const SizedBox(height: 10),
           TextButton.icon(
             onPressed: widget.onLogout,
             icon: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
@@ -9848,12 +10673,14 @@ class SettingsDetailScreen extends StatefulWidget {
     required this.isDarkMode,
     required this.onThemeChanged,
     this.initialPage = 'settings',
+    this.securityFromProfile = false,
     super.key,
   });
   final VoidCallback onBack;
   final bool isDarkMode;
   final ValueChanged<bool> onThemeChanged;
   final String initialPage;
+  final bool securityFromProfile;
 
   @override
   State<SettingsDetailScreen> createState() => _SettingsDetailScreenState();
@@ -9861,6 +10688,8 @@ class SettingsDetailScreen extends StatefulWidget {
 
 class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   final SettingsService _service = SettingsService();
+  final AuthService _authService = AuthService();
+  final MpesaSmsConsentService _mpesaSmsConsent = MpesaSmsConsentService();
   final TextEditingController _taxPinController = TextEditingController();
   Map<String, dynamic> _business = const {};
   Map<String, dynamic> _preferences = const {};
@@ -9871,6 +10700,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   bool _loading = true;
   bool _editingTaxPin = false;
   bool _showCurrencyPicker = false;
+  bool _smsReconciliationEnabled = false;
   String _page = 'settings';
   String _twoFactorStep = 'intro';
   String _twoFactorMethod = 'totp';
@@ -9881,6 +10711,27 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
     'card': false,
     'credit': true,
   };
+  Map<String, String> _mpesaConfig = {
+    'type': 'till',
+    'till': '123456',
+    'paybill': '',
+    'account': '',
+  };
+  Map<String, String> _bankConfig = {'name': '', 'account': '', 'branch': ''};
+  final TextEditingController _tillNumberController =
+      TextEditingController(text: '123456');
+  final TextEditingController _paybillNumberController =
+      TextEditingController();
+  final TextEditingController _mpesaAccountController = TextEditingController();
+  final TextEditingController _bankNameController = TextEditingController();
+  final TextEditingController _bankAccountController = TextEditingController();
+  final TextEditingController _bankBranchController = TextEditingController();
+  final TextEditingController _creditLimitController =
+      TextEditingController(text: '5000');
+  bool _roundCash = false;
+  String _creditLimit = '5000';
+  bool _requireApproval = true;
+  String? _configuredPaymentMethod;
   List<Map<String, String>> _sessions = [
     {
       'id': 'current',
@@ -9918,14 +10769,26 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   @override
   void dispose() {
     _taxPinController.dispose();
+    _tillNumberController.dispose();
+    _paybillNumberController.dispose();
+    _mpesaAccountController.dispose();
+    _bankNameController.dispose();
+    _bankAccountController.dispose();
+    _bankBranchController.dispose();
+    _creditLimitController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
     try {
       final result = await _service.load();
+      final businessId = await _authService.getActiveBusinessId();
+      final smsEnabled = businessId != null && businessId.isNotEmpty
+          ? await _mpesaSmsConsent.isEnabled(businessId)
+          : false;
       if (!mounted) return;
       _apply(result);
+      setState(() => _smsReconciliationEnabled = smsEnabled);
     } on Object catch (error) {
       if (!mounted) return;
       setState(() {
@@ -9954,6 +10817,36 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
           _paymentMethods[key] = methods[key] == true;
         }
       }
+      final mpesa = paymentConfig?['mpesaConfig'] as Map?;
+      if (mpesa != null) {
+        _mpesaConfig = {
+          ..._mpesaConfig,
+          ...mpesa.map((key, value) => MapEntry('$key', '$value')),
+        };
+      }
+      final bank = paymentConfig?['bankConfig'] as Map?;
+      if (bank != null) {
+        _bankConfig = {
+          ..._bankConfig,
+          ...bank.map((key, value) => MapEntry('$key', '$value')),
+        };
+      }
+      if (paymentConfig?['roundCash'] is bool) {
+        _roundCash = paymentConfig!['roundCash'] as bool;
+      }
+      if (paymentConfig?['creditLimit'] != null) {
+        _creditLimit = paymentConfig!['creditLimit'].toString();
+      }
+      if (paymentConfig?['requireApproval'] is bool) {
+        _requireApproval = paymentConfig!['requireApproval'] as bool;
+      }
+      _tillNumberController.text = _mpesaConfig['till'] ?? '';
+      _paybillNumberController.text = _mpesaConfig['paybill'] ?? '';
+      _mpesaAccountController.text = _mpesaConfig['account'] ?? '';
+      _bankNameController.text = _bankConfig['name'] ?? '';
+      _bankAccountController.text = _bankConfig['account'] ?? '';
+      _bankBranchController.text = _bankConfig['branch'] ?? '';
+      _creditLimitController.text = _creditLimit;
       _taxPinController.text = _business['taxPin']?.toString() ?? '';
       _loading = false;
       _error = null;
@@ -9984,6 +10877,87 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
   void _setPreference(String key, bool value) {
     setState(() => _preferences = {..._preferences, key: value});
     unawaited(_save({key: value}));
+  }
+
+  void _backFromSecurity() {
+    if (widget.securityFromProfile) {
+      widget.onBack();
+      return;
+    }
+    setState(() => _page = 'settings');
+  }
+
+  Future<void> _setSmsReconciliation(bool enabled) async {
+    final businessId = await _authService.getActiveBusinessId();
+    if (businessId == null || businessId.isEmpty || !mounted) return;
+    if (!enabled) {
+      await _mpesaSmsConsent.disable(businessId);
+      if (mounted) setState(() => _smsReconciliationEnabled = false);
+      return;
+    }
+
+    final consented = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enable M-Pesa SMS reconciliation?'),
+        content: const SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                  'MobiDuka can read M-Pesa payment confirmations on this device to reconcile Till or Paybill payments while offline.'),
+              SizedBox(height: 12),
+              Text('What we use',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              SizedBox(height: 4),
+              Text(
+                  'Only M-Pesa confirmation messages are parsed. Their receipt code, amount, and payer details are stored locally for reconciliation.'),
+              SizedBox(height: 12),
+              Text('Your control',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              SizedBox(height: 4),
+              Text(
+                  'You can turn this off at any time. Manual M-Pesa receipt-code entry remains available at checkout.'),
+              SizedBox(height: 12),
+              Text('Privacy policy: https://mobiduka.vercel.app/privacy',
+                  style: TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(const ClipboardData(
+                  text: 'https://mobiduka.vercel.app/privacy'));
+              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('Privacy policy link copied.')));
+            },
+            child: const Text('Copy privacy link'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Enable'),
+          ),
+        ],
+      ),
+    );
+    if (consented != true || !mounted) return;
+
+    final granted = await _mpesaSmsConsent.enable(businessId);
+    if (!mounted) return;
+    setState(() => _smsReconciliationEnabled = granted);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      backgroundColor:
+          granted ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F),
+      content: Text(granted
+          ? 'M-Pesa SMS reconciliation enabled for this device.'
+          : 'SMS access was not granted. You can continue with manual receipt codes.'),
+    ));
   }
 
   void _simulate(String key) {
@@ -10051,20 +11025,23 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
         ]),
       );
 
-  Widget _themeButton(String mode, IconData icon, String label) {
+  Widget _themeButton(String mode, String label) {
     final active = _themeMode == mode;
     return Expanded(
-        child: OutlinedButton.icon(
+        child: OutlinedButton(
       onPressed: () => _setTheme(mode),
-      icon: Icon(icon, size: 16),
-      label: Text(label),
+      child: Text(label),
       style: OutlinedButton.styleFrom(
         foregroundColor: active ? navy : _muted,
         backgroundColor: active ? navy.withValues(alpha: .10) : _panel,
         side:
             BorderSide(color: active ? navy : _divider, width: active ? 2 : 1),
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        minimumSize: const Size(0, 42),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+        textStyle: TextStyle(
+            fontSize: 12,
+            fontWeight: active ? FontWeight.w700 : FontWeight.w500),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     ));
   }
@@ -10120,6 +11097,28 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
               onChanged: (next) => _setPreference(key, next))
         ]));
   }
+
+  Widget _smsReconciliationRow() => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      child: Row(children: [
+        const Icon(Icons.sms_outlined, color: Color(0xFF2E7D32)),
+        const SizedBox(width: 12),
+        Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('M-Pesa SMS reconciliation',
+              style: TextStyle(
+                  color: _text, fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          Text(
+              'Optional · read M-Pesa confirmations only while this app is open',
+              style: TextStyle(color: _muted, fontSize: 11))
+        ])),
+        Switch(
+            value: _smsReconciliationEnabled,
+            activeThumbColor: navy,
+            onChanged: _setSmsReconciliation)
+      ]));
 
   Widget _actionRow(IconData icon, Color color, String label, String sub,
       {VoidCallback? onTap, bool last = false, String? state}) {
@@ -10198,39 +11197,21 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
 
   Widget _paymentMethodsView() {
     const details = [
-      (
-        'cash',
-        'Cash',
-        'Physical cash at counter',
-        Icons.payments_outlined,
-        Color(0xFF2E7D32)
-      ),
-      (
-        'mpesa',
-        'M-Pesa',
-        'Mobile money (Safaricom)',
-        Icons.phone_android,
-        Color(0xFF2E7D32)
-      ),
-      (
-        'bank',
-        'Bank Transfer',
-        'Direct bank / RTGS',
-        Icons.account_balance_outlined,
-        Color(0xFF0288D1)
-      ),
+      ('cash', 'Cash', 'Physical cash at counter', '💵', Color(0xFF2E7D32)),
+      ('mpesa', 'M-Pesa', 'Mobile money (Safaricom)', '📱', Color(0xFF2E7D32)),
+      ('bank', 'Bank Transfer', 'Direct bank / RTGS', '🏦', Color(0xFF0288D1)),
       (
         'card',
         'Card (Visa/MC)',
         'POS terminal / tap-to-pay',
-        Icons.credit_card,
+        '💳',
         Color(0xFF7B1FA2)
       ),
       (
         'credit',
         'Credit / Tab',
         'Defer payment to customer account',
-        Icons.receipt_long_outlined,
+        '📋',
         Color(0xFFD32F2F)
       ),
     ];
@@ -10269,43 +11250,77 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                 _section('Accepted Payment Methods'),
                 _card(details.asMap().entries.map((entry) {
                   final item = entry.value;
-                  final enabled = _paymentMethods[item.$1] == true;
-                  return Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 13),
-                      decoration: BoxDecoration(
-                          border: Border(
-                              bottom: BorderSide(
-                                  color: entry.key == details.length - 1
-                                      ? Colors.transparent
-                                      : _divider))),
-                      child: Row(children: [
-                        Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                                color: item.$5.withValues(alpha: .12),
-                                borderRadius: BorderRadius.circular(8)),
-                            child: Icon(item.$4, color: item.$5)),
-                        const SizedBox(width: 12),
-                        Expanded(
-                            child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                              Text(item.$2,
-                                  style: TextStyle(
-                                      color: _text,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w800)),
-                              Text(item.$3,
-                                  style: TextStyle(color: _muted, fontSize: 11))
-                            ])),
-                        Switch(
-                            value: enabled,
-                            activeThumbColor: item.$5,
-                            onChanged: (value) => setState(
-                                () => _paymentMethods[item.$1] = value))
-                      ]));
+                  final id = item.$1;
+                  final enabled = _paymentMethods[id] == true;
+                  final configurable = id == 'cash' ||
+                      id == 'mpesa' ||
+                      id == 'bank' ||
+                      id == 'credit';
+                  final expanded = _configuredPaymentMethod == id;
+                  return Column(children: [
+                    Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 13),
+                        decoration: BoxDecoration(
+                            border:
+                                Border(bottom: BorderSide(color: _divider))),
+                        child: Row(children: [
+                          Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                  color: item.$5.withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(12)),
+                              alignment: Alignment.center,
+                              child: Text(item.$4,
+                                  style: const TextStyle(fontSize: 22))),
+                          const SizedBox(width: 12),
+                          Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text(item.$2,
+                                    style: TextStyle(
+                                        color: _text,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 1),
+                                Text(item.$3,
+                                    style:
+                                        TextStyle(color: _muted, fontSize: 12))
+                              ])),
+                          if (enabled && configurable) ...[
+                            TextButton(
+                                onPressed: () => setState(() =>
+                                    _configuredPaymentMethod =
+                                        expanded ? null : id),
+                                style: TextButton.styleFrom(
+                                    foregroundColor: _muted,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 4),
+                                    minimumSize: Size.zero,
+                                    side: BorderSide(color: _divider),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(8))),
+                                child: const Text('Configure',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600))),
+                            const SizedBox(width: 8),
+                          ],
+                          _paymentToggle(
+                              enabled,
+                              item.$5,
+                              (value) => setState(() {
+                                    _paymentMethods[id] = value;
+                                    if (!value && expanded) {
+                                      _configuredPaymentMethod = null;
+                                    }
+                                  }))
+                        ])),
+                    if (enabled && expanded) _paymentConfiguration(id, item.$5),
+                  ]);
                 }).toList()),
                 const SizedBox(height: 4),
                 Container(
@@ -10331,7 +11346,14 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                 const SizedBox(height: 18),
                 TextButton(
                     onPressed: () => unawaited(_save({
-                          'paymentConfig': {'methods': _paymentMethods}
+                          'paymentConfig': {
+                            'methods': _paymentMethods,
+                            'mpesaConfig': _mpesaConfig,
+                            'bankConfig': _bankConfig,
+                            'roundCash': _roundCash,
+                            'creditLimit': _creditLimit,
+                            'requireApproval': _requireApproval,
+                          }
                         })),
                     style: TextButton.styleFrom(
                         backgroundColor: navy,
@@ -10343,6 +11365,178 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                         style: TextStyle(fontWeight: FontWeight.w800))),
               ])),
         ]));
+  }
+
+  Widget _paymentToggle(
+          bool value, Color color, ValueChanged<bool> onChanged) =>
+      InkWell(
+          onTap: () => onChanged(!value),
+          borderRadius: BorderRadius.circular(14),
+          child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 48,
+              height: 27,
+              padding: const EdgeInsets.all(3),
+              alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+              decoration: BoxDecoration(
+                  color: value
+                      ? color
+                      : (widget.isDarkMode
+                          ? const Color(0xFF1A3366)
+                          : const Color(0xFFD0D7E8)),
+                  borderRadius: BorderRadius.circular(14)),
+              child: const DecoratedBox(
+                  decoration: BoxDecoration(
+                      color: Colors.white, shape: BoxShape.circle),
+                  child: SizedBox(width: 21, height: 21))));
+
+  Widget _paymentConfiguration(String method, Color color) {
+    Widget heading(String text) => Text(text,
+        style: TextStyle(
+            color: _muted, fontSize: 12, fontWeight: FontWeight.w700));
+    Widget field(String key, String label, TextEditingController controller,
+            ValueChanged<String> onChanged,
+            {TextInputType? keyboardType, String? hintText}) =>
+        Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label,
+                  style: TextStyle(
+                      color: _muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              TextField(
+                  key: ValueKey(key),
+                  controller: controller,
+                  keyboardType: keyboardType,
+                  onChanged: onChanged,
+                  decoration: InputDecoration(
+                      isDense: true,
+                      hintText: hintText,
+                      hintStyle:
+                          TextStyle(color: _muted.withValues(alpha: 0.65)),
+                      border: const OutlineInputBorder()))
+            ]));
+    return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: widget.isDarkMode
+                ? const Color(0xFF0B1930)
+                : const Color(0xFFF7F9FC),
+            border: Border(bottom: BorderSide(color: _divider))),
+        child: switch (method) {
+          'cash' => Row(children: [
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text('Round to nearest KSh 5',
+                        style: TextStyle(
+                            color: _text,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Text('Helps cashiers avoid giving small change',
+                        style: TextStyle(color: _muted, fontSize: 11))
+                  ])),
+              _paymentToggle(_roundCash, color,
+                  (value) => setState(() => _roundCash = value))
+            ]),
+          'mpesa' =>
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              heading('M-PESA CONFIGURATION'),
+              const SizedBox(height: 10),
+              Row(
+                  children: ['till', 'paybill'].map((type) {
+                final selected = _mpesaConfig['type'] == type;
+                return Expanded(
+                    child: Padding(
+                        padding: EdgeInsets.only(right: type == 'till' ? 8 : 0),
+                        child: OutlinedButton(
+                            onPressed: () =>
+                                setState(() => _mpesaConfig['type'] = type),
+                            style: OutlinedButton.styleFrom(
+                                foregroundColor: selected ? color : _muted,
+                                backgroundColor: selected
+                                    ? color.withValues(alpha: .08)
+                                    : _panel,
+                                side: BorderSide(
+                                    color: selected ? color : _divider,
+                                    width: selected ? 2 : 1),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10))),
+                            child: Text(
+                                type[0].toUpperCase() + type.substring(1)))));
+              }).toList()),
+              if (_mpesaConfig['type'] == 'till')
+                field('mpesa-till', 'Till Number', _tillNumberController,
+                    (value) => _mpesaConfig['till'] = value,
+                    keyboardType: TextInputType.number,
+                    hintText: 'e.g. 123456')
+              else
+                Row(children: [
+                  Expanded(
+                      child: field(
+                          'mpesa-paybill',
+                          'Paybill No.',
+                          _paybillNumberController,
+                          (value) => _mpesaConfig['paybill'] = value,
+                          keyboardType: TextInputType.number,
+                          hintText: 'e.g. 400200')),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: field(
+                          'mpesa-account',
+                          'Account No.',
+                          _mpesaAccountController,
+                          (value) => _mpesaConfig['account'] = value,
+                          hintText: 'Account')),
+                ])
+            ]),
+          'bank' =>
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              heading('BANK ACCOUNT DETAILS'),
+              field('bank-name', 'Bank Name', _bankNameController,
+                  (value) => _bankConfig['name'] = value,
+                  hintText: 'e.g. Equity Bank'),
+              field('bank-account', 'Account Number', _bankAccountController,
+                  (value) => _bankConfig['account'] = value,
+                  hintText: '0123456789'),
+              field('bank-branch', 'Branch', _bankBranchController,
+                  (value) => _bankConfig['branch'] = value,
+                  hintText: 'e.g. Nairobi CBD'),
+            ]),
+          'credit' =>
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              heading('CREDIT / TAB SETTINGS'),
+              field('credit-limit', 'Default Credit Limit (KSh)',
+                  _creditLimitController, (value) => _creditLimit = value,
+                  keyboardType: TextInputType.number,
+                  hintText: '5000'),
+              const SizedBox(height: 14),
+              Row(children: [
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text('Require manager approval',
+                          style: TextStyle(
+                              color: _text,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 2),
+                      Text('For credit sales above the limit',
+                          style: TextStyle(color: _muted, fontSize: 11))
+                    ])),
+                _paymentToggle(_requireApproval, color,
+                    (value) => setState(() => _requireApproval = value))
+              ])
+            ]),
+          _ => const SizedBox.shrink(),
+        });
   }
 
   Widget _sessionsView() {
@@ -10358,7 +11552,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                   gradient: LinearGradient(colors: [ink, navy])),
               child: Row(children: [
                 IconButton(
-                    onPressed: () => setState(() => _page = 'settings'),
+                    onPressed: _backFromSecurity,
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
                     style: IconButton.styleFrom(
                         backgroundColor: Colors.white24,
@@ -10516,7 +11710,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
               IconButton(
                   onPressed: () => setState(() {
                         if (intro || done) {
-                          _page = 'settings';
+                          if (widget.securityFromProfile) {
+                            widget.onBack();
+                          } else {
+                            _page = 'settings';
+                          }
                         } else {
                           _twoFactorStep = verify ? 'method' : 'intro';
                         }
@@ -10876,14 +12074,11 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                                           fontWeight: FontWeight.w700)),
                                   const SizedBox(height: 12),
                                   Row(children: [
-                                    _themeButton('light',
-                                        Icons.light_mode_outlined, 'Light'),
+                                    _themeButton('light', '☀️ Light'),
                                     const SizedBox(width: 8),
-                                    _themeButton('dark',
-                                        Icons.dark_mode_outlined, 'Dark'),
+                                    _themeButton('dark', '🌙 Dark'),
                                     const SizedBox(width: 8),
-                                    _themeButton('auto',
-                                        Icons.brightness_auto_outlined, 'Auto')
+                                    _themeButton('auto', '⚙️ Auto')
                                   ])
                                 ]))
                       ]),
@@ -11011,6 +12206,10 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                             'Accept M-Pesa payments',
                             last: true)
                       ]),
+                      if (!kIsWeb) ...[
+                        _section('M-Pesa Reconciliation'),
+                        _card([_smsReconciliationRow()]),
+                      ],
                       _section('Admin Area'),
                       _card([
                         _actionRow(
@@ -11029,19 +12228,6 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
                             const Color(0xFF2E7D32),
                             'Tax & Compliance',
                             'PIN: ${business['taxPin']?.toString() ?? '-'}',
-                            last: true)
-                      ]),
-                      _section('Security'),
-                      _card([
-                        _actionRow(Icons.phone_android_outlined, navy,
-                            'Active Sessions', '3 devices logged in',
-                            onTap: () => setState(() => _page = 'sessions')),
-                        _actionRow(
-                            Icons.security_outlined,
-                            const Color(0xFF2E7D32),
-                            'Two-Factor Auth',
-                            'Not enabled',
-                            onTap: () => setState(() => _page = 'twoFactor'),
                             last: true)
                       ]),
                       _section('Data Management'),
@@ -12203,6 +13389,8 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
   final _name = TextEditingController();
   final _phone = TextEditingController();
   final _email = TextEditingController();
+  final _store = TextEditingController();
+  final _branch = TextEditingController();
   final _currentPin = TextEditingController();
   final _newPin = TextEditingController();
   final _confirmPin = TextEditingController();
@@ -12227,6 +13415,8 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
       _name,
       _phone,
       _email,
+      _store,
+      _branch,
       _currentPin,
       _newPin,
       _confirmPin
@@ -12255,6 +13445,9 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
         _name.text = profile['name']?.toString() ?? '';
         _phone.text = profile['phone']?.toString() ?? '';
         _email.text = profile['email']?.toString() ?? '';
+        final business = profile['business'] as Map? ?? const {};
+        _store.text = business['name']?.toString() ?? '';
+        _branch.text = business['branch']?.toString() ?? '';
         _loading = false;
         _error = null;
       });
@@ -12264,15 +13457,23 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
       setState(() => _error = 'Full name is required.');
       return;
     }
+    if (_store.text.trim().isEmpty) {
+      setState(() => _error = 'Store name is required.');
+      return;
+    }
     setState(() => _saving = true);
     try {
       final profile = await _service.update(
           name: _name.text.trim(),
           phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
-          email: _email.text.trim().isEmpty ? null : _email.text.trim());
+          email: _email.text.trim().isEmpty ? null : _email.text.trim(),
+          businessName: _store.text.trim(),
+          businessBranch:
+              _branch.text.trim().isEmpty ? null : _branch.text.trim());
       if (!mounted) return;
       _apply(profile);
       setState(() => _editing = false);
+      profileChangeNotice.value++;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           backgroundColor: Color(0xFF2E7D32),
           content: Text('Profile updated successfully.')));
@@ -12556,7 +13757,8 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
           onBack: () => setState(() => _securityPage = null),
           isDarkMode: Theme.of(context).brightness == Brightness.dark,
           onThemeChanged: (_) {},
-          initialPage: _securityPage!);
+          initialPage: _securityPage!,
+          securityFromProfile: true);
     }
     if (_changingPin) return _pinView();
     final profile = _profile;
@@ -12654,6 +13856,11 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                         _field('Email Address', _email,
                             type: TextInputType.emailAddress,
                             editable: _editing),
+                      ]),
+                      _section('Store Information'),
+                      _card([
+                        _field('Store Name', _store, editable: _editing),
+                        _field('Branch', _branch, editable: _editing),
                         if (_editing)
                           SizedBox(
                               width: double.infinity,
@@ -12669,19 +13876,6 @@ class _UserProfileDetailScreenState extends State<UserProfileDetailScreen> {
                                               BorderRadius.circular(8))),
                                   child: Text(
                                       _saving ? 'Saving...' : 'Save Changes')))
-                      ]),
-                      _section('Store Information'),
-                      _card([
-                        _field(
-                            'Store Name',
-                            TextEditingController(
-                                text: business['name']?.toString() ?? ''),
-                            editable: false),
-                        _field(
-                            'Branch',
-                            TextEditingController(
-                                text: business['branch']?.toString() ?? ''),
-                            editable: false)
                       ]),
                       _section('Security'),
                       _card([
@@ -14012,7 +15206,7 @@ class _ExpenseTrackingScreenState extends State<ExpenseTrackingScreen> {
         'Logistics': Color(0xFFD32F2F)
       }[category] ??
       muted;
-  Widget _header(String title, {Widget? action}) => Container(
+  Widget _header(String title, {String? subtitle, Widget? action}) => Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 52, 16, 16),
       decoration:
@@ -16689,8 +17883,10 @@ class _EmployeeScreenState extends State<EmployeeScreen> {
 }
 
 class ShiftManagementScreen extends StatefulWidget {
-  const ShiftManagementScreen({required this.onBack, super.key});
+  const ShiftManagementScreen(
+      {required this.onBack, this.openActiveShift = false, super.key});
   final VoidCallback onBack;
+  final bool openActiveShift;
 
   @override
   State<ShiftManagementScreen> createState() => _ShiftManagementScreenState();
@@ -16714,6 +17910,7 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
   @override
   void initState() {
     super.initState();
+    _view = widget.openActiveShift ? 'active' : 'list';
     _liveController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
@@ -16862,7 +18059,7 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
     final time = DateTime.tryParse(raw?.toString() ?? '');
     return time == null
         ? '--:--'
-        : '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+        : '${(time.hour % 12 == 0 ? 12 : time.hour % 12).toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')} ${time.hour >= 12 ? 'PM' : 'AM'}';
   }
 
   DateTime _openedAt(Map<String, dynamic> session) =>
@@ -16870,7 +18067,7 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
       DateTime.fromMillisecondsSinceEpoch(0);
 
   String _name(Map? row) => row?['fullName']?.toString() ?? 'Unknown employee';
-  Widget _header(String title, {Widget? action}) => Container(
+  Widget _header(String title, {String? subtitle, Widget? action}) => Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 52, 16, 18),
       decoration:
@@ -16884,11 +18081,19 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
                 backgroundColor: Colors.white.withValues(alpha: .12))),
         const SizedBox(width: 12),
         Expanded(
-            child: Text(title,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800))),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800)),
+          if (subtitle != null) ...[
+            const SizedBox(height: 2),
+            Text(subtitle,
+                style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+          ],
+        ])),
         if (action != null) action
       ]));
   Widget _card({required Widget child}) => Container(
@@ -16912,112 +18117,352 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
           body: Column(children: [
             _header('Start New Shift'),
             Expanded(
-                child: ListView(padding: const EdgeInsets.all(16), children: [
-              const Text('Shift Type',
-                  style: TextStyle(
-                      color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              _card(
-                  child: Column(
-                      children: _types.map((type) {
-                final available = _availableNow(type);
-                final selected = _selectedType == type['id'];
-                return ListTile(
-                    enabled: available,
-                    onTap: () => available
-                        ? setState(() => _selectedType = type['id'].toString())
-                        : null,
-                    leading:
-                        Icon(Icons.schedule, color: selected ? navy : muted),
-                    title: Text('${type['name']} Shift'),
-                    subtitle: Text(
-                        '${type['scheduledStart']} - ${type['scheduledEnd']}'),
-                    trailing: selected
-                        ? const Icon(Icons.check_circle, color: navy)
-                        : null);
-              }).toList())),
-              const Text('Assign Cashier',
-                  style: TextStyle(
-                      color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              _card(
-                  child: Column(
-                      children: _availableEmployees
-                          .map((employee) => ListTile(
-                              onTap: () => setState(() => _selectedEmployee =
-                                  employee['id'].toString()),
-                              leading: CircleAvatar(
+                child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 100),
+                    children: [
+                  const Text('SHIFT TYPE',
+                      style: TextStyle(
+                          color: muted,
+                          fontSize: 11,
+                          letterSpacing: .6,
+                          fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x0F000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 2))
+                          ]),
+                      child: Column(
+                          children: _types.map((type) {
+                        final available = _availableNow(type);
+                        final selected =
+                            _selectedType == type['id']?.toString();
+                        final typeColor = _shiftColor(type['color']);
+                        return InkWell(
+                            onTap: available
+                                ? () => setState(
+                                    () => _selectedType = type['id'].toString())
+                                : null,
+                            child: Opacity(
+                              opacity: available ? 1 : .45,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 14),
+                                decoration: BoxDecoration(
+                                    color: selected
+                                        ? navy.withValues(alpha: .05)
+                                        : Colors.transparent,
+                                    border: Border(
+                                        bottom: BorderSide(
+                                            color: _types.last == type
+                                                ? Colors.transparent
+                                                : const Color(0xFFE8ECF4)))),
+                                child: Row(children: [
+                                  Container(
+                                      width: 44,
+                                      height: 44,
+                                      decoration: BoxDecoration(
+                                          color:
+                                              typeColor.withValues(alpha: .12),
+                                          borderRadius:
+                                              BorderRadius.circular(12)),
+                                      child: Center(
+                                          child: Text(
+                                              type['icon']?.toString() ?? '🕐',
+                                              style: const TextStyle(
+                                                  fontSize: 22)))),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                      child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                        Text('${type['name']} Shift',
+                                            style: const TextStyle(
+                                                color: ink,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w800)),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                            '${type['scheduledStart']} – ${type['scheduledEnd']}',
+                                            style: const TextStyle(
+                                                color: muted, fontSize: 12)),
+                                      ])),
+                                  Container(
+                                    width: 22,
+                                    height: 22,
+                                    decoration: BoxDecoration(
+                                        color: selected
+                                            ? navy
+                                            : Colors.transparent,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                            color: selected
+                                                ? navy
+                                                : const Color(0xFFB0BAD3),
+                                            width: 2)),
+                                    child: selected
+                                        ? const Center(
+                                            child: DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                    color: Colors.white,
+                                                    shape: BoxShape.circle),
+                                                child: SizedBox(
+                                                    width: 8, height: 8)))
+                                        : null,
+                                  ),
+                                ]),
+                              ),
+                            ));
+                      }).toList())),
+                  const Text('ASSIGN CASHIER',
+                      style: TextStyle(
+                          color: muted,
+                          fontSize: 11,
+                          letterSpacing: .6,
+                          fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x0F000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 2))
+                          ]),
+                      child: Column(
+                          children: _availableEmployees.map((employee) {
+                        final selected =
+                            _selectedEmployee == employee['id']?.toString();
+                        return InkWell(
+                          onTap: () => setState(() =>
+                              _selectedEmployee = employee['id'].toString()),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                                color: selected
+                                    ? navy.withValues(alpha: .05)
+                                    : Colors.transparent,
+                                border: Border(
+                                    bottom: BorderSide(
+                                        color:
+                                            _availableEmployees.last == employee
+                                                ? Colors.transparent
+                                                : const Color(0xFFE8ECF4)))),
+                            child: Row(children: [
+                              CircleAvatar(
+                                  radius: 20,
                                   backgroundColor: navy,
-                                  child: Text(
-                                      _name(employee)
-                                          .split(' ')
-                                          .map((word) =>
-                                              word.isEmpty ? '' : word[0])
-                                          .take(2)
-                                          .join(),
+                                  child: Text(_initials(employee),
                                       style: const TextStyle(
-                                          color: Colors.white))),
-                              title: Text(_name(employee)),
-                              subtitle:
-                                  Text(employee['role']?.toString() ?? ''),
-                              trailing: _selectedEmployee == employee['id'] ? const Icon(Icons.check, color: navy) : null))
-                          .toList())),
-              if (_error != null)
-                Text(_error!, style: const TextStyle(color: Color(0xFFC62828))),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                  onPressed: _saving ? null : _start,
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(_saving ? 'Starting...' : 'Start Shift Now'),
-                  style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF2E7D32),
-                      padding: const EdgeInsets.symmetric(vertical: 16)))
-            ]))
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800))),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text(_name(employee),
+                                        style: const TextStyle(
+                                            color: ink,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700)),
+                                    const SizedBox(height: 3),
+                                    Text(employee['role']?.toString() ?? '',
+                                        style: const TextStyle(
+                                            color: muted, fontSize: 11)),
+                                  ])),
+                              if (selected)
+                                const Icon(Icons.check, color: navy, size: 20),
+                            ]),
+                          ),
+                        );
+                      }).toList())),
+                  if (_error != null)
+                    Text(_error!,
+                        style: const TextStyle(color: Color(0xFFC62828))),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                              colors: [Color(0xFF2E7D32), Color(0xFF388E3C)]),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x592E7D32),
+                                blurRadius: 16,
+                                offset: Offset(0, 4))
+                          ]),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: _saving ? null : _start,
+                          borderRadius: BorderRadius.circular(16),
+                          child: Center(
+                              child: Text(
+                                  _saving ? 'Starting...' : '▶ Start Shift Now',
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w800))),
+                        ),
+                      ),
+                    ),
+                  )
+                ]))
           ]));
     if (_view == 'active' && active != null) {
       final cashier = active['cashier'] as Map?;
       final shift = active['shift'] as Map?;
+      final shiftColor = _shiftColor(shift?['color']);
+      final shiftName = shift?['name']?.toString() ??
+          active['shiftType']?.toString() ??
+          'Shift';
+      final shiftIcon = shift?['icon']?.toString() ?? '🕐';
       return Scaffold(
           backgroundColor: const Color(0xFFF5F7FA),
           body: Column(children: [
             _header('Active Shift',
                 action: FadeTransition(
                     opacity: _liveOpacity,
-                    child: const Chip(
-                        label: Text('LIVE'),
-                        backgroundColor: Color(0x55388E3C),
-                        labelStyle: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800)))),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                          color: const Color(0x4D2E7D32),
+                          border: Border.all(color: const Color(0x802E7D32)),
+                          borderRadius: BorderRadius.circular(999)),
+                      child: const Text('● LIVE',
+                          style: TextStyle(
+                              color: Color(0xFFA5D6A7),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800)),
+                    ))),
             Expanded(
                 child: ListView(padding: const EdgeInsets.all(16), children: [
               _card(
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                    Text(_name(cashier),
-                        style: const TextStyle(
-                            color: ink,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 4),
-                    Text(
-                        '${shift?['name'] ?? active['shiftType']} Shift · Started ${_time(active['openedAt'])}',
-                        style: const TextStyle(color: muted)),
+                    Row(children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                                colors: [Color(0xFF123A8F), Color(0xFF1A4FBF)]),
+                            shape: BoxShape.circle),
+                        child: Center(
+                            child: Text(_initials(cashier),
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800))),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                            Text(_name(cashier),
+                                style: const TextStyle(
+                                    color: ink,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                  color: shiftColor.withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(999)),
+                              child: Text('$shiftIcon $shiftName Shift',
+                                  style: TextStyle(
+                                      color: shiftColor,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800)),
+                            ),
+                          ])),
+                    ]),
                     const SizedBox(height: 16),
                     Row(children: [
-                      _metric('Sales', '${active['sales'] ?? 0}'),
-                      _metric('Revenue', 'KSh ${active['amount'] ?? 0}'),
-                      _metric('Started', _time(active['openedAt']))
+                      _activeMetric('Started', _time(active['openedAt'])),
+                      const SizedBox(width: 10),
+                      _activeMetric('Sales', '${active['sales'] ?? 0}'),
+                      const SizedBox(width: 10),
+                      _activeMetric('Revenue',
+                          'KSh ${_money(active['amount'] as num? ?? 0)}'),
                     ])
                   ])),
-              FilledButton.icon(
-                  onPressed: _saving ? null : () => _end(active),
-                  icon: const Icon(Icons.stop),
-                  label: Text(_saving ? 'Ending...' : 'End Shift'),
-                  style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFD32F2F),
-                      padding: const EdgeInsets.symmetric(vertical: 16)))
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 20),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFE8F5E9),
+                    border: Border.all(color: const Color(0xFFC8E6C9)),
+                    borderRadius: BorderRadius.circular(14)),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('🟢 Shift in progress',
+                          style: TextStyle(
+                              color: Color(0xFF2E7D32),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 4),
+                      Text(
+                          'All POS sales during this shift are being tracked and attributed to ${_name(cashier).split(' ').first}.',
+                          style: const TextStyle(color: muted, fontSize: 12)),
+                    ]),
+              ),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                          colors: [Color(0xFFD32F2F), Color(0xFFB71C1C)]),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x59D32F2F),
+                            blurRadius: 16,
+                            offset: Offset(0, 4))
+                      ]),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _saving ? null : () => _end(active),
+                      borderRadius: BorderRadius.circular(16),
+                      child: Center(
+                        child: Text(_saving ? 'Ending...' : '■ End Shift',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800)),
+                      ),
+                    ),
+                  ),
+                ),
+              )
             ]))
           ]));
     }
@@ -17032,10 +18477,15 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
         (total, session) => total + ((session['sales'] as num?)?.toInt() ?? 0));
     final todayRevenue = todaySessions.fold<num>(
         0, (total, session) => total + ((session['amount'] as num?) ?? 0));
+    final weekAgo = DateTime.now().subtract(const Duration(days: 7));
+    final weekCount = _sessions
+        .where((session) => _openedAt(session).isAfter(weekAgo))
+        .length;
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       body: Column(children: [
         _header('Shift Management',
+            subtitle: '$weekCount shifts logged this week',
             action: TextButton(
               onPressed: () async {
                 await _load();
@@ -17181,7 +18631,7 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
                                           ]),
                                           const SizedBox(height: 4),
                                           Text(
-                                              '${_time(session['openedAt'])} → ${isOpen ? 'In progress' : _time(session['closedAt'])} · ${session['sales'] ?? 0} sales',
+                                              '${_time(session['openedAt'])} → ${isOpen ? '' : _time(session['closedAt'])} · ${session['sales'] ?? 0} sales',
                                               style: const TextStyle(
                                                   color: muted, fontSize: 11))
                                         ])),
@@ -17197,23 +18647,39 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
                                                   fontSize: 14,
                                                   fontWeight: FontWeight.w800)),
                                           const SizedBox(height: 4),
-                                          isOpen
-                                              ? FadeTransition(
-                                                  opacity: _liveOpacity,
-                                                  child: const Text(
-                                                      '● In Progress',
-                                                      style: TextStyle(
-                                                          color:
-                                                              Color(0xFF2E7D32),
-                                                          fontSize: 10,
-                                                          fontWeight:
-                                                              FontWeight.w700)))
-                                              : const Text('Closed',
+                                          FadeTransition(
+                                            opacity: isOpen
+                                                ? _liveOpacity
+                                                : const AlwaysStoppedAnimation<
+                                                    double>(1),
+                                            child: Container(
+                                              margin:
+                                                  const EdgeInsets.only(top: 1),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 3),
+                                              decoration: BoxDecoration(
+                                                  color: isOpen
+                                                      ? const Color(0xFFE8F5E9)
+                                                      : const Color(0xFFF0F3F9),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          999)),
+                                              child: Text(
+                                                  isOpen
+                                                      ? '● In Progress'
+                                                      : 'Closed',
                                                   style: TextStyle(
-                                                      color: muted,
+                                                      color: isOpen
+                                                          ? const Color(
+                                                              0xFF2E7D32)
+                                                          : muted,
                                                       fontSize: 10,
                                                       fontWeight:
-                                                          FontWeight.w700))
+                                                          FontWeight.w700)),
+                                            ),
+                                          )
                                         ])
                                   ])));
                         })
@@ -17264,17 +18730,29 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen>
     return value == null ? navy : Color(value);
   }
 
-  Widget _metric(String label, String value) => Expanded(
-      child: Container(
-          margin: const EdgeInsets.only(right: 8),
-          padding: const EdgeInsets.all(8),
-          color: const Color(0xFFF0F3F9),
+  Widget _activeMetric(String label, String value) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          decoration: BoxDecoration(
+              color: const Color(0xFFF0F3F9),
+              borderRadius: BorderRadius.circular(10)),
           child: Column(children: [
-            Text(label, style: const TextStyle(color: muted, fontSize: 10)),
-            Text(value,
+            Text(label.toUpperCase(),
                 style: const TextStyle(
-                    color: ink, fontSize: 12, fontWeight: FontWeight.w800))
-          ])));
+                    color: muted,
+                    fontSize: 10,
+                    letterSpacing: .4,
+                    fontWeight: FontWeight.w500)),
+            const SizedBox(height: 4),
+            Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: ink, fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      );
 }
 
 class NotificationEntry {

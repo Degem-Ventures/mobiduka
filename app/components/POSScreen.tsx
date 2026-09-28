@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
@@ -51,6 +51,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [isCompletingSale, setIsCompletingSale] = useState(false)
   const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
   const [isCartDraftReady, setIsCartDraftReady] = useState(false)
+  // Measured from the lower-left edge of the POS phone frame.
+  const [cartBannerPosition, setCartBannerPosition] = useState({ x: 0, y: 68 })
+  const cartBannerDrag = useRef<{ x: number; y: number } | null>(null)
+  const cartBannerWasDragged = useRef(false)
   const c = useColors()
   const session = getClientSession()
   const currentBusinessId = session?.user.businessId ?? ''
@@ -703,21 +707,49 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
 
       {/* Bottom cart summary */}
       {cart.length > 0 && (
-        <div style={{ position: 'absolute', bottom: 68, left: 0, right: 0, padding: '0 12px 8px' }}>
-          <button className="btn" onClick={() => setView('cart')} style={{
-            width: '100%', padding: '14px 20px',
-            background: 'linear-gradient(135deg, #123A8F, #1A4FBF)',
-            border: 'none', borderRadius: 16, cursor: 'pointer', fontFamily: 'inherit',
+        <button
+          className="btn"
+          onPointerDown={(event) => {
+            cartBannerDrag.current = { x: event.clientX, y: event.clientY }
+            cartBannerWasDragged.current = false
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={(event) => {
+            const start = cartBannerDrag.current
+            if (!start) return
+            const deltaX = event.clientX - start.x
+            const deltaY = event.clientY - start.y
+            if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) cartBannerWasDragged.current = true
+            setCartBannerPosition((position) => ({
+              x: Math.max(0, Math.min(24, position.x + deltaX)),
+              y: Math.max(0, Math.min(680, position.y - deltaY)),
+            }))
+            cartBannerDrag.current = { x: event.clientX, y: event.clientY }
+          }}
+          onPointerUp={() => { cartBannerDrag.current = null }}
+          onPointerCancel={() => { cartBannerDrag.current = null }}
+          onClick={() => {
+            if (cartBannerWasDragged.current) {
+              cartBannerWasDragged.current = false
+              return
+            }
+            setView('cart')
+          }}
+          style={{
+            position: 'absolute', bottom: cartBannerPosition.y, left: 12 + cartBannerPosition.x,
+            width: 'calc(100% - 48px)', padding: '14px 20px',
+            background: 'rgba(18,58,143,0.62)', backdropFilter: 'blur(7px)', WebkitBackdropFilter: 'blur(7px)',
+            border: '1px solid rgba(255,255,255,0.22)', borderRadius: 16, cursor: 'grab', touchAction: 'none', userSelect: 'none', fontFamily: 'inherit',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            boxShadow: '0 4px 20px rgba(18,58,143,0.4)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'white' }}>{cartCount}</div>
-              <div style={{ color: 'rgba(255,255,255,0.9)', fontSize: 14, fontWeight: 600 }}>View Cart</div>
-            </div>
-            <div style={{ color: '#D4AF37', fontSize: 16, fontWeight: 800 }}>KSh {subtotal.toLocaleString()}</div>
-          </button>
-        </div>
+            boxShadow: '0 4px 20px rgba(18,58,143,0.4)', zIndex: 50,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'white' }}>{cartCount}</div>
+            <div style={{ color: 'rgba(255,255,255,0.9)', fontSize: 14, fontWeight: 600 }}>View Cart</div>
+          </div>
+          <div style={{ color: '#D4AF37', fontSize: 16, fontWeight: 800 }}>KSh {subtotal.toLocaleString()}</div>
+        </button>
       )}
 
     </div>

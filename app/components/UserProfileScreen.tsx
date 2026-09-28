@@ -34,7 +34,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
     const session = getClientSession()
     if (!session) return
     try {
-      const response = await apiFetch<{ profile: Profile }>('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, name: form.name, phone: form.phone, email: form.email }) })
+      const response = await apiFetch<{ profile: Profile }>('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, name: form.name, phone: form.phone, email: form.email, businessName: form.store, businessBranch: form.branch }) })
       setProfile(response.profile)
       setEditing(false)
       setSaved(true)
@@ -160,9 +160,6 @@ export default function UserProfileScreen({ onNavigate }: Props) {
               )}
             </div>
           ))}
-          {editing && (
-            <button className="btn" onClick={handleSave} style={{ width: '100%', marginTop: 8, padding: '14px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save Changes</button>
-          )}
         </div>
 
         <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Store Information</div>
@@ -170,22 +167,24 @@ export default function UserProfileScreen({ onNavigate }: Props) {
           {[{ label: 'Store Name', key: 'store' }, { label: 'Branch', key: 'branch' }].map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>{f.label}</label>
-              {/* {editing ? (
+              {editing ? (
                 <input className="input" value={form[f.key as keyof typeof form]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
               ) : (
-                <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form]}</div>
-              )} */}
-              <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form] || '—'}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: c.text, padding: '10px 0', borderBottom: c.divider }}>{form[f.key as keyof typeof form] || '—'}</div>
+              )}
             </div>
           ))}
+          {editing && (
+            <button className="btn" onClick={handleSave} style={{ width: '100%', marginTop: 8, padding: '14px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save Changes</button>
+          )}
         </div>
 
         <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Security</div>
         <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
           {[
             { label: 'Change PIN', sub: 'Update your 4-digit login PIN', icon: '🔐', action: () => setChangingPin(true) },
-            { label: 'Active Sessions', sub: '1 device currently logged in', icon: '📱', action: () => {} },
-            { label: 'Two-Factor Auth', sub: 'Not enabled', icon: '🛡️', action: () => {} },
+            { label: 'Active Sessions', sub: '3 devices currently logged in', icon: '📱', action: () => onNavigate('sessions') },
+            { label: 'Two-Factor Auth', sub: 'Not enabled', icon: '🛡️', action: () => onNavigate('twofa') },
           ].map((item, i, arr) => (
             <button key={i} className="btn" onClick={item.action} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? c.divider : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
               <div style={{ width: 40, height: 40, borderRadius: 11, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{item.icon}</div>

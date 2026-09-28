@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
@@ -75,12 +76,15 @@ class EmployeeRepository {
           .whereType<Map>()
           .map((row) => Map<String, dynamic>.from(row))
           .toList();
-      await _cashService.cacheRemoteSessions(
-        businessId: businessId,
-        sessions: sessions,
-      );
+      if (!kIsWeb) {
+        await _cashService.cacheRemoteSessions(
+          businessId: businessId,
+          sessions: sessions,
+        );
+      }
       return sessions;
     } on Object {
+      if (kIsWeb) return const [];
       return _cashService.loadLocalSessions(businessId);
     }
   }
@@ -90,6 +94,15 @@ class EmployeeRepository {
     required String shiftTypeId,
   }) async {
     final session = await _session();
+    if (kIsWeb) {
+      await _request('POST', '/api/cash/session', body: {
+        'action': 'OPEN',
+        'userId': employeeId,
+        'shiftTypeId': shiftTypeId,
+        'openingCash': 0,
+      });
+      return;
+    }
     await _cashService.openSession(
       businessId: session.user['businessId']!.toString(),
       userId: employeeId,
@@ -103,6 +116,15 @@ class EmployeeRepository {
     required String sessionId,
   }) async {
     final session = await _session();
+    if (kIsWeb) {
+      await _request('POST', '/api/cash/session', body: {
+        'action': 'CLOSE',
+        'sessionId': sessionId,
+        'userId': employeeId,
+        'closingCash': 0,
+      });
+      return;
+    }
     await _cashService.closeSession(
       sessionId: sessionId,
       businessId: session.user['businessId']!.toString(),
