@@ -10,8 +10,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     }
 
+    const includeDeleted = new URL(request.url).searchParams.get("includeDeleted") === "true";
     const products = await prisma.product.findMany({
-      where: { businessId, deletedAt: null },
+      where: { businessId, ...(includeDeleted ? { deletedAt: { not: null } } : { deletedAt: null }) },
       include: {
         category: { select: { id: true, name: true, emoji: true } },
         inventory: { select: { quantity: true } },
@@ -88,8 +89,15 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "Authenticated business context and product id are required." }, { status: 400 });
     }
 
-    const existing = await prisma.product.findFirst({ where: { id: productId, businessId, deletedAt: null } });
+    const existing = await prisma.product.findFirst({ where: { id: productId, businessId } });
     if (!existing) return NextResponse.json({ error: "Product was not found." }, { status: 404 });
+
+    if (body.restore === true) {
+      if (!existing.deletedAt) return NextResponse.json({ error: "Product is already active." }, { status: 400 });
+      const product = await prisma.product.update({ where: { id: productId }, data: { deletedAt: null, status: "ACTIVE" } });
+      return NextResponse.json(product);
+    }
+    if (existing.deletedAt) return NextResponse.json({ error: "Restore this product before editing it." }, { status: 409 });
 
     const categoryId = body.categoryId === undefined ? existing.categoryId : body.categoryId ? String(body.categoryId) : null;
     if (categoryId) {

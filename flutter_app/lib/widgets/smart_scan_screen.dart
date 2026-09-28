@@ -135,23 +135,37 @@ class _SmartScanScreenState extends State<SmartScanScreen> {
     await _stopCamera();
     if (await Vibration.hasVibrator()) await Vibration.vibrate(duration: 100);
     Product? product;
+    String? supplier;
+    String? lookupError;
+
+    // Resolve the local catalogue first. A network request is only useful for
+    // a barcode that the device has not already cached.
     try {
-      final lookup = await _scanLookupService.lookup(code, manual: manual);
-      product = lookup.product;
-      _supplier = lookup.supplier;
-    } catch (error) {
-      // Keep barcode lookups usable when the device is offline, but make the
-      // network failure visible if the local cache also has no match.
       product = await _repository.findByBarcode(code);
-      _supplier = null;
-      if (product == null && mounted)
-        _error = 'Online lookup unavailable: $error';
+    } on Object {
+      // A transient local-store problem should not prevent an online lookup.
+    }
+    if (product == null) {
+      try {
+        final lookup = await _scanLookupService.lookup(code, manual: manual);
+        product = lookup.product;
+        supplier = lookup.supplier;
+        if (product != null) {
+          // Seed the device cache so the next scan works without connectivity.
+          await _repository.upsertProduct(product);
+        }
+      } on Object {
+        lookupError =
+            'This barcode is not in the local catalogue. Connect to refresh products and try again.';
+      }
     }
     if (!mounted) return;
     setState(() {
       _processing = false;
       _barcode = code;
       _product = product;
+      _supplier = supplier;
+      _error = lookupError;
       _mode = product == null ? _ScanMode.unknown : _ScanMode.result;
       final status = product == null
           ? 'UNKNOWN'

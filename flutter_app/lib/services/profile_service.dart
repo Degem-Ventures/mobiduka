@@ -41,9 +41,19 @@ class ProfileService {
   }
 
   Future<Map<String, dynamic>> update(
-          {required String name, String? phone, String? email}) async =>
+          {required String name,
+          String? phone,
+          String? email,
+          String? businessName,
+          String? businessBranch}) async =>
       _cacheProfile(_profile(await _request('PATCH',
-          body: {'name': name, 'phone': phone, 'email': email})));
+          body: {
+            'name': name,
+            'phone': phone,
+            'email': email,
+            if (businessName != null) 'businessName': businessName,
+            if (businessBranch != null) 'businessBranch': businessBranch,
+          })));
 
   Future<Map<String, dynamic>> updatePin(
           {String? currentPin, required String newPin}) async =>

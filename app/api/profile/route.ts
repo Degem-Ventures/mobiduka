@@ -53,7 +53,16 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const body = await request.json() as { businessId?: string; name?: string; phone?: string | null; email?: string | null; currentPin?: string; newPin?: string };
+    const body = await request.json() as {
+      businessId?: string;
+      name?: string;
+      phone?: string | null;
+      email?: string | null;
+      businessName?: string;
+      businessBranch?: string | null;
+      currentPin?: string;
+      newPin?: string;
+    };
     const businessId = requireBusinessAccess(request, body.businessId);
     const userId = authenticatedUserId(request);
     if (!businessId || !userId) return NextResponse.json({ error: "Authenticated user context is required." }, { status: 401 });
@@ -68,6 +77,12 @@ export async function PATCH(request: Request) {
     }
     if (body.phone !== undefined) data.phone = body.phone?.trim() || null;
     if (body.email !== undefined) data.email = body.email?.trim().toLowerCase() || null;
+    const businessData: { name?: string; branch?: string | null } = {};
+    if (body.businessName !== undefined) {
+      if (!body.businessName.trim()) return NextResponse.json({ error: "Store name cannot be empty." }, { status: 400 });
+      businessData.name = body.businessName.trim();
+    }
+    if (body.businessBranch !== undefined) businessData.branch = body.businessBranch?.trim() || null;
     if (body.newPin !== undefined) {
       if (!/^\d{4}$/.test(body.newPin)) return NextResponse.json({ error: "New PIN must be 4 digits." }, { status: 400 });
       if (existing.pinHash) {
@@ -80,6 +95,9 @@ export async function PATCH(request: Request) {
       data.pinHash = await bcrypt.hash(body.newPin, 10);
     }
 
+    if (Object.keys(businessData).length > 0) {
+      await prisma.business.update({ where: { id: businessId }, data: businessData });
+    }
     const updated = await prisma.user.update({ where: { id: existing.id }, data, include: profileInclude });
     return NextResponse.json({ profile: profileResponse(updated) });
   } catch (error: any) {

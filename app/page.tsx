@@ -1,6 +1,6 @@
 "use client";
 
-import { JSX, useEffect, useState } from "react";
+import { JSX, useEffect, useRef, useState } from "react";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import LoginScreen from "./components/LoginScreen";
 import Dashboard from "./components/Dashboard";
@@ -158,6 +158,10 @@ function AppInner() {
   const [isHydratingSession, setIsHydratingSession] = useState(true);
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
+  const [openActiveShift, setOpenActiveShift] = useState(false);
+  const [shiftBannerPosition, setShiftBannerPosition] = useState({ x: 12, y: 0 });
+  const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null);
+  const shiftBannerWasDragged = useRef(false);
   const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>();
   const [inventoryProductId, setInventoryProductId] = useState<string | undefined>();
   const [posCartItem, setPosCartItem] = useState<{ id: string; name: string; price: number; emoji: string } | undefined>();
@@ -250,6 +254,7 @@ function AppInner() {
 
   const handleNavigate = (s: string, options?: { barcode?: string; productId?: string; cartItem?: { id: string; name: string; price: number; emoji: string } }) => {
     const nextScreen = s as Screen;
+    if (nextScreen !== "shifts") setOpenActiveShift(false);
     setInventoryBarcode(nextScreen === "inventory" ? options?.barcode : undefined);
     setInventoryProductId(nextScreen === "inventory" ? options?.productId : undefined);
     setPosCartItem(nextScreen === "pos" ? options?.cartItem : undefined);
@@ -304,7 +309,7 @@ function AppInner() {
       case "register":
         return <AdminRegisterScreen onNavigate={handleNavigate} />;
       case "shifts":
-        return <ShiftsScreen onNavigate={handleNavigate} />;
+        return <ShiftsScreen onNavigate={handleNavigate} openActiveShift={openActiveShift} />;
       case "payments":
         return <PaymentMethodsScreen onNavigate={handleNavigate} />;
       default:
@@ -348,35 +353,6 @@ function AppInner() {
           <div
             style={{ height: "100%", display: "flex", flexDirection: "column" }}
           >
-            {activeShiftCount > 0 && (
-              <button
-                className="btn"
-                onClick={() => handleNavigate("shifts")}
-                style={{
-                  width: "100%",
-                  border: "none",
-                  borderBottom: "1px solid rgba(46,125,50,0.2)",
-                  background: isDark ? "#17351E" : "#E8F5E9",
-                  color: isDark ? "#A5D6A7" : "#2E7D32",
-                  padding: "9px 16px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  textAlign: "left",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                <span style={{ fontSize: 14 }}>●</span>
-                <span style={{ flex: 1 }}>
-                  {activeShiftCount} shift{activeShiftCount === 1 ? "" : "s"} in progress
-                  {activeShiftNames.length > 0 ? ` · ${activeShiftNames.join(", ")}` : ""}
-                </span>
-                <span>Manage ›</span>
-              </button>
-            )}
             <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
               {renderScreen()}
             </div>
@@ -544,6 +520,73 @@ function AppInner() {
               </div>
             )}
           </div>
+        )}
+        {loggedIn && screen !== "login" && activeShiftCount > 0 && (
+          <button
+            className="btn"
+            onPointerDown={(event) => {
+              shiftBannerDrag.current = { x: event.clientX, y: event.clientY };
+              shiftBannerWasDragged.current = false;
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const start = shiftBannerDrag.current;
+              if (!start) return;
+              const deltaX = event.clientX - start.x;
+              const deltaY = event.clientY - start.y;
+              if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) shiftBannerWasDragged.current = true;
+              setShiftBannerPosition((position) => ({
+                x: Math.max(0, Math.min(32, position.x + deltaX)),
+                y: Math.max(0, Math.min(720, position.y + deltaY)),
+              }));
+              shiftBannerDrag.current = { x: event.clientX, y: event.clientY };
+            }}
+            onPointerUp={() => { shiftBannerDrag.current = null; }}
+            onPointerCancel={() => { shiftBannerDrag.current = null; }}
+            onClick={() => {
+              if (shiftBannerWasDragged.current) {
+                shiftBannerWasDragged.current = false;
+                return;
+              }
+              setOpenActiveShift(true);
+              handleNavigate("shifts");
+            }}
+            style={{
+              position: "absolute",
+              top: shiftBannerPosition.y,
+              left: shiftBannerPosition.x,
+              zIndex: 1000,
+              width: 349,
+              border: "none",
+              borderRadius: 10,
+              background: "#0F6634",
+              color: "white",
+              padding: "11px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              textAlign: "left",
+              cursor: "grab",
+              touchAction: "none",
+              userSelect: "none",
+              fontFamily: "inherit",
+              fontSize: 12,
+              fontWeight: 700,
+              boxShadow: "0 4px 10px rgba(0,0,0,0.2)",
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{ fontSize: 16, lineHeight: 1, color: "#A5D6A7" }}
+            >
+              ◷
+            </span>
+            <span style={{ flex: 1 }}>
+              {activeShiftCount} shift{activeShiftCount === 1 ? "" : "s"} in progress
+              {activeShiftNames.length > 0 ? ` · ${activeShiftNames.join(", ")}` : ""}
+            </span>
+            <span style={{ color: "#A5D6A7" }}>Manage ›</span>
+          </button>
         )}
       </div>
 
