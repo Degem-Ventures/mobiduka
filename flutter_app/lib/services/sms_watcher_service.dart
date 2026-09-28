@@ -17,8 +17,9 @@ class SmsWatcherService {
     required void Function(String mpesaCode) onPaymentVerified,
     Duration interval = const Duration(seconds: 4),
     Duration timeout = const Duration(seconds: 60),
-  }) {
+  }) async {
     stopSmsWatcher();
+    if (kIsWeb || !(await Permission.sms.status).isGranted) return null;
     final completion = Completer<String?>();
     _completion = completion;
     final phoneDigits = customerPhone
@@ -92,7 +93,7 @@ class SmsWatcherService {
     Duration interval = const Duration(seconds: 20),
   }) async {
     _ingestionTimer?.cancel();
-    final permission = await Permission.sms.request();
+    final permission = await Permission.sms.status;
     if (!permission.isGranted) {
       debugPrint(
           'SMS permission was not granted; M-Pesa inbox ingestion is unavailable.');

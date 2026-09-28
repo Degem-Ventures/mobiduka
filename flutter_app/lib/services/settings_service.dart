@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
@@ -25,9 +26,12 @@ class SettingsService {
       final response = await _request('GET');
       if (response is! Map) throw Exception('Unable to load settings.');
       final settings = Map<String, dynamic>.from(response);
-      await _directory.cacheSettings(businessId, settings);
+      // sqflite uses native file-system APIs and is not available in Flutter
+      // web. The browser should use the API response directly instead.
+      if (!kIsWeb) await _directory.cacheSettings(businessId, settings);
       return settings;
     } on Object {
+      if (kIsWeb) rethrow;
       final cached = await _directory.loadSettings(businessId);
       if (cached != null) return cached;
       rethrow;
@@ -35,6 +39,11 @@ class SettingsService {
   }
 
   Future<Map<String, dynamic>> save(Map<String, Object?> patch) async {
+    if (kIsWeb) {
+      final response = await _request('PATCH', body: patch);
+      if (response is! Map) throw Exception('Unable to save settings.');
+      return Map<String, dynamic>.from(response);
+    }
     return _directory.saveSettings(
         businessId: await _businessId(), patch: patch);
   }

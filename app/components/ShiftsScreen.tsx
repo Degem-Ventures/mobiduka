@@ -10,7 +10,7 @@ interface ShiftRecord {
   start: string; end: string | null; openedAt: string; sales: number; amount: number; date: string
 }
 
-interface Props { onNavigate: (s: string) => void }
+interface Props { onNavigate: (s: string) => void; openActiveShift?: boolean }
 
 const timeToMinutes = (value: string) => {
   const [hours, minutes] = value.split(':').map(Number)
@@ -30,7 +30,7 @@ const isShiftTypeAvailableNow = (shiftType: ShiftType, now = new Date()) => {
   return currentMinutes >= startMinutes || currentMinutes < endMinutes
 }
 
-export default function ShiftsScreen({ onNavigate }: Props) {
+export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Props) {
   const c = useColors()
   const session = getClientSession()
   const [view, setView] = useState<'list' | 'start' | 'active'>('list')
@@ -70,11 +70,14 @@ export default function ShiftsScreen({ onNavigate }: Props) {
       }).sort((left, right) => new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime())
       setPastShifts(mappedSessions)
       const active = operationalSessions.find(item => !item.closedAt)
-      if (active) setActiveShift(mappedSessions.find(shift => shift.id === active.id) ?? null)
+      if (active) {
+        setActiveShift(mappedSessions.find(shift => shift.id === active.id) ?? null)
+        if (openActiveShift) setView('active')
+      }
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load shifts.') }
   }
 
-  useEffect(() => { void loadShiftData() }, [session?.user.businessId])
+  useEffect(() => { void loadShiftData() }, [session?.user.businessId, openActiveShift])
 
   const startShift = async () => {
     if (!session || !selectedStaff) return

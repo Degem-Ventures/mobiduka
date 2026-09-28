@@ -31,11 +31,13 @@ class InventoryApiService {
   final OfflineSnapshotCache _cache;
   final CatalogMutationService _catalogMutations;
 
-  Future<List<InventoryCategory>> loadCategories() async {
+  Future<List<InventoryCategory>> loadCategories(
+      {bool includeDeleted = false}) async {
     final session = await _session();
     try {
-      final response =
-          await _request('GET', '/api/categories', session: session);
+      final response = await _request('GET', '/api/categories',
+          session: session,
+          query: includeDeleted ? const {'includeDeleted': 'true'} : null);
       if (response is! List) throw Exception('Unable to load categories.');
       try {
         await _cache.writeJson(
@@ -46,17 +48,23 @@ class InventoryApiService {
       } on Object {
         // Live category data remains usable when local storage is unavailable.
       }
-      return _categoriesFromJson(response);
+      return _categoriesFromJson(response, includeDeleted: includeDeleted);
     } on http.ClientException {
+      if (includeDeleted) rethrow;
       return _loadCachedCategories(session);
     } on TimeoutException {
+      if (includeDeleted) rethrow;
       return _loadCachedCategories(session);
     }
   }
 
-  List<InventoryCategory> _categoriesFromJson(List response) {
+  List<InventoryCategory> _categoriesFromJson(List response,
+      {bool includeDeleted = false}) {
     return response
         .whereType<Map>()
+        .where((item) => includeDeleted
+            ? item['deletedAt'] != null
+            : item['deletedAt'] == null)
         .map((item) {
           final category = Map<String, dynamic>.from(item);
           return InventoryCategory(
@@ -95,6 +103,34 @@ class InventoryApiService {
         emoji: response['emoji']?.toString() ?? emoji);
   }
 
+  Future<void> updateCategory(
+      {required String id, required String name}) async {
+    await _request('PATCH', '/api/categories', body: {'id': id, 'name': name});
+  }
+
+  Future<void> deleteCategory({required String id}) async {
+    await _request('DELETE', '/api/categories', query: {'id': id});
+  }
+
+  Future<void> restoreCategory({required String id}) async {
+    await _request('PATCH', '/api/categories',
+        body: {'id': id, 'restore': true});
+  }
+
+  Future<void> deleteProduct({required String id}) async {
+    await _request('DELETE', '/api/products', query: {'id': id});
+  }
+
+  Future<void> restoreProduct({required String id}) async {
+    await _request('PATCH', '/api/products', body: {'id': id, 'restore': true});
+  }
+
+  Future<void> updateProduct(Map<String, Object?> product) async {
+    final id = product['id']?.toString();
+    if (id == null || id.isEmpty) throw Exception('Product id is required.');
+    await _request('PATCH', '/api/products', body: product);
+  }
+
   Future<String> createProduct(Map<String, Object?> product) async {
     final session = await _session();
     final businessId = session.user['businessId']!.toString();
@@ -126,19 +162,33 @@ class InventoryApiService {
   }
 
   Future<Object?> _request(String method, String path,
-      {Map<String, Object?>? body, AuthSession? session}) async {
+      {Map<String, Object?>? body,
+      Map<String, String>? query,
+      AuthSession? session}) async {
     session ??= await _authService.readSession();
     final businessId = session?.user['businessId']?.toString();
     if (session == null || businessId == null || businessId.isEmpty) {
       throw Exception('Please sign in to manage inventory.');
     }
-    final uri = Uri.parse(
-        '${ApiConfig.origin}$path${method == 'GET' ? '?businessId=${Uri.encodeQueryComponent(businessId)}' : ''}');
+    final parameters = <String, String>{
+      'businessId': businessId,
+      ...?query,
+    };
+    final uri = Uri.parse('${ApiConfig.origin}$path')
+        .replace(queryParameters: parameters);
     final requestBody =
         body == null ? null : jsonEncode({...body, 'businessId': businessId});
     final response = switch (method) {
       'GET' => await _client
           .get(uri, headers: {'Authorization': 'Bearer ${session.token}'}),
+      'PATCH' => await _client.patch(uri,
+          headers: {
+            'Authorization': 'Bearer ${session.token}',
+            'Content-Type': 'application/json'
+          },
+          body: requestBody),
+      'DELETE' => await _client
+          .delete(uri, headers: {'Authorization': 'Bearer ${session.token}'}),
       _ => await _client.post(uri,
           headers: {
             'Authorization': 'Bearer ${session.token}',
