@@ -35,7 +35,10 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [isInventoryLoading, setIsInventoryLoading] = useState(true)
   const [deletedProductCount, setDeletedProductCount] = useState(0)
   const [toast, setToast] = useState<Toast | null>(null)
-  const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // const toastTimeout = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const toastTimeout = useRef<number | null>(null);
+
   const inventoryRequestId = useRef(0)
   const c = useColors()
   const session = getClientSession()
