@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
+import { canonicalRoleName } from "@/lib/roles";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
 
@@ -425,10 +426,11 @@ export async function POST(request: Request) {
             if (!["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"].includes(employeeRole)) {
               throw new Error("Invalid employee role.");
             }
+            const roleName = canonicalRoleName(employeeRole);
             const role = await tx.role.upsert({
-              where: { name: employeeRole },
+              where: { businessId_name: { businessId: resolvedBusinessId, name: roleName } },
               update: {},
-              create: { name: employeeRole },
+              create: { businessId: resolvedBusinessId, name: roleName },
             });
             await tx.user.upsert({
               where: { id: externalId },

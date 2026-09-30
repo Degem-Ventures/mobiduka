@@ -19,6 +19,8 @@ export default function NotificationsScreen({ onNavigate }: Props) {
   const [items, setItems] = useState<NotificationItem[]>([])
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
   const [dataError, setDataError] = useState('')
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     const session = getClientSession()
@@ -54,10 +56,16 @@ export default function NotificationsScreen({ onNavigate }: Props) {
     if (!session) return
     try {
       await apiFetch('/api/notifications', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, id }) })
-      setItems(i => i.filter(n => n.id !== id))
+      setItems(i => i.filter(n => n.id !== id)); setDeletingId(null)
     } catch (reason) {
       setDataError(reason instanceof Error ? reason.message : 'Unable to delete notification.')
     }
+  }
+  const clearAll = async () => {
+    const session = getClientSession()
+    if (!session) return
+    try { await apiFetch('/api/notifications', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, clearAll: true }) }); setItems([]); setConfirmClear(false) }
+    catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to clear notifications.') }
   }
 
   const formatDate = (createdAt: string) => {
@@ -77,8 +85,9 @@ export default function NotificationsScreen({ onNavigate }: Props) {
     <div style={{ marginBottom: 16 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</div>
       {data.map(n => (
-        <button key={n.id} className="btn" onClick={() => markRead(n.id)} style={{
-          width: '100%', padding: '14px 16px', marginBottom: 8, textAlign: 'left', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+        <div key={n.id} style={{ position: 'relative', marginBottom: 8 }}>
+        <button className="btn" onClick={() => markRead(n.id)} style={{
+          width: '100%', padding: '14px 48px 14px 16px', textAlign: 'left', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
           background: n.read ? c.card : typeColors[n.type].bg,
           borderRadius: 14, borderLeft: `3px solid ${n.read ? 'transparent' : typeColors[n.type].dot}`,
           boxShadow: n.read ? '0 1px 4px rgba(0,0,0,0.06)' : `0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px ${typeColors[n.type].border}`
@@ -90,7 +99,6 @@ export default function NotificationsScreen({ onNavigate }: Props) {
                 <div style={{ fontSize: 13, fontWeight: n.read ? 600 : 700, color: c.text, flex: 1 }}>{n.title}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                   {!n.read && <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColors[n.type].dot, marginTop: 4 }} />}
-                  {n.read && <span role="button" tabIndex={0} aria-label="Delete notification" onClick={event => { event.stopPropagation(); void deleteNotification(n.id) }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); void deleteNotification(n.id) } }} style={{ color: c.faint, fontSize: 18, lineHeight: 1, cursor: 'pointer', padding: '0 2px' }}>×</span>}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: c.muted, marginTop: 3, lineHeight: 1.5 }}>{n.body}</div>
@@ -98,29 +106,31 @@ export default function NotificationsScreen({ onNavigate }: Props) {
             </div>
           </div>
         </button>
+        <button className="btn" aria-label="Delete notification" onClick={() => deletingId === n.id ? void deleteNotification(n.id) : setDeletingId(n.id)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', minWidth: deletingId === n.id ? 62 : 28, height: 28, padding: deletingId === n.id ? '0 8px' : 0, borderRadius: 8, border: 'none', background: c.isDark ? 'rgba(211,47,47,0.2)' : 'rgba(211,47,47,0.09)', color: '#D32F2F', cursor: 'pointer', fontSize: deletingId === n.id ? 11 : 18, fontWeight: 700, fontFamily: 'inherit' }}>{deletingId === n.id ? 'Delete?' : '×'}</button>
+        </div>
       ))}
     </div>
   )
 
   return (
     <div className="screen" style={{ background: c.bg }}>
-      <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <div>
-            <button className="btn" onClick={() => onNavigate('more')} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+      <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '50px 20px 18px', flexShrink: 0 }}>
+        <button className="btn" onClick={() => onNavigate('more')} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: 0, marginBottom: 12 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
               <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>Back</span>
-            </button>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Notifications</div>
-              {unreadCount > 0 && <div style={{ background: '#D32F2F', borderRadius: 100, padding: '2px 8px', fontSize: 11, fontWeight: 700, color: 'white' }}>{unreadCount} new</div>}
-            </div>
-          </div>
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+          <div style={{ color: 'white', fontSize: 22, fontWeight: 800, letterSpacing: -0.3 }}>Notifications</div>
+          {unreadCount > 0 && <div style={{ background: 'rgba(211,47,47,0.92)', borderRadius: 100, padding: '3px 9px', fontSize: 11, fontWeight: 700, color: 'white' }}>{unreadCount} new</div>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
           {unreadCount > 0 && (
-            <button className="btn" onClick={markAllRead} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '7px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.8)', cursor: 'pointer', fontFamily: 'inherit' }}>
-              Mark all read
+            <button className="btn" onClick={markAllRead} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 100, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.9)', cursor: 'pointer', fontFamily: 'inherit' }}>
+              ✓ Mark all read
             </button>
           )}
+          {items.length > 0 && <button className="btn" onClick={() => confirmClear ? void clearAll() : setConfirmClear(true)} style={{ background: confirmClear ? '#D32F2F' : 'rgba(211,47,47,0.18)', border: '1px solid rgba(255,138,128,0.18)', borderRadius: 100, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: confirmClear ? 'white' : '#FFB4AE', cursor: 'pointer', fontFamily: 'inherit' }}>{confirmClear ? 'Confirm clear' : 'Clear all'}</button>}
+          {confirmClear && <button className="btn" onClick={() => setConfirmClear(false)} style={{ background: 'none', border: 'none', padding: '8px 5px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {[['all', 'All'], ['unread', 'Unread']].map(([k, l]) => (

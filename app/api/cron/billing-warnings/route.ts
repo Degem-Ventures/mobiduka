@@ -107,7 +107,7 @@ export async function GET(request: NextRequest) {
               where: {
                 status: "ACTIVE",
                 email: { not: null },
-                role: { name: "OWNER" },
+                role: { name: { in: ["Admin", "OWNER"] } },
               },
               select: { fullName: true, email: true },
               orderBy: { createdAt: "asc" },

@@ -7,6 +7,7 @@ type CreditCustomer = { id: string; name: string; phone: string; balance: number
 type CartItem = Pick<ProductItem, 'id' | 'name' | 'price' | 'emoji'> & { qty: number }
 type ActiveOperator = { id: string; name: string; shift: string }
 type ReceiptInfo = { saleNumber: string; createdAt: string; cashierName: string; businessName: string; businessBranch: string | null }
+type PaymentSettingsResponse = { preferences: { paymentConfig: { methods: Record<string, boolean> } | null } }
 type PosDraft = {
   cart: CartItem[]
   view: 'pos' | 'cart' | 'payment'
@@ -37,6 +38,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [productView, setProductView] = useState<'grid' | 'details'>('grid')
   const [view, setView] = useState<'pos' | 'cart' | 'payment' | 'receipt'>('pos')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | 'credit'>('cash')
+  const [enabledPaymentMethods, setEnabledPaymentMethods] = useState<Record<'cash' | 'mpesa' | 'credit', boolean>>({ cash: true, mpesa: true, credit: true })
   const [mpesaPhone, setMpesaPhone] = useState('254')
   const [mpesaStatus, setMpesaStatus] = useState('')
   const [discount, setDiscount] = useState(0)
@@ -60,6 +62,19 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const currentBusinessId = session?.user.businessId ?? ''
   const currentUserId = session?.user.id ?? ''
   const categories = [{ name: 'All', emoji: null }, ...categoryRows]
+
+  useEffect(() => {
+    if (!currentBusinessId) return
+    void apiFetch<PaymentSettingsResponse>(`/api/settings?businessId=${encodeURIComponent(currentBusinessId)}`)
+      .then(({ preferences }) => {
+        const methods = preferences.paymentConfig?.methods
+        if (!methods) return
+        const enabled = { cash: methods.cash !== false, mpesa: methods.mpesa !== false, credit: methods.credit !== false }
+        setEnabledPaymentMethods(enabled)
+        if (!enabled[paymentMethod]) setPaymentMethod(enabled.cash ? 'cash' : enabled.mpesa ? 'mpesa' : 'credit')
+      })
+      .catch(() => undefined)
+  }, [currentBusinessId])
 
   // POSScreen is intentionally allowed to unmount while the user visits
   // Dashboard or Stock. Restore the cashier's unfinished sale before writing
@@ -283,6 +298,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   }
 
   if (view === 'receipt') {
+    const receiptOperator = activeOperators.find(operator => operator.id === selectedOperatorId)
     return (
       <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #2E7D32, #388E3C)', padding: '52px 20px 28px', flexShrink: 0 }}>
@@ -296,8 +312,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: c.muted, marginBottom: 4 }}>{[receiptInfo?.businessName, receiptInfo?.businessBranch].filter(Boolean).join(' · ') || 'Business'}</div>
-              <div style={{ fontSize: 12, color: c.faint }}>{new Date(receiptInfo?.createdAt ?? Date.now()).toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}</div>
-              <div style={{ fontSize: 12, color: c.muted, marginTop: 4 }}>Served by {receiptInfo?.cashierName ?? 'Unknown operator'}</div>
+              <div style={{ fontSize: 12, color: c.faint }}>{new Date(receiptInfo?.createdAt ?? Date.now()).toLocaleString('en-KE', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</div>
+            </div>
+            <div aria-label="Receipt details" style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr 1px 1fr', alignItems: 'stretch', padding: '10px 8px', marginBottom: 16, borderRadius: 10, background: c.cardAlt }}>
+              <div style={{ minWidth: 0, padding: '0 5px', textAlign: 'center' }}><div style={{ fontSize: 10, color: c.muted, marginBottom: 3 }}>Cashier</div><div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 700, color: c.text }}>{receiptInfo?.cashierName ?? receiptOperator?.name ?? '—'}</div></div>
+              <div style={{ background: c.isDark ? '#1A3366' : '#E8ECF4' }} />
+              <div style={{ minWidth: 0, padding: '0 5px', textAlign: 'center' }}><div style={{ fontSize: 10, color: c.muted, marginBottom: 3 }}>Shift</div><div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 700, color: c.text }}>{receiptOperator?.shift ?? '—'}</div></div>
+              <div style={{ background: c.isDark ? '#1A3366' : '#E8ECF4' }} />
+              <div style={{ minWidth: 0, padding: '0 5px', textAlign: 'center' }}><div style={{ fontSize: 10, color: c.muted, marginBottom: 3 }}>Receipt #</div><div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 700, color: '#123A8F', fontFamily: 'monospace' }}>{receiptInfo?.saleNumber ?? '—'}</div></div>
             </div>
             <div style={{ borderTop: '1px dashed #E8ECF4', paddingTop: 16, marginBottom: 16 }}>
               {cart.map((item, i) => (
@@ -392,7 +414,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             { key: 'cash', label: 'Cash', sub: 'Physical cash payment', icon: '💵', color: '#123A8F' },
             { key: 'mpesa', label: 'M-Pesa', sub: 'Mobile money transfer', icon: '📱', color: '#2E7D32' },
             { key: 'credit', label: 'Credit / Tab', sub: 'Add to customer account', icon: '📋', color: '#D32F2F' },
-          ].map(m => (
+          ].filter(m => enabledPaymentMethods[m.key as 'cash' | 'mpesa' | 'credit']).map(m => (
             <button key={m.key} className="btn" onClick={() => setPaymentMethod(m.key as 'cash' | 'mpesa' | 'credit')} style={{
               width: '100%', display: 'flex', alignItems: 'center', gap: 14,
               padding: '14px 16px', marginBottom: 10, borderRadius: 14,

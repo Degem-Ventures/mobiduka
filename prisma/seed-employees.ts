@@ -19,7 +19,7 @@ async function main() {
 
   for (const employee of demoEmployees) {
     const roleName = roleMap[employee.role];
-    const role = await prisma.role.upsert({ where: { name: roleName }, update: {}, create: { name: roleName } });
+    const role = await prisma.role.upsert({ where: { businessId_name: { businessId, name: roleName } }, update: {}, create: { businessId, name: roleName } });
     const existing = await prisma.user.findFirst({ where: { businessId, email: employee.email }, select: { id: true } });
     const data = {
       businessId,

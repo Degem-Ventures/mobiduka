@@ -111,3 +111,36 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const businessId = requireBusinessAccess(request, body.businessId);
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    const amount = Number(body.amount);
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const createdAt = body.date ? new Date(String(body.date)) : null;
+    if (!businessId || !id || !description || !body.category || !Number.isFinite(amount) || amount <= 0) return NextResponse.json({ error: "Authenticated business context, expense details, and a positive amount are required." }, { status: 400 });
+    if (createdAt && Number.isNaN(createdAt.getTime())) return NextResponse.json({ error: "Date must be valid." }, { status: 400 });
+    const existing = await prisma.expense.findFirst({ where: { id, businessId }, select: { id: true } });
+    if (!existing) return NextResponse.json({ error: "Expense was not found." }, { status: 404 });
+    const expense = await prisma.expense.update({ where: { id }, data: { description, amount, category: normalizeCategory(String(body.category)), paymentMethod: body.paymentMethod ? String(body.paymentMethod).trim() : null, recurring: Boolean(body.recurring), ...(createdAt ? { createdAt } : {}) } });
+    return NextResponse.json(expense);
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to update expense.", details: error instanceof Error ? error.message : "Unknown error" }, { status: 400 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
+    const id = url.searchParams.get("id")?.trim();
+    if (!businessId || !id) return NextResponse.json({ error: "Authenticated business context and expense id are required." }, { status: 400 });
+    const deleted = await prisma.expense.deleteMany({ where: { id, businessId } });
+    if (!deleted.count) return NextResponse.json({ error: "Expense was not found." }, { status: 404 });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to delete expense.", details: error instanceof Error ? error.message : "Unknown error" }, { status: 400 });
+  }
+}

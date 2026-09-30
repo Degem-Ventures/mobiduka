@@ -112,17 +112,21 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const body = await request.json().catch(() => ({})) as { businessId?: string; id?: string };
+    const body = await request.json().catch(() => ({})) as { businessId?: string; id?: string; clearAll?: boolean };
     const businessId = requireBusinessAccess(request, body.businessId ?? searchParams.get("businessId"));
-    const id = body.id ?? searchParams.get("id");
     if (!businessId) return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
+    if (body.clearAll) {
+      const result = await prisma.notification.updateMany({ where: { businessId, deletedAt: null }, data: { deletedAt: new Date() } });
+      return NextResponse.json({ success: true, deleted: result.count });
+    }
+    const id = body.id ?? searchParams.get("id");
     if (!id) return NextResponse.json({ error: "Notification id is required." }, { status: 400 });
 
     const result = await prisma.notification.updateMany({
-      where: { id, businessId, deletedAt: null, isRead: true },
+      where: { id, businessId, deletedAt: null },
       data: { deletedAt: new Date() },
     });
-    if (result.count === 0) return NextResponse.json({ error: "Only an existing read notification can be deleted." }, { status: 409 });
+    if (result.count === 0) return NextResponse.json({ error: "Notification not found." }, { status: 404 });
     return NextResponse.json({ success: true, deleted: true });
   } catch (error) {
     return NextResponse.json({ error: "Failed to delete notification.", details: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

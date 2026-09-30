@@ -24,6 +24,9 @@ import TwoFactorScreen from "./components/TwoFactorScreen";
 import AdminRegisterScreen from "./components/AdminRegisterScreen";
 import ShiftsScreen from "./components/ShiftsScreen";
 import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
+import ManageRolesScreen from "./components/ManageRolesScreen";
+import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen";
+import TaxComplianceScreen from "./components/TaxComplianceScreen";
 import { apiFetch, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
 
 type Screen =
@@ -48,7 +51,10 @@ type Screen =
   | "twofa"
   | "register"
   | "shifts"
-  | "payments";
+  | "payments"
+  | "roles"
+  | "receiptsettings"
+  | "taxcompliance";
 
 type SideNavItem = {
   key: Screen;
@@ -312,6 +318,12 @@ function AppInner() {
         return <ShiftsScreen onNavigate={handleNavigate} openActiveShift={openActiveShift} />;
       case "payments":
         return <PaymentMethodsScreen onNavigate={handleNavigate} />;
+      case "roles":
+        return <ManageRolesScreen onNavigate={handleNavigate} />;
+      case "receiptsettings":
+        return <ReceiptSettingsScreen onNavigate={handleNavigate} />;
+      case "taxcompliance":
+        return <TaxComplianceScreen onNavigate={handleNavigate} />;
       default:
         return null;
     }

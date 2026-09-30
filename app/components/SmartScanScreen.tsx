@@ -9,6 +9,8 @@ type ScanResponse = { found?: boolean; product: ScannedProduct | null; status: s
 type CartItemSeed = { id: string; name: string; price: number; emoji: string }
 type CategoryItem = { id: string; name: string; emoji: string | null }
 
+const productEmojis = ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦', '🥤', '🍫', '🧃']
+
 interface Props { onNavigate: (s: string, options?: { barcode?: string; productId?: string; cartItem?: CartItemSeed }) => void }
 
 type Mode = 'idle' | 'camera' | 'scanning' | 'result' | 'unknown' | 'manual'
@@ -26,9 +28,13 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   const [scanCounts, setScanCounts]     = useState<Record<string, number>>({})
   const [error, setError]               = useState('')
   const [categories, setCategories]     = useState<CategoryItem[]>([])
-  const [addProductForm, setAddProductForm] = useState({ name: '', price: '', stock: '', categoryId: '', emoji: '📦' })
+  const [addProductForm, setAddProductForm] = useState({ name: '', cost: '', price: '', stock: '', reorder: '10', categoryId: '', emoji: '📦' })
   const [savingProduct, setSavingProduct] = useState(false)
   const [addProductError, setAddProductError] = useState('')
+  const [productAdded, setProductAdded] = useState<string | null>(null)
+  const [showAddProductForm, setShowAddProductForm] = useState(false)
+  const [showBulkCalculator, setShowBulkCalculator] = useState(false)
+  const [bulkPurchase, setBulkPurchase] = useState({ boxPrice: '', unitsPerBox: '' })
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const handledCameraScanRef = useRef(false)
@@ -70,6 +76,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     const found = response.found === true || response.status === 'FOUND' || response.product !== null
     setProduct(response.product)
     setMode(found ? 'result' : 'unknown')
+    if (!found) {
+      setShowAddProductForm(false)
+      setShowBulkCalculator(false)
+      setBulkPurchase({ boxPrice: '', unitsPerBox: '' })
+    }
     setScanLog(previous => [{
       name: response.product?.name ?? 'Unknown Product', barcode: code,
       action: found ? (statusOverride === 'MANUAL' ? 'Manual lookup' : 'Price checked') : 'Not found',
@@ -84,6 +95,10 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     setMode('scanning')
     setScanProgress(0)
     setAddedToCart(false)
+    setProductAdded(null)
+    setShowAddProductForm(false)
+    setShowBulkCalculator(false)
+    setBulkPurchase({ boxPrice: '', unitsPerBox: '' })
     let p = 0
     intervalRef.current = setInterval(() => {
       p += Math.random() * 22 + 8
@@ -177,10 +192,12 @@ export default function SmartScanScreen({ onNavigate }: Props) {
 
   const saveMissingProduct = async () => {
     const name = addProductForm.name.trim()
+    const cost = Number(addProductForm.cost)
     const price = Number(addProductForm.price)
-    const stock = Number(addProductForm.stock || 0)
+    const stock = Number(addProductForm.stock)
+    const reorder = Number(addProductForm.reorder || 0)
     const session = getClientSession()
-    if (!session || !name || !addProductForm.categoryId || !Number.isFinite(price) || price < 0 || !Number.isFinite(stock) || stock < 0) return
+    if (!session || !name || !addProductForm.categoryId || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(price) || price < 0 || !Number.isFinite(stock) || stock < 0 || !Number.isFinite(reorder) || reorder < 0) return
     setSavingProduct(true)
     setAddProductError('')
     try {
@@ -191,20 +208,28 @@ export default function SmartScanScreen({ onNavigate }: Props) {
           name,
           barcode: scanned,
           categoryId: addProductForm.categoryId,
-          costPrice: 0,
+          costPrice: cost,
           sellingPrice: price,
           stock,
-          minimumStock: 0,
+          minimumStock: reorder,
           emoji: addProductForm.emoji,
         }),
       })
-      setAddProductForm({ name: '', price: '', stock: '', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+      setAddProductForm({ name: '', cost: '', price: '', stock: '', reorder: '10', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+      setProductAdded(name)
       await lookup(scanned)
     } catch (reason) {
       setAddProductError(reason instanceof Error ? reason.message : 'Unable to add product.')
     } finally {
       setSavingProduct(false)
     }
+  }
+
+  const applyBulkPurchase = () => {
+    const boxPrice = Number(bulkPurchase.boxPrice)
+    const unitsPerBox = Number(bulkPurchase.unitsPerBox)
+    if (!Number.isFinite(boxPrice) || boxPrice < 0 || !Number.isInteger(unitsPerBox) || unitsPerBox <= 0) return
+    setAddProductForm(form => ({ ...form, cost: (boxPrice / unitsPerBox).toFixed(2), stock: String(unitsPerBox) }))
   }
 
   const reset = () => {
@@ -214,7 +239,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     setAddedToCart(false)
     setSavingProduct(false)
     setAddProductError('')
-    setAddProductForm({ name: '', price: '', stock: '', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+    setProductAdded(null)
+    setShowAddProductForm(false)
+    setShowBulkCalculator(false)
+    setBulkPurchase({ boxPrice: '', unitsPerBox: '' })
+    setAddProductForm({ name: '', cost: '', price: '', stock: '', reorder: '10', categoryId: categories[0]?.id ?? '', emoji: '📦' })
   }
 
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current) }, [])
@@ -355,6 +384,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
         {/* ── Result card ── */}
         {mode === 'result' && product && (
           <div style={{ padding: '16px', background: c.bg }}>
+            {productAdded && <div role="status" aria-live="polite" style={{ marginBottom: 12, padding: '12px 14px', borderRadius: 12, background: c.successBg, border: '1px solid #C8E6C9', color: '#2E7D32', fontSize: 13, fontWeight: 700 }}>✅ {productAdded} was added to inventory and is ready to scan.</div>}
             <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
               <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 16 }}>
                 <div style={{ width: 56, height: 56, borderRadius: 16, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, flexShrink: 0 }}>{product.emoji}</div>
@@ -411,11 +441,8 @@ export default function SmartScanScreen({ onNavigate }: Props) {
         {/* ── Unknown product ── */}
         {mode === 'unknown' && (
           <div style={{ padding: '16px', background: c.bg }}>
-            <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
-              <div style={{ fontSize: 40, marginBottom: 8 }}>❓</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: c.text, marginBottom: 4 }}>Product Not Found</div>
-              <div style={{ fontSize: 12, color: c.muted, fontFamily: 'monospace', background: c.cardAlt, borderRadius: 8, padding: '6px 12px', marginBottom: 16, display: 'inline-block' }}>{scanned}</div>
-              <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>Add this barcode to your inventory.</div>
+            {showAddProductForm ? <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}><span style={{ fontSize: 22 }}>➕</span><div><div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>Add New Product</div><div style={{ fontSize: 11, color: c.muted, fontFamily: 'monospace' }}>{scanned}</div></div></div>
               <div style={{ marginBottom: 12 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name *</label>
                 <input className="input" placeholder="e.g. Unga Jogoo 2kg" value={addProductForm.name} onChange={e => setAddProductForm(form => ({ ...form, name: e.target.value }))} />
@@ -427,25 +454,63 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                   {categories.map(category => <option key={category.id} value={category.id}>{category.emoji ?? '📦'} {category.name}</option>)}
                 </select>
               </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 7 }}>Product Emoji</label>
+                <div role="radiogroup" aria-label="Product emoji" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                  {productEmojis.map(emoji => {
+                    const selected = addProductForm.emoji === emoji
+                    return <button key={emoji} type="button" role="radio" className="btn" onClick={() => setAddProductForm(form => ({ ...form, emoji }))} aria-label={`Use ${emoji} for this product`} aria-checked={selected} style={{ position: 'relative', width: 34, height: 34, padding: 0, borderRadius: 9, border: selected ? '2px solid #123A8F' : `1px solid ${c.border}`, background: selected ? '#E3EAF8' : c.cardAlt, fontSize: 18, cursor: 'pointer', opacity: selected ? 1 : 0.62, boxShadow: selected ? '0 0 0 2px rgba(18,58,143,0.16)' : 'none' }}>{emoji}{selected && <span aria-hidden="true" style={{ position: 'absolute', right: -5, top: -6, width: 14, height: 14, borderRadius: '50%', background: '#123A8F', color: 'white', fontSize: 10, fontWeight: 800, lineHeight: '14px' }}>✓</span>}</button>
+                  })}
+                </div>
+              </div>
+              <div style={{ marginBottom: 14, border: `1px solid ${c.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                <button type="button" className="btn" onClick={() => setShowBulkCalculator(open => !open)} aria-expanded={showBulkCalculator} style={{ width: '100%', padding: '10px 11px', border: 'none', background: showBulkCalculator ? c.infoBg : c.cardAlt, display: 'flex', alignItems: 'center', gap: 8, color: c.text, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}><span style={{ fontSize: 15 }}>📦</span><span style={{ flex: 1, fontSize: 12, fontWeight: 700 }}>Bulk calculator</span><span style={{ fontSize: 11, color: c.muted }}>Box → unit cost</span><span aria-hidden="true" style={{ color: '#123A8F', transform: showBulkCalculator ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>⌄</span></button>
+                {showBulkCalculator && <div style={{ padding: 11, borderTop: c.divider }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+                    <div><label style={{ display: 'block', marginBottom: 4, fontSize: 10, color: c.muted, fontWeight: 600 }}>Box Price</label><input className="input" type="number" min="0" step="0.01" placeholder="KSh 0" value={bulkPurchase.boxPrice} onChange={event => setBulkPurchase(value => ({ ...value, boxPrice: event.target.value }))} style={{ padding: '9px 8px', fontSize: 13 }} /></div>
+                    <div><label style={{ display: 'block', marginBottom: 4, fontSize: 10, color: c.muted, fontWeight: 600 }}>Units in Box</label><input className="input" type="number" min="1" step="1" placeholder="0" value={bulkPurchase.unitsPerBox} onChange={event => setBulkPurchase(value => ({ ...value, unitsPerBox: event.target.value }))} style={{ padding: '9px 8px', fontSize: 13 }} /></div>
+                    <button type="button" className="btn" onClick={applyBulkPurchase} disabled={!bulkPurchase.boxPrice || !bulkPurchase.unitsPerBox} style={{ padding: '10px', border: 'none', borderRadius: 10, background: bulkPurchase.boxPrice && bulkPurchase.unitsPerBox ? '#123A8F' : c.iconBg, color: bulkPurchase.boxPrice && bulkPurchase.unitsPerBox ? 'white' : c.faint, fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>Apply</button>
+                  </div>
+                  {Number(bulkPurchase.unitsPerBox) > 0 && Number(bulkPurchase.boxPrice) >= 0 && <div style={{ marginTop: 8, fontSize: 11, color: '#2E7D32', fontWeight: 700 }}>Unit cost: KSh {(Number(bulkPurchase.boxPrice) / Number(bulkPurchase.unitsPerBox)).toFixed(2)} · Stock: {bulkPurchase.unitsPerBox} units</div>}
+                </div>}
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: c.text, marginBottom: 10 }}>Pricing &amp; Stock</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Selling Price (KSh) *</label>
-                  <input className="input" type="number" min="0" placeholder="0" value={addProductForm.price} onChange={e => setAddProductForm(form => ({ ...form, price: e.target.value }))} />
+                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Cost Price (KSh) *</label>
+                  <input className="input" type="number" min="0" step="0.01" placeholder="0" value={addProductForm.cost} onChange={e => setAddProductForm(form => ({ ...form, cost: e.target.value }))} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Opening Stock</label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Selling Price (KSh) *</label>
+                  <input className="input" type="number" min="0" step="0.01" placeholder="0" value={addProductForm.price} onChange={e => setAddProductForm(form => ({ ...form, price: e.target.value }))} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Current Stock *</label>
                   <input className="input" type="number" min="0" placeholder="0" value={addProductForm.stock} onChange={e => setAddProductForm(form => ({ ...form, stock: e.target.value }))} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Reorder Level</label>
+                  <input className="input" type="number" min="0" placeholder="10" value={addProductForm.reorder} onChange={e => setAddProductForm(form => ({ ...form, reorder: e.target.value }))} />
                 </div>
               </div>
               {addProductError && <div style={{ color: '#C62828', fontSize: 12, marginBottom: 12 }}>{addProductError}</div>}
               {!categories.length && <div style={{ color: c.muted, fontSize: 12, marginBottom: 12 }}>No product categories are available yet. Add a category in Inventory first.</div>}
               <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn" onClick={reset} style={{ flex: 1, padding: '12px', background: c.cardAlt, border: c.divider, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Dismiss</button>
-                <button className="btn" onClick={() => void saveMissingProduct()} disabled={savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.price.trim()} style={{ flex: 1, padding: '12px', background: savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.price.trim() ? c.cardAlt : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.price.trim() ? c.faint : 'white', cursor: savingProduct ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                <button className="btn" onClick={() => setShowAddProductForm(false)} style={{ flex: 1, padding: '12px', background: c.cardAlt, border: c.divider, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Back</button>
+                <button className="btn" onClick={() => void saveMissingProduct()} disabled={savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.cost.trim() || !addProductForm.price.trim() || !addProductForm.stock.trim()} style={{ flex: 1, padding: '12px', background: savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.cost.trim() || !addProductForm.price.trim() || !addProductForm.stock.trim() ? c.cardAlt : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: savingProduct || !addProductForm.name.trim() || !addProductForm.categoryId || !addProductForm.cost.trim() || !addProductForm.price.trim() || !addProductForm.stock.trim() ? c.faint : 'white', cursor: savingProduct ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
                   {savingProduct ? 'Saving...' : 'Add Product'}
                 </button>
               </div>
-            </div>
+            </div> : <div className="card" style={{ padding: '20px', marginBottom: 12, textAlign: 'center' }}>
+              <div style={{ fontSize: 40, marginBottom: 8 }}>❓</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: c.text, marginBottom: 4 }}>Product Not Found</div>
+              <div style={{ fontSize: 12, color: c.muted, fontFamily: 'monospace', background: c.cardAlt, borderRadius: 8, padding: '6px 12px', marginBottom: 8, display: 'inline-block' }}>{scanned}</div>
+              <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>This barcode isn't in your inventory yet.</div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn" onClick={() => { setAddProductError(''); setShowAddProductForm(true) }} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>➕ Add Product</button>
+                <button className="btn" onClick={reset} style={{ flex: 1, padding: '12px', background: c.cardAlt, border: c.divider, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Dismiss</button>
+              </div>
+            </div>}
           </div>
         )}
 

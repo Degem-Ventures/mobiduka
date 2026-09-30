@@ -46,6 +46,8 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
   const [dataError, setDataError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const loadExpenses = async () => {
     if (!session) { setDataError('Please sign in to load expenses.'); return }
@@ -64,9 +66,10 @@ export default function ExpensesScreen({ onNavigate }: Props) {
     setDataError('')
     try {
       await apiFetch('/api/expenses', {
-        method: 'POST',
+        method: editingExpense ? 'PATCH' : 'POST',
         body: JSON.stringify({
           businessId: session.user.businessId,
+          ...(editingExpense ? { id: editingExpense.id } : {}),
           userId: session.user.id,
           description: form.desc.trim(),
           amount: Number(form.amount),
@@ -79,8 +82,26 @@ export default function ExpensesScreen({ onNavigate }: Props) {
       await loadExpenses()
       setForm({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
       setShowAdd(false)
+      setEditingExpense(null)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save expense.') }
     finally { setSaving(false) }
+  }
+
+  const startEdit = (expense: Expense) => {
+    const category = normalizeCategory(expense.category)
+    const standard = ['Utilities', 'Payroll', 'Rent', 'Supplies', 'Logistics']
+    setForm({ desc: expense.description, amount: String(expense.amount), category: standard.includes(category) ? category : 'Other', categoryOther: standard.includes(category) ? '' : category, method: getExpenseMethod(expense), date: new Date(expense.createdAt).toISOString().slice(0, 10), recurring: expense.recurring })
+    setEditingExpense(expense); setConfirmDeleteId(null); setShowAdd(true)
+  }
+
+  const deleteExpense = async (expense: Expense) => {
+    if (!session) return
+    setSaving(true); setDataError('')
+    try {
+      await apiFetch(`/api/expenses?id=${encodeURIComponent(expense.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
+      setExpenses(previous => previous.filter(item => item.id !== expense.id))
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to delete expense.') }
+    finally { setSaving(false); setConfirmDeleteId(null) }
   }
 
   const categories = ['All', ...Array.from(new Set(expenses.map(expense => normalizeCategory(expense.category))))]
@@ -102,7 +123,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
             <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
-            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Add Expense</div>
+            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>{editingExpense ? 'Edit Expense' : 'Add Expense'}</div>
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
@@ -152,7 +173,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
             </div>
           </div>
           <button className="btn" disabled={saving || !form.desc.trim() || !form.amount || (form.category === 'Other' && !form.categoryOther.trim())} onClick={() => void saveExpense()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(211,47,47,0.35)', opacity: saving ? 0.7 : 1 }}>
-            Save Expense
+            {editingExpense ? 'Save Changes' : 'Save Expense'}
           </button>
         </div>
       </div>
@@ -191,8 +212,9 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           {cat === 'All' ? 'All Expenses' : cat} · KSh {total.toLocaleString()}
         </div>
         {filtered.map(e => (
-          <div key={e.id} className="card" style={{ padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(categoryColors[normalizeCategory(e.category)] || '#6B7A99'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{getExpenseIcon(e)}</div>
+          <div key={e.id} className="card" style={{ padding: '14px 16px', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(categoryColors[normalizeCategory(e.category)] || '#6B7A99'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{getExpenseIcon(e)}</div>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{e.description}</div>
@@ -201,6 +223,13 @@ export default function ExpensesScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{normalizeCategory(e.category)} · {getExpenseMethod(e)} · {new Date(e.createdAt).toLocaleDateString()}</div>
             </div>
             <div style={{ fontSize: 15, fontWeight: 800, color: '#D32F2F', flexShrink: 0 }}>KSh {e.amount.toLocaleString()}</div>
+            </div>
+            {confirmDeleteId === e.id ? (
+              <div role="alert" style={{ marginTop: 12, paddingTop: 12, borderTop: c.divider }}>
+                <div style={{ fontSize: 12, color: '#B71C1C', fontWeight: 700, marginBottom: 9 }}>Delete this expense permanently?</div>
+                <div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setConfirmDeleteId(null)} style={{ flex: 1, padding: 8, border: 'none', borderRadius: 8, background: c.iconBg, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteExpense(e)} style={{ flex: 1, padding: 8, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div>
+              </div>
+            ) : <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}><button className="btn" onClick={() => startEdit(e)} style={{ padding: '6px 10px', border: 'none', borderRadius: 8, background: c.iconBg, color: '#123A8F', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button><button className="btn" onClick={() => setConfirmDeleteId(e.id)} style={{ padding: '6px 10px', border: 'none', borderRadius: 8, background: c.errorBg, color: '#D32F2F', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Delete</button></div>}
           </div>
         ))}
       </div>

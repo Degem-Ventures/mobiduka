@@ -133,3 +133,45 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const businessId = requireBusinessAccess(request, body.businessId);
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const phone = typeof body.phone === "string" ? body.phone.trim() || null : null;
+    const creditLimit = body.initialCreditLimit === undefined ? undefined : Number(body.initialCreditLimit);
+    if (!businessId || !id || !name) return NextResponse.json({ error: "Authenticated business context, customer id, and name are required." }, { status: 400 });
+    if (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0)) return NextResponse.json({ error: "initialCreditLimit must be a non-negative number." }, { status: 400 });
+    const existing = await prisma.customer.findFirst({ where: { id, businessId }, select: { id: true } });
+    if (!existing) return NextResponse.json({ error: "Customer was not found." }, { status: 404 });
+    if (phone) {
+      const duplicate = await prisma.customer.findFirst({ where: { businessId, phone, id: { not: id } }, select: { id: true } });
+      if (duplicate) return NextResponse.json({ error: "A customer with this phone number already exists." }, { status: 409 });
+    }
+    const customer = await prisma.customer.update({ where: { id }, data: { name, phone, ...(creditLimit === undefined ? {} : { creditLimit }) } });
+    return NextResponse.json(customer);
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to update customer.", details: error instanceof Error ? error.message : "Unknown error" }, { status: 400 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
+    const id = url.searchParams.get("id")?.trim();
+    if (!businessId || !id) return NextResponse.json({ error: "Authenticated business context and customer id are required." }, { status: 400 });
+    const customer = await prisma.customer.findFirst({ where: { id, businessId }, include: { _count: { select: { sales: true, creditEntries: true } } } });
+    if (!customer) return NextResponse.json({ error: "Customer was not found." }, { status: 404 });
+    if (customer._count.sales || customer._count.creditEntries) return NextResponse.json({ error: "Customers with sales or credit history cannot be deleted." }, { status: 409 });
+    await prisma.$transaction(async tx => {
+      await tx.creditAccount.deleteMany({ where: { customerId: id } });
+      await tx.customer.delete({ where: { id } });
+    });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to delete customer.", details: error instanceof Error ? error.message : "Unknown error" }, { status: 400 });
+  }
+}

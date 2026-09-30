@@ -69,6 +69,7 @@ model Business {
   notificationSubscriptions NotificationSubscription[]
   scanEvents        ScanEvent[]
   shiftTypes        ShiftType[]
+  roles             Role[]
   settings          BusinessSettings?
 }
 
@@ -83,6 +84,8 @@ model BusinessSettings {
   mpesaEnabled   Boolean  @default(true)
   themeMode      String   @default("light")
   paymentConfig  Json?
+  receiptConfig  Json?
+  taxConfig      Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -104,11 +107,31 @@ model License {
 
 model Role {
   id          String   @id @default(uuid())
-  name        String   @unique
+  businessId  String
+  name        String
   description String?
+  isSystem    Boolean  @default(false)
+  icon        String   @default("🔧")
+  color       String   @default("#6B7A99")
   createdAt   DateTime @default(now())
 
-  users User[]
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  users       User[]
+  permissions RolePermission[]
+
+  @@unique([businessId, name])
+  @@index([businessId])
+}
+
+model RolePermission {
+  roleId        String
+  permissionKey String
+  createdAt     DateTime @default(now())
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+  @@index([permissionKey])
 }
 
 model User {

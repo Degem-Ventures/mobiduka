@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getPinLoginContext, saveClientSession, savePinLoginContext } from '../../lib/client-api'
 
 interface Props {
@@ -14,6 +14,31 @@ export default function LoginScreen({ onLogin }: Props) {
   const [showPassword, setShowPassword] = useState(false)
   const [loginError, setLoginError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const taglines = [
+    'Smart retail management for modern businesses',
+    'Track every sale, every shilling, every shift',
+    'Real-time stock alerts — never run out again',
+    'M-Pesa, Cash & Credit in one place',
+    'Built for dukas, supermarkets & kiosks',
+  ]
+  const [tagIdx, setTagIdx] = useState(0)
+  const [tagFade, setTagFade] = useState(true)
+
+  const selectTagline = (index: number) => {
+    setTagFade(false)
+    window.setTimeout(() => { setTagIdx(index); setTagFade(true) }, 180)
+  }
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTagFade(false)
+      window.setTimeout(() => {
+        setTagIdx(current => (current + 1) % taglines.length)
+        setTagFade(true)
+      }, 220)
+    }, 3200)
+    return () => window.clearInterval(intervalId)
+  }, [taglines.length])
 
   // Forgot-password flow state
   const [fpEmail, setFpEmail] = useState('')
@@ -276,18 +301,12 @@ export default function LoginScreen({ onLogin }: Props) {
             <div style={{ fontSize: 14, color: 'rgba(212,175,55,0.9)', fontWeight: 500, letterSpacing: 3, textTransform: 'uppercase', marginTop: 4 }}>Point of Sale</div>
           </div>
 
-          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, textAlign: 'center', lineHeight: 1.6, marginBottom: 60 }}>
-            Smart retail management for<br />modern businesses
+          <div aria-live="polite" style={{ minHeight: 46, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 26 }}>
+            <div style={{ maxWidth: 270, color: 'rgba(255,255,255,0.68)', fontSize: 14, textAlign: 'center', lineHeight: 1.6, opacity: tagFade ? 1 : 0, transform: tagFade ? 'translateY(0)' : 'translateY(4px)', transition: 'opacity 0.22s ease, transform 0.22s ease' }}>{taglines[tagIdx]}</div>
           </div>
 
-          {/* Loading dots */}
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[0, 1, 2].map(i => (
-              <div key={i} style={{
-                width: 8, height: 8, borderRadius: '50%',
-                background: i === 0 ? '#D4AF37' : 'rgba(255,255,255,0.3)'
-              }} />
-            ))}
+          <div role="tablist" aria-label="MobiDuka highlights" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 18 }}>
+            {taglines.map((tagline, index) => <button key={tagline} type="button" className="btn" role="tab" aria-selected={index === tagIdx} aria-label={`Show: ${tagline}`} onClick={() => selectTagline(index)} style={{ width: index === tagIdx ? 22 : 7, height: 7, padding: 0, border: 'none', borderRadius: 99, background: index === tagIdx ? '#D4AF37' : 'rgba(255,255,255,0.28)', cursor: 'pointer', transition: 'width 0.25s ease, background 0.25s ease' }} />)}
           </div>
         </div>
 

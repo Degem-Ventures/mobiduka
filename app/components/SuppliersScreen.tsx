@@ -15,6 +15,8 @@ export default function SuppliersScreen({ onNavigate }: Props) {
   const [form, setForm] = useState({ name: '', category: '', contact: '', phone: '', email: '' })
   const [dataError, setDataError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const session = getClientSession()
 
   useEffect(() => {
@@ -26,6 +28,24 @@ export default function SuppliersScreen({ onNavigate }: Props) {
 
   const filtered = suppliers.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || (s.category ?? '').toLowerCase().includes(search.toLowerCase()))
 
+  const startEdit = (supplier: Supplier) => {
+    setForm({ name: supplier.name, category: supplier.category ?? '', contact: supplier.contactPerson ?? '', phone: supplier.phone ?? '', email: supplier.email ?? '' })
+    setEditingSupplier(supplier)
+    setSelected(null)
+    setShowAdd(true)
+  }
+
+  const deleteSupplier = async () => {
+    if (!session || !selected) return
+    setSaving(true); setDataError('')
+    try {
+      await apiFetch(`/api/suppliers?id=${encodeURIComponent(selected.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
+      setSuppliers(previous => previous.filter(supplier => supplier.id !== selected.id))
+      setSelected(null)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to delete supplier.') }
+    finally { setSaving(false); setConfirmDelete(false) }
+  }
+
   if (showAdd) {
     return (
       <div className="screen" style={{ background: c.bg }}>
@@ -34,7 +54,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
-            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Add Supplier</div>
+            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>{editingSupplier ? 'Edit Supplier' : 'Add Supplier'}</div>
           </div>
         </div>
         <div className="scroll-area" style={{ paddingTop: '20px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 100 }}>
@@ -56,14 +76,14 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             if (!session || !form.name.trim()) return
             setSaving(true)
             try {
-              const supplier = await apiFetch<Supplier>('/api/suppliers', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, name: form.name, category: form.category, contactPerson: form.contact, phone: form.phone, email: form.email }) })
-              setSuppliers(previous => [...previous, supplier])
+              const supplier = await apiFetch<Supplier>('/api/suppliers', { method: editingSupplier ? 'PATCH' : 'POST', body: JSON.stringify({ businessId: session.user.businessId, ...(editingSupplier ? { id: editingSupplier.id } : {}), name: form.name, category: form.category, contactPerson: form.contact, phone: form.phone, email: form.email }) })
+              setSuppliers(previous => editingSupplier ? previous.map(item => item.id === supplier.id ? supplier : item) : [...previous, supplier])
               setForm({ name: '', category: '', contact: '', phone: '', email: '' })
-              setShowAdd(false)
+              setShowAdd(false); setEditingSupplier(null)
             } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save supplier.') }
             finally { setSaving(false) }
           }} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
-            {saving ? 'Saving...' : 'Save Supplier'}
+            {saving ? 'Saving...' : editingSupplier ? 'Save Changes' : 'Save Supplier'}
           </button>
         </div>
       </div>
@@ -79,7 +99,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Supplier Profile</div>
-            <button className="btn" style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <button className="btn" onClick={() => startEdit(selected)} style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} aria-label="Edit supplier">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
           </div>
@@ -111,9 +131,11 @@ export default function SuppliersScreen({ onNavigate }: Props) {
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => onNavigate('purchases')} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>New Order</button>
+            <button className="btn" onClick={() => setConfirmDelete(true)} style={{ padding: '13px', background: c.errorBg, border: '1px solid #D32F2F', borderRadius: 14, fontSize: 13, fontWeight: 700, color: '#D32F2F', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
             <button className="btn" style={{ width: 48, padding: '13px', background: '#E8F5E9', border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>📞</button>
             <button className="btn" style={{ width: 48, padding: '13px', background: c.iconBg, border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>✉️</button>
           </div>
+          {confirmDelete && <div role="alert" className="card" style={{ padding: 14, marginTop: 14, border: '1px solid #EF9A9A' }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete {selected.name}?</div><div style={{ fontSize: 12, color: c.muted, marginBottom: 12 }}>This cannot be undone. Suppliers linked to products or orders are protected.</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setConfirmDelete(false)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.iconBg, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteSupplier()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div></div>}
         </div>
       </div>
     )

@@ -164,9 +164,9 @@ async function main() {
   });
 
   const [ownerRole, managerRole, cashierRole] = await prisma.$transaction([
-    prisma.role.create({ data: { name: "OWNER", description: "Store owner" } }),
-    prisma.role.create({ data: { name: "MANAGER", description: "Store manager" } }),
-    prisma.role.create({ data: { name: "CASHIER", description: "Shift cashier" } }),
+    prisma.role.create({ data: { businessId: business.id, name: "Admin", description: "Store owner" } }),
+    prisma.role.create({ data: { businessId: business.id, name: "Manager", description: "Store manager" } }),
+    prisma.role.create({ data: { businessId: business.id, name: "Cashier", description: "Shift cashier" } }),
   ]);
 
   const passwordHash = await bcrypt.hash("OwnerPass123", 10);
