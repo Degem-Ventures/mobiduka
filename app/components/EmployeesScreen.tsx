@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import AdminRegisterScreen from './AdminRegisterScreen'
 
 type Role = 'Store Manager' | 'Cashier' | 'Stock Keeper' | 'Supervisor' | 'Accountant'
 
 interface Employee {
   id: string
+  roleId: string
   name: string
   role: Role
   phone: string
   email: string
   pin: string
+  hasPin: boolean
   shift: string
   salary: number
   startDate: string
@@ -53,14 +56,16 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   const loadEmployees = async () => {
     if (!session) { setDataError('Please sign in to load employees.'); return }
     try {
-      const response = await apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; phone: string | null; email: string | null; status: string; shift: string; salary: number; startDate: string }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`)
+      const response = await apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; roleId: string; phone: string | null; email: string | null; status: string; shift: string; salary: number; startDate: string; hasPin: boolean }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`)
       setList(response.employees.map((employee, index) => ({
         id: employee.id,
+        roleId: employee.roleId,
         name: employee.fullName,
         role: roleFromApi(employee.role),
         phone: employee.phone ?? '',
         email: employee.email ?? '',
         pin: '',
+        hasPin: employee.hasPin,
         shift: employee.shift,
         salary: Number(employee.salary),
         startDate: new Date(employee.startDate).toLocaleDateString(),
@@ -107,6 +112,14 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   }
 
   if (showForm) {
+    return <AdminRegisterScreen
+      onNavigate={onNavigate}
+      employee={editing ? { id: editing.id, name: editing.name, phone: editing.phone, email: editing.email, roleId: editing.roleId, shift: editing.shift, salary: editing.salary, active: editing.active, hasPin: editing.hasPin, startDate: editing.startDate } : null}
+      onComplete={() => { void loadEmployees(); setShowForm(false); setEditing(null) }}
+    />
+  }
+
+  if (false && showForm) {
     const isEdit = !!editing
     return (
       <div className="screen" style={{ background: c.bg }}>

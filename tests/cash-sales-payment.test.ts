@@ -37,9 +37,9 @@ test('cash sales create a cash payment record', async () => {
     businessId = business.id;
 
     const role = await prisma.role.upsert({
-      where: { name: roleName },
+      where: { businessId_name: { businessId: business.id, name: roleName } },
       update: {},
-      create: { name: roleName, description: 'cashier' },
+      create: { businessId: business.id, name: roleName, description: 'cashier' },
     });
 
     const user = await prisma.user.create({

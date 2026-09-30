@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs"
 import { PrismaClient } from "@prisma/client"
 import { demoExpenses } from "../data/demo-expenses"
 import { lifecareProducts } from "../data/lifecare-products"
+import { canonicalRoleName } from "../lib/roles"
 
 const databaseUrl = (process.env.DATABASE_URL ?? "").trim()
 const nodeEnv = (process.env.NODE_ENV ?? "").trim()
@@ -122,19 +123,19 @@ async function main() {
 
   const roles = await Promise.all([
     prisma.role.upsert({
-      where: { name: "OWNER" },
+      where: { businessId_name: { businessId: business.id, name: "Admin" } },
       update: { description: "Store owner and manager" },
-      create: { name: "OWNER", description: "Store owner and manager" },
+      create: { businessId: business.id, name: "Admin", description: "Store owner and manager" },
     }),
     prisma.role.upsert({
-      where: { name: "CASHIER" },
+      where: { businessId_name: { businessId: business.id, name: "Cashier" } },
       update: { description: "Canteen cashier" },
-      create: { name: "CASHIER", description: "Canteen cashier" },
+      create: { businessId: business.id, name: "Cashier", description: "Canteen cashier" },
     }),
     prisma.role.upsert({
-      where: { name: "SUPERVISOR" },
+      where: { businessId_name: { businessId: business.id, name: "Supervisor" } },
       update: { description: "Canteen supervisor" },
-      create: { name: "SUPERVISOR", description: "Canteen supervisor" },
+      create: { businessId: business.id, name: "Supervisor", description: "Canteen supervisor" },
     }),
   ])
   const roleByName = new Map(roles.map((role) => [role.name, role]))
@@ -179,7 +180,7 @@ async function main() {
         fullName: user.fullName,
         email: user.email,
         phone: user.phone,
-        roleId: roleByName.get(user.role)?.id,
+        roleId: roleByName.get(canonicalRoleName(user.role))?.id,
         passwordHash: user.password
           ? await bcrypt.hash(user.password, 10)
           : undefined,

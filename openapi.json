@@ -34,6 +34,14 @@
     { "name": "Payments", "description": "M-Pesa payment flows" }
   ],
   "paths": {
+    "/business": {
+      "get": { "tags": ["Business"], "summary": "Get authenticated business profile", "responses": { "200": { "description": "Business profile" }, "401": { "description": "Authentication required" } } },
+      "patch": { "tags": ["Business"], "summary": "Update authenticated business profile", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "businessId": { "type": "string" }, "name": { "type": "string" }, "branch": { "type": "string", "nullable": true }, "country": { "type": "string", "nullable": true }, "phone": { "type": "string", "nullable": true }, "email": { "type": "string", "format": "email", "nullable": true }, "taxPin": { "type": "string", "nullable": true }, "currency": { "type": "string", "enum": ["KES", "UGX", "TZS", "USD", "GBP", "EUR"] } } } } } }, "responses": { "200": { "description": "Updated business profile" } } }
+    },
+    "/settings": {
+      "get": { "tags": ["Business"], "summary": "Get authenticated business settings", "parameters": [{ "name": "includeTaxConfig", "in": "query", "schema": { "type": "boolean" }, "description": "Include the Tax & Compliance preferences." }], "responses": { "200": { "description": "Business settings and optional tax configuration" }, "401": { "description": "Authentication required" } } },
+      "patch": { "tags": ["Business"], "summary": "Update business and tax settings", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "description": "Accepts businessId, taxPin, and taxConfig (vatEnabled, defaultRate, filingPeriod, etimsEnabled, etimsDevice)." } } } }, "responses": { "200": { "description": "Updated settings" }, "400": { "description": "Invalid settings" } } }
+    },
     "/auth/login": {
       "post": {
         "tags": ["Authentication"],

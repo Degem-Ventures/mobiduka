@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { Html5Qrcode } from 'html5-qrcode'
 
 type ProductItem = { id: string; name: string; categoryId: string | null; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: 'good' | 'low' | 'critical'; barcode: string | null; deletedAt?: string | null }
 type CategoryItem = { id: string; name: string; emoji: string | null; deletedAt?: string | null }
@@ -16,6 +17,7 @@ interface Props {
 
 export default function InventoryScreen({ onNavigate, initialBarcode, initialProductId }: Props) {
   const [products, setProducts] = useState<ProductItem[]>([])
+  const [deletedProducts, setDeletedProducts] = useState<ProductItem[]>([])
   const [categories, setCategories] = useState<CategoryItem[]>([])
   const [deletedCategories, setDeletedCategories] = useState<CategoryItem[]>([])
   const [dataError, setDataError] = useState('')
@@ -29,17 +31,22 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [editProduct, setEditProduct] = useState<ProductItem | null>(null)
   const [newCat, setNewCat] = useState({ name: '', emoji: '📦' })
   const [productForm, setProductForm] = useState({ name: '', categoryId: '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' })
+  const [showBulkCalculator, setShowBulkCalculator] = useState(false)
+  const [bulkPurchase, setBulkPurchase] = useState({ boxPrice: '', unitsPerBox: '', boxes: '1' })
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
   const [editingCategoryName, setEditingCategoryName] = useState('')
   const [showDeleted, setShowDeleted] = useState(false)
   const [isInventoryLoading, setIsInventoryLoading] = useState(true)
   const [deletedProductCount, setDeletedProductCount] = useState(0)
   const [toast, setToast] = useState<Toast | null>(null)
+  const [showBarcodeCamera, setShowBarcodeCamera] = useState(false)
+  const [cameraError, setCameraError] = useState('')
   // const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const toastTimeout = useRef<number | null>(null);
 
   const inventoryRequestId = useRef(0)
+  const barcodeScannerRef = useRef<Html5Qrcode | null>(null)
   const c = useColors()
   const session = getClientSession()
 
@@ -52,6 +59,40 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   useEffect(() => () => {
     if (toastTimeout.current) window.clearTimeout(toastTimeout.current)
   }, [])
+
+  const stopBarcodeCamera = async () => {
+    const scanner = barcodeScannerRef.current
+    barcodeScannerRef.current = null
+    if (scanner) {
+      try { await scanner.stop() } catch { /* Scanner may already have stopped after a successful decode. */ }
+      try { scanner.clear() } catch { /* The video mount can already be unmounted. */ }
+    }
+    setShowBarcodeCamera(false)
+  }
+
+  const startBarcodeCamera = () => {
+    setCameraError('')
+    setShowBarcodeCamera(true)
+  }
+
+  useEffect(() => {
+    if (!showBarcodeCamera) return
+    let disposed = false
+    const scanner = new Html5Qrcode('inventory-barcode-camera')
+    barcodeScannerRef.current = scanner
+    void scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 160 } }, decodedText => {
+      if (disposed) return
+      setProductForm(form => ({ ...form, barcode: decodedText }))
+      notify('Barcode added to product.')
+      void stopBarcodeCamera()
+    }, () => undefined).catch(reason => { if (!disposed) setCameraError(reason instanceof Error ? reason.message : 'Unable to access the camera.') })
+    return () => {
+      disposed = true
+      if (barcodeScannerRef.current !== scanner) return
+      barcodeScannerRef.current = null
+      void scanner.stop().catch(() => undefined).then(() => { try { scanner.clear() } catch { /* Camera mount is already gone. */ } })
+    }
+  }, [showBarcodeCamera])
 
   const toastNode = toast && (
     <div role="status" aria-live="polite" style={{ position: 'fixed', top: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, maxWidth: 'calc(100vw - 32px)', padding: '12px 16px', borderRadius: 12, background: toast.tone === 'success' ? '#2E7D32' : '#B71C1C', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>
@@ -75,14 +116,14 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     setIsInventoryLoading(true)
     setDataError('')
     Promise.all([
-      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; deletedAt?: string | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}${showDeleted ? '&includeDeleted=true' : ''}`),
+      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; deletedAt?: string | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
       apiFetch<CategoryItem[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<Array<{ id: string }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}&includeDeleted=true`),
-    ]).then(([productRows, categoryRows, deletedProducts]) => {
+      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; deletedAt?: string | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}&includeDeleted=true`),
+    ]).then(([productRows, categoryRows, deletedRows]) => {
       if (requestId !== inventoryRequestId.current) return
-      setDeletedProductCount(deletedProducts.length)
+      setDeletedProductCount(deletedRows.length)
       setCategories(categoryRows)
-      setProducts(productRows.map(product => {
+      const mapProduct = (product: typeof productRows[number]): ProductItem => {
         const stock = Number(product.inventory?.quantity ?? 0)
         const reorder = Number(product.minimumStock ?? 0)
         return {
@@ -99,14 +140,16 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           barcode: product.barcode,
           deletedAt: product.deletedAt,
         }
-      }))
+      }
+      setProducts(productRows.map(mapProduct))
+      setDeletedProducts(deletedRows.map(mapProduct))
     }).catch(reason => {
       if (requestId !== inventoryRequestId.current) return
       setDataError(reason instanceof Error ? reason.message : 'Unable to load inventory.')
     }).finally(() => {
       if (requestId === inventoryRequestId.current) setIsInventoryLoading(false)
     })
-  }, [session?.user.businessId, showDeleted])
+  }, [session?.user.businessId])
 
   useEffect(() => {
     if (!session || !showManageCategories) return
@@ -134,10 +177,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     return matchSearch && matchFilter
   })
 
-  const toggleDeletedProducts = () => {
-    setIsInventoryLoading(true)
-    setShowDeleted(previous => !previous)
-  }
+  const toggleDeletedProducts = () => setShowDeleted(previous => !previous)
 
   const openEditProduct = (product: ProductItem) => {
     setProductForm({
@@ -151,6 +191,8 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
       emoji: product.emoji,
     })
     setEditProduct(product)
+    setShowBulkCalculator(false)
+    setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' })
     setSelected(null)
     setShowAddProduct(true)
   }
@@ -162,6 +204,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     try {
       await apiFetch(`/api/products?id=${encodeURIComponent(product.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
       setProducts(previous => previous.filter(item => item.id !== product.id))
+      setDeletedProducts(previous => [...previous, { ...product, deletedAt: new Date().toISOString() }])
       setDeletedProductCount(previous => previous + 1)
       setSelected(current => current?.id === product.id ? null : current)
       notify('Product deleted.')
@@ -180,7 +223,8 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     setDataError('')
     try {
       await apiFetch('/api/products', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, id: product.id, restore: true }) })
-      setProducts(previous => previous.filter(item => item.id !== product.id))
+      setDeletedProducts(previous => previous.filter(item => item.id !== product.id))
+      setProducts(previous => [...previous, { ...product, deletedAt: null }].sort((left, right) => left.name.localeCompare(right.name)))
       setDeletedProductCount(previous => Math.max(0, previous - 1))
       notify('Product restored.')
     } catch (reason) {
@@ -276,6 +320,14 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     } finally {
       setSaving(false)
     }
+  }
+
+  const applyBulkPurchase = () => {
+    const boxPrice = Number(bulkPurchase.boxPrice)
+    const unitsPerBox = Number(bulkPurchase.unitsPerBox)
+    const boxes = Number(bulkPurchase.boxes || 1)
+    if (!Number.isFinite(boxPrice) || boxPrice < 0 || !Number.isInteger(unitsPerBox) || unitsPerBox <= 0 || !Number.isInteger(boxes) || boxes <= 0) return
+    setProductForm(form => ({ ...form, cost: (boxPrice / unitsPerBox).toFixed(2), stock: String(unitsPerBox * boxes) }))
   }
 
   if (selected) {
@@ -604,14 +656,13 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
               )
             })}
           </div>
-          <div className="card" style={{ padding: '16px', marginBottom: 14, opacity: deletedCategories.length ? 0.8 : 1 }}>
+          {deletedCategories.length > 0 && <div className="card" style={{ padding: '16px', marginBottom: 14, opacity: 0.8 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Deleted Categories</div>
-            {deletedCategories.length === 0 && <div style={{ padding: '6px 0', color: c.muted, fontSize: 13 }}>No deleted categories.</div>}
             {deletedCategories.map((category, index) => <div key={category.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 0', borderBottom: index < deletedCategories.length - 1 ? c.divider : 'none' }}>
               <div style={{ flex: 1, fontSize: 13, color: c.muted, textDecoration: 'line-through' }}>{category.emoji ?? '📦'} {category.name}</div>
               <button className="btn" onClick={() => void restoreCategory(category)} disabled={saving} style={{ padding: '7px 10px', borderRadius: 8, background: c.successBg, border: 'none', color: '#2E7D32', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>Restore</button>
             </div>)}
-          </div>
+          </div>}
           <div className="card" style={{ padding: '16px' }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Add New Category</div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -646,9 +697,10 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>Icon / Emoji</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {emojis.map(e => (
-                  <button key={e} className="btn" onClick={() => setNewCat(prev => ({ ...prev, emoji: e }))} style={{ width: 42, height: 42, borderRadius: 10, border: newCat.emoji === e ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: newCat.emoji === e ? 'rgba(18,58,143,0.08)' : c.card, fontSize: 22, cursor: 'pointer' }}>{e}</button>
-                ))}
+              {emojis.map(e => {
+                const selectedEmoji = newCat.emoji === e
+                return <button key={e} type="button" className="btn" onClick={() => setNewCat(prev => ({ ...prev, emoji: e }))} style={{ width: 42, height: 42, borderRadius: 10, border: selectedEmoji ? '2px solid #123A8F' : `1px solid ${c.border}`, background: selectedEmoji ? 'rgba(18,58,143,0.08)' : c.card, fontSize: 22, cursor: 'pointer', boxShadow: selectedEmoji ? '0 0 0 2px rgba(18,58,143,0.12)' : 'none' }}>{e}</button>
+              })}
               </div>
             </div>
           </div>
@@ -692,7 +744,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
         {toastNode}
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button className="btn" onClick={() => { setShowAddProduct(false); setEditProduct(null) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <button className="btn" onClick={() => { setShowAddProduct(false); setEditProduct(null); setShowBulkCalculator(false); setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' }) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>{editProduct ? 'Edit Product' : 'Add Product'}</div>
@@ -702,11 +754,30 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           {/* Emoji picker */}
           <div className="card" style={{ padding: '16px', marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>Product Icon</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-              {emojis.map(e => (
-                <button key={e} className="btn" onClick={() => setProductForm(f => ({ ...f, emoji: e }))} style={{ width: 40, height: 40, borderRadius: 10, border: productForm.emoji === e ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: productForm.emoji === e ? 'rgba(18,58,143,0.1)' : c.card, fontSize: 20, cursor: 'pointer' }}>{e}</button>
-              ))}
+            <div role="radiogroup" aria-label="Product icon" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+              {emojis.map(e => {
+                const selectedEmoji = productForm.emoji === e
+                return <button key={e} type="button" role="radio" aria-checked={selectedEmoji} className="btn" onClick={() => setProductForm(f => ({ ...f, emoji: e }))} style={{ width: 40, height: 40, borderRadius: 10, border: selectedEmoji ? '2px solid #123A8F' : `1px solid ${c.border}`, background: selectedEmoji ? 'rgba(18,58,143,0.1)' : c.card, fontSize: 20, cursor: 'pointer', boxShadow: selectedEmoji ? '0 0 0 2px rgba(18,58,143,0.12)' : 'none' }}>{e}</button>
+              })}
             </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 14, overflow: 'hidden' }}>
+            <button type="button" className="btn" onClick={() => setShowBulkCalculator(open => !open)} aria-expanded={showBulkCalculator} style={{ width: '100%', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10, background: showBulkCalculator ? c.infoBg : c.card, border: 'none', color: c.text, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: c.iconBg, fontSize: 16 }}>📦</span>
+              <span style={{ flex: 1 }}><span style={{ display: 'block', fontSize: 13, fontWeight: 800 }}>Bulk purchase calculator</span><span style={{ display: 'block', marginTop: 2, fontSize: 11, color: c.muted }}>Calculate unit cost and stock from a carton or box.</span></span>
+              <span aria-hidden="true" style={{ fontSize: 16, color: '#123A8F', transform: showBulkCalculator ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>⌄</span>
+            </button>
+            {showBulkCalculator && <div style={{ padding: '0 16px 16px', borderTop: c.divider }}>
+              <div style={{ marginTop: 13, fontSize: 12, color: c.muted, lineHeight: 1.45 }}>Enter the wholesale price for one box and how many individual items it contains. We will populate the unit cost and current stock below.</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+                <div><label style={{ fontSize: 11, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 5 }}>Box Price (KSh)</label><input className="input" type="number" min="0" step="0.01" placeholder="e.g. 1,200" value={bulkPurchase.boxPrice} onChange={event => setBulkPurchase(value => ({ ...value, boxPrice: event.target.value }))} /></div>
+                <div><label style={{ fontSize: 11, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 5 }}>Units per Box</label><input className="input" type="number" min="1" step="1" placeholder="e.g. 24" value={bulkPurchase.unitsPerBox} onChange={event => setBulkPurchase(value => ({ ...value, unitsPerBox: event.target.value }))} /></div>
+                <div><label style={{ fontSize: 11, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 5 }}>Boxes Purchased</label><input className="input" type="number" min="1" step="1" value={bulkPurchase.boxes} onChange={event => setBulkPurchase(value => ({ ...value, boxes: event.target.value }))} /></div>
+                <div style={{ display: 'flex', alignItems: 'end' }}><button type="button" className="btn" onClick={applyBulkPurchase} disabled={!bulkPurchase.boxPrice || !bulkPurchase.unitsPerBox || !bulkPurchase.boxes} style={{ width: '100%', padding: '12px 10px', border: 'none', borderRadius: 12, background: bulkPurchase.boxPrice && bulkPurchase.unitsPerBox && bulkPurchase.boxes ? '#123A8F' : c.cardAlt, color: bulkPurchase.boxPrice && bulkPurchase.unitsPerBox && bulkPurchase.boxes ? 'white' : c.faint, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Apply calculation</button></div>
+              </div>
+              {Number(bulkPurchase.boxPrice) >= 0 && Number(bulkPurchase.unitsPerBox) > 0 && Number(bulkPurchase.boxes) > 0 && <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: c.successBg, color: '#2E7D32', fontSize: 12, fontWeight: 700 }}>Unit cost: KSh {(Number(bulkPurchase.boxPrice) / Number(bulkPurchase.unitsPerBox)).toFixed(2)} · Stock: {Number(bulkPurchase.unitsPerBox) * Number(bulkPurchase.boxes)} units</div>}
+            </div>}
           </div>
 
           <div className="card" style={{ padding: '20px', marginBottom: 14 }}>
@@ -717,7 +788,17 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             </div>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Barcode</label>
-              <input className="input" inputMode="numeric" placeholder="Scan or enter barcode" value={productForm.barcode} onChange={e => setProductForm(f => ({ ...f, barcode: e.target.value }))} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input className="input" inputMode="numeric" placeholder="Scan or enter barcode" value={productForm.barcode} onChange={e => setProductForm(f => ({ ...f, barcode: e.target.value }))} style={{ flex: 1 }} />
+                <button type="button" className="btn" onClick={startBarcodeCamera} aria-label="Scan barcode with camera" style={{ width: 44, borderRadius: 12, border: 'none', background: c.iconBg, color: '#123A8F', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+                </button>
+              </div>
+              {showBarcodeCamera && <div style={{ marginTop: 10, position: 'relative', borderRadius: 12, overflow: 'hidden', background: '#0D1B3D', minHeight: 190 }}>
+                <div id="inventory-barcode-camera" style={{ width: '100%', minHeight: 190 }} />
+                <button type="button" className="btn" onClick={() => void stopBarcodeCamera()} style={{ position: 'absolute', top: 8, right: 8, padding: '6px 10px', borderRadius: 8, border: 'none', background: 'rgba(13,27,61,0.75)', color: 'white', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                {cameraError && <div style={{ position: 'absolute', left: 8, right: 8, bottom: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(255,235,238,0.96)', color: '#C62828', fontSize: 11 }}>{cameraError}</div>}
+              </div>}
             </div>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
@@ -774,10 +855,10 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Inventory</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={() => setShowManageCategories(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Categories</button>
-            {!showDeleted && <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' }); setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' }); setShowBulkCalculator(false); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
               <span style={{ fontSize: 16, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Product</span>
-            </button>}
+            </button>
           </div>
         </div>
 
@@ -841,10 +922,10 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
               </span>
             </div>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              {showDeleted ? <button className="btn" onClick={() => void restoreProduct(p)} disabled={saving} style={{ padding: '7px 10px', borderRadius: 8, background: c.successBg, border: 'none', color: '#2E7D32', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>Restore</button> : <>
+              <>
                 <button className="btn" onClick={() => openEditProduct(p)} aria-label={`Edit ${p.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2 2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg></button>
                 <button className="btn" onClick={() => void deleteProduct(p)} disabled={saving} aria-label={`Delete ${p.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg></button>
-              </>}
+              </>
             </div>
           </div>
         ))}
@@ -856,6 +937,17 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             {showDeleted ? 'Hide deleted' : 'Show deleted'}
           </button>
         </div>
+        {showDeleted && <div style={{ marginTop: 14, paddingTop: 14, borderTop: c.divider }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase' }}>Deleted Products</div>
+            <div style={{ fontSize: 11, color: c.muted }}>{deletedProducts.length} item{deletedProducts.length === 1 ? '' : 's'}</div>
+          </div>
+          {deletedProducts.length === 0 ? <div className="card" style={{ padding: '14px', fontSize: 12, color: c.muted, textAlign: 'center' }}>No deleted products.</div> : deletedProducts.map(product => <div key={product.id} className="card" style={{ marginBottom: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, opacity: 0.7 }}>
+            <div style={{ width: 42, height: 42, borderRadius: 12, background: c.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 21 }}>{product.emoji}</div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: c.muted, textDecoration: 'line-through' }}>{product.name}</div><div style={{ fontSize: 11, color: c.faint }}>{product.category} · KSh {product.price}</div></div>
+            <button className="btn" onClick={() => void restoreProduct(product)} disabled={saving} style={{ padding: '7px 10px', borderRadius: 8, background: c.successBg, border: 'none', color: '#2E7D32', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>Restore</button>
+          </div>)}
+        </div>}
         <button className="btn" onClick={() => setShowManageCategories(true)} style={{ width: '100%', marginTop: 10, padding: '12px', background: c.cardAlt, border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>
           Manage Categories
@@ -863,15 +955,15 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
       </div>
 
       {/* FAB */}
-      {!showDeleted && <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' }); setEditProduct(null); setShowAddProduct(true) }} style={{
+      <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
+        <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: '📦' }); setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' }); setShowBulkCalculator(false); setEditProduct(null); setShowAddProduct(true) }} style={{
           width: 52, height: 52, borderRadius: '50%',
           background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
           border: 'none', fontSize: 24, color: '#0D1B3D',
           boxShadow: '0 4px 16px rgba(212,175,55,0.5)', cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>+</button>
-      </div>}
+      </div>
     </div>
   )
 }

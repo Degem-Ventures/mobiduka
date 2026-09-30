@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authenticatedBusinessId } from "@/lib/auth";
+import { canonicalRoleName } from "@/lib/roles";
 
 const ROLE_NAMES = new Set(["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"]);
 
@@ -17,11 +18,13 @@ export async function POST(request: Request) {
     const email = typeof body.email === "string" && body.email.trim() ? body.email.trim().toLowerCase() : null;
     const username = typeof body.username === "string" && body.username.trim() ? body.username.trim().toLowerCase() : null;
     const phone = typeof body.phone === "string" && body.phone.trim() ? body.phone.trim() : null;
-    const roleName = String(body.role ?? "CASHIER").trim().toUpperCase();
+    const requestedRole = String(body.role ?? "CASHIER").trim().toUpperCase();
+    const requestedRoleId = typeof body.roleId === "string" ? body.roleId.trim() : "";
+    const roleName = canonicalRoleName(requestedRole);
     const pin = typeof body.pin === "string" ? body.pin.trim() : "";
     const password = typeof body.password === "string" ? body.password : "";
 
-    if (!fullName || (!email && !username) || !ROLE_NAMES.has(roleName)) {
+    if (!fullName || (!email && !username) || !ROLE_NAMES.has(requestedRole)) {
       return NextResponse.json(
         { error: "name, email or username, and a valid role are required." },
         { status: 400 },
@@ -37,11 +40,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A PIN or password is required." }, { status: 400 });
     }
 
-    const role = await prisma.role.upsert({
-      where: { name: roleName },
-      update: {},
-      create: { name: roleName },
-    });
+    const role = requestedRoleId
+      ? await prisma.role.findFirst({ where: { id: requestedRoleId, businessId }, select: { id: true, name: true } })
+      : await prisma.role.upsert({
+          where: { businessId_name: { businessId, name: roleName } },
+          update: {},
+          create: { businessId, name: roleName },
+        });
+    if (!role) return NextResponse.json({ error: "The selected role is not available for this business." }, { status: 400 });
 
     if (email && await prisma.user.findFirst({ where: { email }, select: { id: true } })) {
       return NextResponse.json({ error: "That email is already registered." }, { status: 409 });

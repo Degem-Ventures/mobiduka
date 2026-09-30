@@ -60,6 +60,8 @@ export async function PATCH(request: Request) {
       email?: string | null;
       businessName?: string;
       businessBranch?: string | null;
+      businessPhone?: string | null;
+      businessEmail?: string | null;
       currentPin?: string;
       newPin?: string;
     };
@@ -77,12 +79,18 @@ export async function PATCH(request: Request) {
     }
     if (body.phone !== undefined) data.phone = body.phone?.trim() || null;
     if (body.email !== undefined) data.email = body.email?.trim().toLowerCase() || null;
-    const businessData: { name?: string; branch?: string | null } = {};
+    const businessData: { name?: string; branch?: string | null; phone?: string | null; email?: string | null } = {};
     if (body.businessName !== undefined) {
       if (!body.businessName.trim()) return NextResponse.json({ error: "Store name cannot be empty." }, { status: 400 });
       businessData.name = body.businessName.trim();
     }
     if (body.businessBranch !== undefined) businessData.branch = body.businessBranch?.trim() || null;
+    if (body.businessPhone !== undefined) businessData.phone = body.businessPhone?.trim() || null;
+    if (body.businessEmail !== undefined) {
+      const email = body.businessEmail?.trim().toLowerCase() || null;
+      if (email && !/^\S+@\S+\.\S+$/.test(email)) return NextResponse.json({ error: "Business email is invalid." }, { status: 400 });
+      businessData.email = email;
+    }
     if (body.newPin !== undefined) {
       if (!/^\d{4}$/.test(body.newPin)) return NextResponse.json({ error: "New PIN must be 4 digits." }, { status: 400 });
       if (existing.pinHash) {

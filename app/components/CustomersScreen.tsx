@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
-type Customer = { id: string; name: string; phone: string | null; credit: number; purchases: number; lastVisit: string; initials: string; color: string }
+type Customer = { id: string; name: string; phone: string | null; creditLimit: number; credit: number; purchases: number; lastVisit: string; initials: string; color: string }
 type Transaction = { id: string; date: string; type: string; amount: number; method: string; items: number }
 type CustomerDetails = Customer & { transactions: Transaction[] }
 
@@ -22,13 +22,16 @@ export default function CustomersScreen({ onNavigate }: Props) {
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState({ name: '', phone: '', initialCreditLimit: '', note: '' })
   const [addSaved, setAddSaved] = useState(false)
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [dataError, setDataError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const mapCustomer = (customer: { id: string; name: string; phone: string | null; creditAccount?: { balance: number } | null; _count?: { sales: number }; sales?: Array<{ createdAt: string }> }): Customer => ({
+  const mapCustomer = (customer: { id: string; name: string; phone: string | null; creditLimit?: number | null; creditAccount?: { balance: number } | null; _count?: { sales: number }; sales?: Array<{ createdAt: string }> }): Customer => ({
     id: customer.id,
     name: customer.name,
     phone: customer.phone,
+    creditLimit: Number(customer.creditLimit ?? 0),
     credit: Number(customer.creditAccount?.balance ?? 0),
     purchases: customer._count?.sales ?? 0,
     lastVisit: customer.sales?.[0]?.createdAt ? new Date(customer.sales[0].createdAt).toLocaleDateString() : 'No visits',
@@ -63,9 +66,10 @@ export default function CustomersScreen({ onNavigate }: Props) {
     setDataError('')
     try {
       await apiFetch('/api/customers', {
-        method: 'POST',
+        method: editingCustomer ? 'PATCH' : 'POST',
         body: JSON.stringify({
           businessId: session.user.businessId,
+          ...(editingCustomer ? { id: editingCustomer.id } : {}),
           name: addForm.name.trim(),
           phone: addForm.phone.trim() || null,
           initialCreditLimit: addForm.initialCreditLimit.trim() ? Number(addForm.initialCreditLimit) : 0,
@@ -74,9 +78,28 @@ export default function CustomersScreen({ onNavigate }: Props) {
       setAddSaved(true)
       setAddForm({ name: '', phone: '', initialCreditLimit: '', note: '' })
       await loadCustomers()
-      setTimeout(() => { setAddSaved(false); setShowAdd(false) }, 1200)
+      setTimeout(() => { setAddSaved(false); setShowAdd(false); setEditingCustomer(null) }, 1200)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save customer.') }
     finally { setSaving(false) }
+  }
+
+  const startEdit = (customer: Customer) => {
+    setAddForm({ name: customer.name, phone: customer.phone ?? '', initialCreditLimit: String(customer.creditLimit), note: '' })
+    setEditingCustomer(customer)
+    setSelected(null)
+    setShowAdd(true)
+  }
+
+  const deleteCustomer = async () => {
+    if (!session || !selected) return
+    setSaving(true)
+    setDataError('')
+    try {
+      await apiFetch(`/api/customers?id=${encodeURIComponent(selected.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
+      setCustomers(previous => previous.filter(customer => customer.id !== selected.id))
+      setSelected(null)
+    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to delete customer.') }
+    finally { setSaving(false); setConfirmDelete(false) }
   }
 
   const recordPayment = async () => {
@@ -107,7 +130,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
             <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
-            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Add Customer</div>
+            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>{editingCustomer ? 'Edit Customer' : 'Add Customer'}</div>
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
@@ -115,7 +138,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
           {addSaved && (
             <div style={{ background: c.successBg, border: '1px solid #C8E6C9', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 18 }}>✅</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#2E7D32' }}>Customer added successfully!</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#2E7D32' }}>Customer {editingCustomer ? 'updated' : 'added'} successfully!</span>
             </div>
           )}
           <div className="card" style={{ padding: '20px' }}>
@@ -142,7 +165,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
               <input className="input" placeholder="e.g. Regular customer, prefer M-Pesa" value={addForm.note} onChange={e => setAddForm(f => ({ ...f, note: e.target.value }))} />
             </div>
             <button className="btn" disabled={saving || !addForm.name.trim()} onClick={() => void handleAddSave()} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)', opacity: addForm.name.trim() ? 1 : 0.5 }}>
-              Save Customer
+              {editingCustomer ? 'Save Changes' : 'Save Customer'}
             </button>
           </div>
         </div>
@@ -203,9 +226,10 @@ export default function CustomersScreen({ onNavigate }: Props) {
           {/* Action buttons */}
           <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
             <button className="btn" onClick={() => onNavigate('pos')} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>New Sale</button>
-            <button className="btn" style={{ flex: 1, padding: '12px', background: 'rgba(18,58,143,0.1)', border: '1px solid #123A8F', borderRadius: 12, color: '#123A8F', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Statement</button>
-            <button className="btn" style={{ width: 44, height: 44, padding: '0', background: c.iconBg, border: 'none', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 18 }}>📞</button>
+            <button className="btn" onClick={() => startEdit(selected)} style={{ flex: 1, padding: '12px', background: 'rgba(18,58,143,0.1)', border: '1px solid #123A8F', borderRadius: 12, color: '#123A8F', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+            <button className="btn" onClick={() => setConfirmDelete(true)} style={{ padding: '12px', background: c.errorBg, border: '1px solid #D32F2F', borderRadius: 12, color: '#D32F2F', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
           </div>
+          {confirmDelete && <div role="alert" className="card" style={{ padding: 14, marginBottom: 16, border: '1px solid #EF9A9A' }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete {selected.name}?</div><div style={{ fontSize: 12, color: c.muted, marginBottom: 12 }}>This cannot be undone. Customers with sales or credit history are kept for record accuracy.</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setConfirmDelete(false)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.iconBg, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteCustomer()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div></div>}
 
           {/* Transaction history */}
           <div className="card" style={{ padding: '16px' }}>

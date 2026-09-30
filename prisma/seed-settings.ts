@@ -6,13 +6,34 @@ const defaults = {
   dailyReport: false,
   autoBackup: true,
   mpesaEnabled: true,
-};
-
-const reportGroups: Record<string, string> = {
-  Flour: "Grains & Baking", Bakery: "Grains & Baking", Baking: "Grains & Baking", Sugar: "Grains & Baking",
-  Dairy: "Fresh & Dairy", Water: "Fresh & Dairy", Oils: "Cooking & Spreads", Spreads: "Cooking & Spreads", Spices: "Cooking & Spreads",
-  Pharma: "Care & Wellness", Cleaning: "Care & Wellness", Personal: "Care & Wellness",
-  Beverages: "Drinks & Digital", Airtime: "Drinks & Digital",
+  receiptConfig: {
+    headerText: "Thank you for shopping with us!",
+    footerText: "Goods sold are not refundable · Valid receipt required for exchange",
+    format: "80mm",
+    showLogo: true,
+    showTax: true,
+    showDiscount: true,
+    showCashier: true,
+    showShift: true,
+    showBarcode: false,
+    receiptPrefix: "RCP",
+    nextNumber: "1042",
+  },
+  taxConfig: {
+    vatEnabled: true,
+    defaultRate: "standard",
+    filingPeriod: "Monthly",
+    etimsEnabled: false,
+    etimsDevice: "",
+  },
+  paymentConfig: {
+    methods: { cash: true, mpesa: true, bank: false, card: false, credit: true },
+    mpesaConfig: { type: "till", till: "", paybill: "", account: "" },
+    bankConfig: { name: "", account: "", branch: "" },
+    roundCash: false,
+    creditLimit: "5000",
+    requireApproval: true,
+  },
 };
 
 async function main() {
@@ -23,15 +44,12 @@ async function main() {
   });
 
   for (const business of businesses) {
-    const categories = await prisma.category.findMany({ where: { businessId: business.id }, select: { id: true, name: true } });
-    for (const category of categories) {
-      await prisma.category.update({ where: { id: category.id }, data: { reportGroup: reportGroups[category.name] ?? "Care & Wellness" } });
+    const settings = await prisma.businessSettings.findUnique({ where: { businessId: business.id }, select: { taxConfig: true, paymentConfig: true } });
+    if (!settings) {
+      await prisma.businessSettings.create({ data: { businessId: business.id, ...defaults } });
+    } else if (!settings.taxConfig || !settings.paymentConfig) {
+      await prisma.businessSettings.update({ where: { businessId: business.id }, data: { ...(settings.taxConfig ? {} : { taxConfig: defaults.taxConfig }), ...(settings.paymentConfig ? {} : { paymentConfig: defaults.paymentConfig }) } });
     }
-    await prisma.businessSettings.upsert({
-      where: { businessId: business.id },
-      create: { businessId: business.id, ...defaults },
-      update: {},
-    });
     if (businessId) {
       await prisma.business.update({
         where: { id: business.id },

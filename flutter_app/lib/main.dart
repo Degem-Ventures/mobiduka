@@ -609,6 +609,8 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
       );
     }
 
+    final useWebLayout = kIsWeb;
+
     return MaterialApp(
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
@@ -632,163 +634,172 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
           decoration: const BoxDecoration(
               gradient: LinearGradient(colors: [ink, navy])),
           child: Center(
-            child: Container(
-              width: 393,
-              height: 852,
-              margin: const EdgeInsets.all(18),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                  color: const Color(0xFF0A0A0A),
-                  borderRadius: BorderRadius.circular(54),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Colors.black54,
-                        blurRadius: 30,
-                        offset: Offset(0, 20))
-                  ]),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(44),
-                child: Stack(children: [
-                  Scaffold(
-                    backgroundColor: Colors.transparent,
-                    body: body,
-                    bottomNavigationBar: loggedIn &&
-                            detail == null &&
-                            !showingSmartScan &&
-                            !showingGlobalShiftManagement
-                        ? BottomAppBar(
-                            shape: const CircularNotchedRectangle(),
-                            notchMargin: 7,
-                            color: const Color(0xFF0A0A0A),
-                            child: SizedBox(
-                              height: 64,
-                              child: Row(children: _navigationButtons()),
-                            ),
-                          )
-                        : null,
-                    floatingActionButtonLocation:
-                        FloatingActionButtonLocation.centerDocked,
-                    floatingActionButton:
-                        loggedIn && detail == null && !showingSmartScan
-                            ? Container(
-                                width: 68,
+            child: WebMobileViewportFrame(
+              child: Container(
+                width: useWebLayout ? double.infinity : 393,
+                height: useWebLayout ? double.infinity : 852,
+                margin:
+                    useWebLayout ? EdgeInsets.zero : const EdgeInsets.all(18),
+                padding:
+                    useWebLayout ? EdgeInsets.zero : const EdgeInsets.all(10),
+                decoration: useWebLayout
+                    ? const BoxDecoration()
+                    : BoxDecoration(
+                        color: const Color(0xFF0A0A0A),
+                        borderRadius: BorderRadius.circular(54),
+                        boxShadow: const [
+                            BoxShadow(
+                                color: Colors.black54,
+                                blurRadius: 30,
+                                offset: Offset(0, 20))
+                          ]),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(useWebLayout ? 0 : 44),
+                  child: Stack(children: [
+                    Scaffold(
+                      backgroundColor: Colors.transparent,
+                      body: body,
+                      bottomNavigationBar: loggedIn &&
+                              detail == null &&
+                              !showingSmartScan &&
+                              !showingGlobalShiftManagement
+                          ? BottomAppBar(
+                              shape: const CircularNotchedRectangle(),
+                              notchMargin: 7,
+                              color: const Color(0xFF0A0A0A),
+                              child: SizedBox(
                                 height: 64,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: gold, width: 2.5),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                        color: Colors.black26,
-                                        blurRadius: 10,
-                                        offset: Offset(0, 5))
+                                child: Row(children: _navigationButtons()),
+                              ),
+                            )
+                          : null,
+                      floatingActionButtonLocation:
+                          FloatingActionButtonLocation.centerDocked,
+                      floatingActionButton: loggedIn &&
+                              detail == null &&
+                              !showingSmartScan
+                          ? Container(
+                              width: 68,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: gold, width: 2.5),
+                                boxShadow: const [
+                                  BoxShadow(
+                                      color: Colors.black26,
+                                      blurRadius: 10,
+                                      offset: Offset(0, 5))
+                                ],
+                              ),
+                              child: FloatingActionButton(
+                                onPressed: _openUniversalScanner,
+                                backgroundColor: navy,
+                                foregroundColor: Colors.white,
+                                tooltip: 'Scan barcode or QR code',
+                                shape: const CircleBorder(),
+                                child: const Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.qr_code_scanner, size: 24),
+                                    SizedBox(height: 2),
+                                    Text('SCAN',
+                                        style: TextStyle(
+                                            color: gold,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w900)),
                                   ],
                                 ),
-                                child: FloatingActionButton(
-                                  onPressed: _openUniversalScanner,
-                                  backgroundColor: navy,
-                                  foregroundColor: Colors.white,
-                                  tooltip: 'Scan barcode or QR code',
-                                  shape: const CircleBorder(),
-                                  child: const Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.qr_code_scanner, size: 24),
-                                      SizedBox(height: 2),
-                                      Text('SCAN',
-                                          style: TextStyle(
-                                              color: gold,
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.w900)),
-                                    ],
-                                  ),
-                                ),
-                              )
-                            : null,
-                  ),
-                  // Keep the device-style top speaker detail above the app shell.
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: Container(
-                        width: 120,
-                        height: 34,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF0A0A0A),
-                          borderRadius: BorderRadius.vertical(
-                              bottom: Radius.circular(20)),
+                              ),
+                            )
+                          : null,
+                    ),
+                    // Keep the device-style top speaker detail above the app shell.
+                    if (!useWebLayout)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Container(
+                            width: 120,
+                            height: 34,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF0A0A0A),
+                              borderRadius: BorderRadius.vertical(
+                                  bottom: Radius.circular(20)),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                  if (loggedIn && !showingGlobalShiftManagement)
-                    Positioned(
-                      left: _shiftNoticeOffset.dx,
-                      top: _shiftNoticeOffset.dy,
-                      child: ValueListenableBuilder<ActiveShiftNotice?>(
-                        valueListenable: activeShiftNotice,
-                        builder: (context, notice, _) {
-                          if (notice == null) return const SizedBox.shrink();
-                          final label =
-                              '${notice.count} ${notice.count == 1 ? 'shift' : 'shifts'} in progress · ${notice.employeeName}';
-                          return GestureDetector(
-                            onPanUpdate: (details) => setState(() {
-                              _shiftNoticeOffset = Offset(
-                                (_shiftNoticeOffset.dx + details.delta.dx)
-                                    .clamp(0.0, 32.0)
-                                    .toDouble(),
-                                (_shiftNoticeOffset.dy + details.delta.dy)
-                                    .clamp(0.0, 720.0)
-                                    .toDouble(),
-                              );
-                            }),
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: _openActiveShift,
-                                borderRadius: BorderRadius.circular(10),
-                                child: Container(
-                                  width: 349,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 11),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF0F6634),
-                                    borderRadius: BorderRadius.circular(10),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                          color: Color(0x33000000),
-                                          blurRadius: 10,
-                                          offset: Offset(0, 4))
-                                    ],
+                    if (loggedIn && !showingGlobalShiftManagement)
+                      Positioned(
+                        left: _shiftNoticeOffset.dx,
+                        top: _shiftNoticeOffset.dy,
+                        child: ValueListenableBuilder<ActiveShiftNotice?>(
+                          valueListenable: activeShiftNotice,
+                          builder: (context, notice, _) {
+                            if (notice == null) return const SizedBox.shrink();
+                            final label =
+                                '${notice.count} ${notice.count == 1 ? 'shift' : 'shifts'} in progress · ${notice.employeeName}';
+                            return GestureDetector(
+                              onPanUpdate: (details) => setState(() {
+                                _shiftNoticeOffset = Offset(
+                                  (_shiftNoticeOffset.dx + details.delta.dx)
+                                      .clamp(0.0, 32.0)
+                                      .toDouble(),
+                                  (_shiftNoticeOffset.dy + details.delta.dy)
+                                      .clamp(0.0, 720.0)
+                                      .toDouble(),
+                                );
+                              }),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: _openActiveShift,
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    width: 349,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 11),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF0F6634),
+                                      borderRadius: BorderRadius.circular(10),
+                                      boxShadow: const [
+                                        BoxShadow(
+                                            color: Color(0x33000000),
+                                            blurRadius: 10,
+                                            offset: Offset(0, 4))
+                                      ],
+                                    ),
+                                    child: Row(children: [
+                                      const Icon(Icons.access_time_filled,
+                                          color: Color(0xFFA5D6A7), size: 17),
+                                      const SizedBox(width: 9),
+                                      Expanded(
+                                          child: Text(label,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  fontWeight:
+                                                      FontWeight.w700))),
+                                      const SizedBox(width: 8),
+                                      const Text('Manage ›',
+                                          style: TextStyle(
+                                              color: Color(0xFFA5D6A7),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w800)),
+                                    ]),
                                   ),
-                                  child: Row(children: [
-                                    const Icon(Icons.access_time_filled,
-                                        color: Color(0xFFA5D6A7), size: 17),
-                                    const SizedBox(width: 9),
-                                    Expanded(
-                                        child: Text(label,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700))),
-                                    const SizedBox(width: 8),
-                                    const Text('Manage ›',
-                                        style: TextStyle(
-                                            color: Color(0xFFA5D6A7),
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w800)),
-                                  ]),
                                 ),
                               ),
-                            ),
-                          );
-                        },
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                ]),
+                  ]),
+                ),
               ),
             ),
           ),
@@ -1206,6 +1217,48 @@ class _CloseShiftSheetState extends State<_CloseShiftSheet> {
   }
 }
 
+class WebMobileViewportFrame extends StatelessWidget {
+  const WebMobileViewportFrame({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!kIsWeb) return child;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isDesktop =
+            constraints.maxWidth >= 480 && constraints.maxHeight >= 700;
+        final height = isDesktop
+            ? (constraints.maxHeight - 48).clamp(0.0, 852.0).toDouble()
+            : constraints.maxHeight;
+        final radius = BorderRadius.circular(isDesktop ? 8 : 0);
+
+        return SizedBox(
+          width: isDesktop ? 393 : constraints.maxWidth,
+          height: height,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              boxShadow: isDesktop
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x3D000000),
+                        blurRadius: 28,
+                        offset: Offset(0, 14),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: ClipRRect(borderRadius: radius, child: child),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({required this.onLogin});
   final Future<void> Function() onLogin;
@@ -1260,6 +1313,14 @@ class StartupErrorScreen extends StatelessWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   static const String _deviceToken = 'flutter-pos-hardware-token-12345';
+  static const List<String> _splashTaglines = <String>[
+    'Smart retail management for modern businesses',
+    'Track every sale, every shilling, every shift',
+    'Real-time stock alerts - never run out again',
+    'M-Pesa, Cash & Credit in one place',
+    'Built for dukas, supermarkets & kiosks',
+  ];
+
   final AuthService _authService = AuthService();
   String step = 'splash';
   String pin = '';
@@ -1279,6 +1340,40 @@ class _LoginScreenState extends State<LoginScreen> {
       TextEditingController();
   String recoveryRole = 'Admin';
   String? recoveryError;
+  Timer? _splashTaglineTimer;
+  int _splashTaglineIndex = 0;
+  int _splashTaglineTransition = 0;
+  bool _splashTaglineVisible = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _splashTaglineTimer = Timer.periodic(
+      const Duration(milliseconds: 3200),
+      (_) => _advanceSplashTagline(),
+    );
+  }
+
+  void _advanceSplashTagline() {
+    if (!mounted || step != 'splash') return;
+    _showSplashTagline((_splashTaglineIndex + 1) % _splashTaglines.length);
+  }
+
+  void _showSplashTagline(int index) {
+    final transition = ++_splashTaglineTransition;
+    setState(() => _splashTaglineVisible = false);
+    Future<void>.delayed(const Duration(milliseconds: 350), () {
+      if (!mounted ||
+          step != 'splash' ||
+          transition != _splashTaglineTransition) {
+        return;
+      }
+      setState(() {
+        _splashTaglineIndex = index;
+        _splashTaglineVisible = true;
+      });
+    });
+  }
 
   BorderSide _inputBorder({required bool isPasswordField}) {
     if (loginSucceeded) {
@@ -1768,6 +1863,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _splashTaglineTimer?.cancel();
     emailController.dispose();
     passwordController.dispose();
     recoveryEmailController.dispose();
@@ -2234,31 +2330,59 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed:
-                            isAuthenticating ? null : _authenticateWithPassword,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF123A8F),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          shadowColor: const Color(0x403D73C8),
-                          elevation: 4,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color:
+                              isAuthenticating ? const Color(0xFFE3EAF8) : null,
+                          gradient: isAuthenticating
+                              ? null
+                              : const LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [navy, Color(0xFF1A4FBF)],
+                                ),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: isAuthenticating
+                              ? null
+                              : const [
+                                  BoxShadow(
+                                    color: Color(0x59123A8F),
+                                    blurRadius: 20,
+                                    offset: Offset(0, 4),
+                                  ),
+                                ],
                         ),
-                        child: isAuthenticating
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Text(
-                                'Sign In',
-                                style: TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.w700),
-                              ),
+                        child: ElevatedButton(
+                          onPressed: isAuthenticating
+                              ? null
+                              : _authenticateWithPassword,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            disabledBackgroundColor: Colors.transparent,
+                            foregroundColor: Colors.white,
+                            disabledForegroundColor: const Color(0xFFB0BAD3),
+                            shadowColor: Colors.transparent,
+                            surfaceTintColor: Colors.transparent,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          child: isAuthenticating
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Text(
+                                  'Sign In',
+                                  style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700),
+                                ),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -2270,7 +2394,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           setState(() => step = 'pin');
                         },
                         style: TextButton.styleFrom(
-                          backgroundColor: const Color(0x0D123A8F),
+                          backgroundColor: const Color(0x14123A8F),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
@@ -2377,33 +2501,60 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 18),
-                    const Text(
-                      'Smart retail management for\nmodern businesses',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Color(0x99FFFFFF),
-                        fontSize: 14,
-                        height: 1.6,
+                    SizedBox(
+                      height: 44,
+                      child: Center(
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 350),
+                          opacity: _splashTaglineVisible ? 1 : 0,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 260),
+                            child: Text(
+                              _splashTaglines[_splashTaglineIndex],
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Color(0xB8FFFFFF),
+                                fontSize: 14,
+                                height: 1.6,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 60),
+                    const SizedBox(height: 28),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(
-                          3,
-                          (index) => Container(
-                                margin:
-                                    EdgeInsets.only(right: index == 2 ? 0 : 8),
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  color: index == 0
-                                      ? gold
-                                      : const Color(0x4DFFFFFF),
-                                  borderRadius: BorderRadius.circular(999),
+                      children: List.generate(_splashTaglines.length, (index) {
+                        final selected = index == _splashTaglineIndex;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: Semantics(
+                            button: true,
+                            label: 'Show splash message ${index + 1}',
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _showSplashTagline(index),
+                                borderRadius: BorderRadius.circular(4),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 300),
+                                  width: selected ? 20 : 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: selected
+                                        ? gold
+                                        : const Color(0x47FFFFFF),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
                                 ),
-                              )),
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
                     ),
+                    const SizedBox(height: 44),
                   ],
                 ),
               ),
@@ -2415,22 +2566,41 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   FractionallySizedBox(
                     widthFactor: 0.8,
-                    child: ElevatedButton(
-                      onPressed: () => setState(() => step = 'login'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFF0D060),
-                        foregroundColor: const Color(0xFF0D1B3D),
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [gold, Color(0xFFF0D060)],
                         ),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x66D4AF37),
+                            blurRadius: 20,
+                            offset: Offset(0, 4),
+                          ),
+                        ],
                       ),
-                      child: const Text(
-                        'Get Started',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
+                      child: ElevatedButton(
+                        onPressed: () => setState(() => step = 'login'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.transparent,
+                          foregroundColor: ink,
+                          shadowColor: Colors.transparent,
+                          surfaceTintColor: Colors.transparent,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: const Text(
+                          'Get Started',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -2441,6 +2611,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: OutlinedButton(
                       onPressed: () => setState(() => step = 'pin'),
                       style: OutlinedButton.styleFrom(
+                        backgroundColor: const Color(0x1AFFFFFF),
                         foregroundColor: Colors.white,
                         side: const BorderSide(color: Color(0x33FFFFFF)),
                         padding: const EdgeInsets.symmetric(vertical: 15),
@@ -11474,8 +11645,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
               if (_mpesaConfig['type'] == 'till')
                 field('mpesa-till', 'Till Number', _tillNumberController,
                     (value) => _mpesaConfig['till'] = value,
-                    keyboardType: TextInputType.number,
-                    hintText: 'e.g. 123456')
+                    keyboardType: TextInputType.number, hintText: 'e.g. 123456')
               else
                 Row(children: [
                   Expanded(
@@ -11514,8 +11684,7 @@ class _SettingsDetailScreenState extends State<SettingsDetailScreen> {
               heading('CREDIT / TAB SETTINGS'),
               field('credit-limit', 'Default Credit Limit (KSh)',
                   _creditLimitController, (value) => _creditLimit = value,
-                  keyboardType: TextInputType.number,
-                  hintText: '5000'),
+                  keyboardType: TextInputType.number, hintText: '5000'),
               const SizedBox(height: 14),
               Row(children: [
                 Expanded(

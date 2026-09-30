@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { JWT_SECRET, requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { canonicalRoleName } from "@/lib/roles";
 
 const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"] as const;
 
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
       where: { businessId },
       select: {
         id: true,
+        roleId: true,
         fullName: true,
         email: true,
         phone: true,
@@ -55,6 +57,7 @@ export async function GET(request: Request) {
         shift: true,
         salary: true,
         startDate: true,
+        pinHash: true,
         ...(includePinHashes ? { pinHash: true } : {}),
         createdAt: true,
         role: { select: { name: true } },
@@ -66,6 +69,8 @@ export async function GET(request: Request) {
       success: true,
       employees: employees.map((employee) => ({
         ...employee,
+        ...(includePinHashes ? {} : { pinHash: undefined }),
+        hasPin: Boolean(employee.pinHash),
         role: employee.role?.name ?? "CASHIER",
         isActive: employee.status === "ACTIVE",
       })),
@@ -87,19 +92,24 @@ export async function POST(request: Request) {
     const businessId = requireBusinessAccess(request, body.businessId);
     const fullName = String(body.name ?? body.fullName ?? "").trim();
     const role = normalizeRole(body.role);
+    const roleId = typeof body.roleId === "string" && body.roleId.trim() ? body.roleId.trim() : null;
     const email = typeof body.email === "string" && body.email.trim() ? body.email.trim().toLowerCase() : null;
     const phone = typeof body.phone === "string" && body.phone.trim() ? body.phone.trim() : null;
     const pin = typeof body.pin === "string" && body.pin.length > 0 ? body.pin : undefined;
+    const currentPin = typeof body.currentPin === "string" && body.currentPin.length > 0 ? body.currentPin : undefined;
     const status = body.isActive === false ? "INACTIVE" : "ACTIVE";
     const shift = String(body.shift ?? "Morning").trim() || "Morning";
     const salary = Number(body.salary ?? 0);
     const startDate = body.startDate ? new Date(String(body.startDate)) : null;
 
-    if (!businessId || !fullName || !role) {
+    if (!businessId || !fullName || (!role && !roleId)) {
       return NextResponse.json({ error: "Authenticated business context, name, and a valid role are required." }, { status: 401 });
     }
     if (pin !== undefined && !/^\d{4}$/.test(pin)) {
       return NextResponse.json({ error: "PIN must contain exactly 4 digits." }, { status: 400 });
+    }
+    if (currentPin !== undefined && !/^\d{4}$/.test(currentPin)) {
+      return NextResponse.json({ error: "Current PIN must contain exactly 4 digits." }, { status: 400 });
     }
     if (!Number.isFinite(salary) || salary < 0 || (startDate && Number.isNaN(startDate.getTime()))) {
       return NextResponse.json({ error: "Salary must be non-negative and startDate must be valid." }, { status: 400 });
@@ -109,11 +119,21 @@ export async function POST(request: Request) {
       const business = await tx.business.findUnique({ where: { id: businessId }, select: { id: true } });
       if (!business) throw new Error("Target business was not found.");
 
-      const existingRole = await tx.role.upsert({
-        where: { name: role },
-        update: {},
-        create: { name: role },
-      });
+      const existingRole = roleId
+        ? await tx.role.findFirst({ where: { id: roleId, businessId }, select: { id: true, name: true } })
+        : await tx.role.upsert({
+            where: { businessId_name: { businessId, name: canonicalRoleName(role!) } },
+            update: {},
+            create: { businessId, name: canonicalRoleName(role!) },
+          });
+      if (!existingRole) throw new Error("The selected role is not available for this business.");
+      if (id && pin && currentPin) {
+        const existingEmployee = await tx.user.findFirst({ where: { id, businessId }, select: { pinHash: true } });
+        if (existingEmployee?.pinHash && !await bcrypt.compare(currentPin, existingEmployee.pinHash)) throw new Error("The current PIN is incorrect.");
+      } else if (id && pin) {
+        const existingEmployee = await tx.user.findFirst({ where: { id, businessId }, select: { pinHash: true } });
+        if (existingEmployee?.pinHash) throw new Error("Enter the employee's current PIN before setting a new PIN.");
+      }
       if (pin) {
         const candidates = await tx.user.findMany({
           where: {
@@ -157,7 +177,7 @@ export async function POST(request: Request) {
         businessId,
         type: "success",
         title: "Employee Added",
-        body: `${employee.fullName} has been added to the team as ${role}.`,
+        body: `${employee.fullName} has been added to the team.`,
         eventKey: `employee-created:${employee.id}`,
       });
     }

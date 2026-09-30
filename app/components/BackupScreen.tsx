@@ -20,6 +20,7 @@ export default function BackupScreen({ onNavigate }: Props) {
   const [autoBackup, setAutoBackup] = useState(true)
   const [wifiOnly, setWifiOnly] = useState(true)
   const [provider, setProvider] = useState<'google' | 'dropbox' | 'local'>('google')
+  const [actionState, setActionState] = useState<Record<'export' | 'cache', 'idle' | 'loading' | 'done'>>({ export: 'idle', cache: 'idle' })
 
   const startBackup = () => {
     setSyncing(true)
@@ -30,6 +31,12 @@ export default function BackupScreen({ onNavigate }: Props) {
         return p + 8
       })
     }, 150)
+  }
+
+  const runAction = (key: 'export' | 'cache') => {
+    setActionState(state => ({ ...state, [key]: 'loading' }))
+    window.setTimeout(() => setActionState(state => ({ ...state, [key]: 'done' })), 1800)
+    window.setTimeout(() => setActionState(state => ({ ...state, [key]: 'idle' })), 4200)
   }
 
   const Toggle = ({ value, onChange }: { value: boolean; onChange: () => void }) => (
@@ -90,6 +97,21 @@ export default function BackupScreen({ onNavigate }: Props) {
           <span style={{ fontSize: 20 }}>{syncing ? '⏳' : '☁️'}</span>
           {syncing ? `Backing Up... ${progress}%` : 'Backup Now'}
         </button>
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Data Management</div>
+        <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
+          {([
+            { key: 'export' as const, label: 'Export Data (CSV)', sub: 'Download all transactions', icon: '📤', color: '#2E7D32', loading: 'Preparing CSV export…', done: 'Export ready — 12,450 records ✓' },
+            { key: 'cache' as const, label: 'Clear Cache', sub: '12.4 MB used', icon: '🗑️', color: '#F57C00', loading: 'Clearing cache…', done: 'Cache cleared — 0 MB ✓' },
+          ]).map((item, index, items) => {
+            const state = actionState[item.key]
+            return <button key={item.key} className="btn" onClick={() => state === 'idle' && runAction(item.key)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: index < items.length - 1 ? c.divider : 'none', background: 'none', cursor: state === 'idle' ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 11, background: `${item.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{state === 'loading' ? '⏳' : item.icon}</div>
+              <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: state === 'done' ? item.color : c.text }}>{item.label}</div><div style={{ fontSize: 11, color: state === 'loading' || state === 'done' ? item.color : c.muted, marginTop: 1 }}>{state === 'loading' ? item.loading : state === 'done' ? item.done : item.sub}</div></div>
+              {state === 'idle' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B0BAD3" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>}
+            </button>
+          })}
+        </div>
 
         {/* Cloud Provider */}
         <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Cloud Provider</div>

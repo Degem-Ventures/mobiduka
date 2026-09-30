@@ -16,11 +16,11 @@ const CURRENCIES = [
   { code: 'EUR', label: 'EUR — Euro' },
 ]
 
+type PaymentConfig = { methods: Record<string, boolean> }
 type SettingsResponse = {
-  business: { name: string; branch: string | null; country: string | null; phone: string | null; taxPin: string | null; currency: string }
-  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; salesNotifications: boolean; dailyReport: boolean; autoBackup: boolean; mpesaEnabled: boolean; themeMode: ThemeMode; paymentConfig: unknown }
-  currencyOptions: Array<{ code: string; label: string }>
+  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; salesNotifications: boolean; dailyReport: boolean; autoBackup: boolean; mpesaEnabled: boolean; themeMode: ThemeMode; paymentConfig: PaymentConfig | null }
 }
+type BusinessResponse = { business: { name: string; branch: string | null; country: string | null; phone: string | null; kraPin: string | null; currency: string | null } }
 
 export default function SettingsScreen({ onNavigate }: Props) {
   const { theme, setTheme, isDark } = useTheme()
@@ -31,58 +31,67 @@ export default function SettingsScreen({ onNavigate }: Props) {
   const [dailyReport, setDailyReport] = useState(false)
   const [autoBackup, setAutoBackup] = useState(true)
   const [mpesaEnabled, setMpesaEnabled] = useState(true)
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null)
 
   const [currency, setCurrency] = useState('KES')
   const [taxPin, setTaxPin] = useState('')
   const [editingTaxPin, setEditingTaxPin] = useState(false)
   const [taxPinDraft, setTaxPinDraft] = useState('')
   const [businessInfo, setBusinessInfo] = useState({ name: 'Business', branch: '', country: '', phone: '' })
-  const [currencyOptions, setCurrencyOptions] = useState(CURRENCIES)
+  const [currencyOptions] = useState(CURRENCIES)
   const [settingsError, setSettingsError] = useState('')
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false)
 
-  const [simState, setSimState] = useState<Record<string, 'idle' | 'loading' | 'done'>>({
-    backup: 'idle', export: 'idle', cache: 'idle',
-  })
-
-  const runSim = (key: string) => {
-    setSimState(s => ({ ...s, [key]: 'loading' }))
-    setTimeout(() => setSimState(s => ({ ...s, [key]: 'done' })), 2200)
-    setTimeout(() => setSimState(s => ({ ...s, [key]: 'idle' })), 4500)
-  }
-
-  const applySettings = (response: SettingsResponse) => {
-    setBusinessInfo({ name: response.business.name, branch: response.business.branch ?? '', country: response.business.country ?? '', phone: response.business.phone ?? '' })
-    setTaxPin(response.business.taxPin ?? '')
-    setTaxPinDraft(response.business.taxPin ?? '')
-    setCurrency(response.business.currency)
-    setCurrencyOptions(response.currencyOptions)
+  const applyPreferences = (response: SettingsResponse) => {
     setReceiptPrint(response.preferences.receiptPrint)
     setLowStockAlerts(response.preferences.lowStockAlerts)
     setSalesNotifications(response.preferences.salesNotifications)
     setDailyReport(response.preferences.dailyReport)
     setAutoBackup(response.preferences.autoBackup)
     setMpesaEnabled(response.preferences.mpesaEnabled)
+    setPaymentConfig(response.preferences.paymentConfig)
     setTheme(response.preferences.themeMode)
   }
 
-  const saveSettings = async (patch: Partial<SettingsResponse['business'] & SettingsResponse['preferences']>) => {
+  const applyBusiness = (response: BusinessResponse) => {
+    const business = response.business
+    setBusinessInfo({ name: business.name, branch: business.branch ?? '', country: business.country ?? '', phone: business.phone ?? '' })
+    setTaxPin(business.kraPin ?? '')
+    setTaxPinDraft(business.kraPin ?? '')
+    setCurrency(business.currency ?? 'KES')
+  }
+
+  const saveSettings = async (patch: Partial<SettingsResponse['preferences']>) => {
     const session = getClientSession()
     if (!session) return
     try {
       const response = await apiFetch<SettingsResponse>('/api/settings', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, ...patch }) })
-      applySettings(response)
+      applyPreferences(response)
       setSettingsError('')
     } catch (reason) {
       setSettingsError(reason instanceof Error ? reason.message : 'Unable to save settings.')
     }
   }
 
+  const saveBusiness = async (patch: Partial<BusinessResponse['business']>) => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      const response = await apiFetch<BusinessResponse>('/api/business', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, ...patch }) })
+      applyBusiness(response)
+      setSettingsError('')
+    } catch (reason) {
+      setSettingsError(reason instanceof Error ? reason.message : 'Unable to save business information.')
+    }
+  }
+
   useEffect(() => {
     const session = getClientSession()
     if (!session) { setSettingsError('Please sign in to load settings.'); return }
-    apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(applySettings)
+    void Promise.all([
+      apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`),
+    ]).then(([business, settings]) => { applyBusiness(business); applyPreferences(settings) })
       .catch(reason => setSettingsError(reason instanceof Error ? reason.message : 'Unable to load settings.'))
   }, [])
 
@@ -112,6 +121,12 @@ export default function SettingsScreen({ onNavigate }: Props) {
   )
 
   const selectedCurrencyLabel = currencyOptions.find(c => c.code === currency)?.label ?? currency
+  const activePaymentMethods = paymentConfig
+    ? [['cash', 'Cash'], ['mpesa', 'M-Pesa'], ['bank', 'Bank'], ['card', 'Card'], ['credit', 'Credit']]
+      .filter(([id]) => paymentConfig.methods[id])
+      .map(([, label]) => label)
+      .join(' · ') || 'No payment methods enabled'
+    : 'Cash · M-Pesa · Credit'
 
   if (showCurrencyPicker) {
     return (
@@ -127,7 +142,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
           <div className="card" style={{ overflow: 'hidden', background: card }}>
             {currencyOptions.map((c, i) => (
-              <button key={c.code} className="btn" onClick={() => { setCurrency(c.code); setShowCurrencyPicker(false); void saveSettings({ currency: c.code }) }} style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 14, border: 'none', borderBottom: i < currencyOptions.length - 1 ? border : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              <button key={c.code} className="btn" onClick={() => { setCurrency(c.code); setShowCurrencyPicker(false); void saveBusiness({ currency: c.code }) }} style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 14, border: 'none', borderBottom: i < currencyOptions.length - 1 ? border : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
                 <div style={{ flex: 1, textAlign: 'left' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: text }}>{c.label}</div>
                 </div>
@@ -197,7 +212,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
             {editingTaxPin ? (
               <>
                 <input className="input" value={taxPinDraft} onChange={e => setTaxPinDraft(e.target.value.toUpperCase())} style={{ width: 140, padding: '6px 10px', fontSize: 13, textAlign: 'right', fontFamily: 'monospace' }} />
-                <button className="btn" onClick={() => { setTaxPin(taxPinDraft); setEditingTaxPin(false); void saveSettings({ taxPin: taxPinDraft }) }} style={{ background: '#123A8F', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
+                <button className="btn" onClick={() => { setTaxPin(taxPinDraft); setEditingTaxPin(false); void saveBusiness({ kraPin: taxPinDraft }) }} style={{ background: '#123A8F', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
               </>
             ) : (
               <>
@@ -243,9 +258,10 @@ export default function SettingsScreen({ onNavigate }: Props) {
         <SectionLabel>Admin Area</SectionLabel>
         <div className="card" style={{ overflow: 'hidden', marginBottom: 16, background: card }}>
           {([
-            { icon: '💳', label: 'Payment Methods', sub: 'Cash · M-Pesa · Bank · Credit', nav: 'payments', color: '#0288D1' },
-            { icon: '🧾', label: 'Receipt Settings', sub: 'Logo, footer text, print format', nav: '', color: '#5E35B1' },
-            { icon: '📊', label: 'Tax & Compliance', sub: `PIN: ${taxPin}`, nav: '', color: '#2E7D32' },
+            { icon: '💳', label: 'Payment Methods', sub: activePaymentMethods, nav: 'payments', color: '#0288D1' },
+            { icon: '🧾', label: 'Receipt Settings', sub: 'Logo, footer text, print format', nav: 'receiptsettings', color: '#5E35B1' },
+            { icon: '📊', label: 'Tax & Compliance', sub: `PIN: ${taxPin || 'Not set'}`, nav: 'taxcompliance', color: '#2E7D32' },
+            { icon: '🛡️', label: 'Roles & Permissions', sub: 'Manage what each role can do', nav: 'roles', color: '#D4AF37' },
           ] as { icon: string; label: string; sub: string; nav: string; color: string }[]).map((item, i, arr) => (
             <button key={i} className="btn" onClick={() => item.nav ? onNavigate(item.nav) : undefined} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? border : 'none', background: 'none', cursor: item.nav ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}>
               <div style={{ width: 40, height: 40, borderRadius: 11, background: `${item.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{item.icon}</div>
@@ -258,42 +274,11 @@ export default function SettingsScreen({ onNavigate }: Props) {
           ))}
         </div>
 
-        {/* ── Data Management ── */}
-        <SectionLabel>Data Management</SectionLabel>
-        <div className="card" style={{ overflow: 'hidden', marginBottom: 16, background: card }}>
-          {[
-            { key: 'backup', label: 'Backup Now', sub: 'Last backup: Today 06:00 AM', icon: '☁️', color: '#0288D1',
-              loadMsg: 'Backing up to cloud…', doneMsg: 'Backup complete ✓' },
-            { key: 'export', label: 'Export Data (CSV)', sub: 'Download all transactions', icon: '📤', color: '#2E7D32',
-              loadMsg: 'Preparing CSV export…', doneMsg: 'Export ready — 12,450 records ✓' },
-            { key: 'cache', label: 'Clear Cache', sub: '12.4 MB used', icon: '🗑️', color: '#F57C00',
-              loadMsg: 'Clearing cache…', doneMsg: 'Cache cleared — 0 MB ✓' },
-          ].map((item, i, arr) => {
-            const st = simState[item.key]
-            return (
-              <button key={item.key} className="btn" onClick={() => st === 'idle' && runSim(item.key)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? border : 'none', background: 'none', cursor: st === 'idle' ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}>
-                <div style={{ width: 40, height: 40, borderRadius: 11, background: `${item.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>
-                  {st === 'loading' ? <div style={{ width: 18, height: 18, border: `2px solid ${item.color}40`, borderTop: `2px solid ${item.color}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /> : item.icon}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: st === 'done' ? item.color : text }}>{item.label}</div>
-                  <div style={{ fontSize: 11, color: st === 'loading' ? item.color : st === 'done' ? item.color : muted, marginTop: 1 }}>
-                    {st === 'loading' ? item.loadMsg : st === 'done' ? item.doneMsg : item.sub}
-                  </div>
-                </div>
-                {st === 'idle' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B0BAD3" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>}
-                {st === 'done' && <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={item.color} strokeWidth="2.5"><polyline points="20,6 9,17 4,12"/></svg>}
-              </button>
-            )
-          })}
-        </div>
-
         <div style={{ textAlign: 'center', padding: '8px 0 16px' }}>
           <div style={{ fontSize: 12, color: muted }}>MobiDuka POS v1.1 · SmartScan™ Integrated</div>
         </div>
       </div>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
