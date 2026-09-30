@@ -15,7 +15,6 @@ async function main() {
     if (definition) await prisma.rolePermission.createMany({ data: definition.permissions.map(permissionKey => ({ roleId: role.id, permissionKey })), skipDuplicates: true });
     await prisma.user.update({ where: { id: user.id }, data: { roleId: role.id } });
   }
-  await prisma.role.deleteMany({ where: { businessId: null, users: { none: {} } } });
   console.log(`Migrated ${users.length} user role assignments to tenant roles.`);
 }
 
