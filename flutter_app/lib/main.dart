@@ -609,8 +609,6 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
       );
     }
 
-    final useWebLayout = kIsWeb;
-
     return MaterialApp(
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
@@ -636,25 +634,13 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
           child: Center(
             child: WebMobileViewportFrame(
               child: Container(
-                width: useWebLayout ? double.infinity : 393,
-                height: useWebLayout ? double.infinity : 852,
-                margin:
-                    useWebLayout ? EdgeInsets.zero : const EdgeInsets.all(18),
-                padding:
-                    useWebLayout ? EdgeInsets.zero : const EdgeInsets.all(10),
-                decoration: useWebLayout
-                    ? const BoxDecoration()
-                    : BoxDecoration(
-                        color: const Color(0xFF0A0A0A),
-                        borderRadius: BorderRadius.circular(54),
-                        boxShadow: const [
-                            BoxShadow(
-                                color: Colors.black54,
-                                blurRadius: 30,
-                                offset: Offset(0, 20))
-                          ]),
+                width: double.infinity,
+                height: double.infinity,
+                margin: EdgeInsets.zero,
+                padding: EdgeInsets.zero,
+                decoration: const BoxDecoration(),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(useWebLayout ? 0 : 44),
+                  borderRadius: BorderRadius.zero,
                   child: Stack(children: [
                     Scaffold(
                       backgroundColor: Colors.transparent,
@@ -713,24 +699,6 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
                             )
                           : null,
                     ),
-                    // Keep the device-style top speaker detail above the app shell.
-                    if (!useWebLayout)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: Container(
-                            width: 120,
-                            height: 34,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF0A0A0A),
-                              borderRadius: BorderRadius.vertical(
-                                  bottom: Radius.circular(20)),
-                            ),
-                          ),
-                        ),
-                      ),
                     if (loggedIn && !showingGlobalShiftManagement)
                       Positioned(
                         left: _shiftNoticeOffset.dx,

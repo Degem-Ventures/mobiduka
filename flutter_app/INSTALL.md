@@ -20,6 +20,20 @@ Before running the app, make sure all of these are true:
 - Web support is enabled if you want browser preview
 - The selected debug port is free if using `web-server`
 
+## GitHub Actions APK
+
+GitHub Actions builds the committed code on the `dev` branch. A browser preview
+can include local edits that have not been pushed yet, so commit and push the
+Flutter changes before starting an APK workflow.
+
+Use **Build Flutter Android APK (Flutter UI)**, then download the
+`mobiduka-flutter-release-apk-<run number>` artifact. It includes
+`flutter-apk-build-info.txt`, which records the exact commit, branch, and run
+that produced the APK.
+
+Do not use **Build Capacitor Android APK (Next.js UI)** when verifying the
+Flutter application. It packages the separate Next.js/Capacitor application.
+
 ## One-click Linux fix
 
 If you are on Ubuntu/Debian and want a single command that installs the required Linux packages, adds Flutter to your shell, enables web, and verifies the app can start, use:
