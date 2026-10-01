@@ -25,3 +25,20 @@ plugins {
 }
 
 include(":app")
+
+// Some Flutter plugins still pin compileSdk to Android 31-33 even though
+// their AndroidX dependencies require a newer API. Align them before Gradle
+// evaluates their library projects, matching the release CI build.
+gradle.beforeProject {
+    val source = buildFile.takeIf { it.isFile }?.readText() ?: return@beforeProject
+    val updated = source
+        .replace(
+            Regex("compileSdkVersion\\s+(?:31|32|33)\\b"),
+            "compileSdkVersion 36",
+        )
+        .replace(
+            Regex("compileSdk\\s*=\\s*(?:31|32|33)\\b"),
+            "compileSdk = 36",
+        )
+    if (updated != source) buildFile.writeText(updated)
+}
