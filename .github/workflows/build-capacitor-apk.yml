@@ -40,7 +40,9 @@ jobs:
       - name: Build and sync Capacitor
         env:
           CAPACITOR_SERVER_URL: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
-        run: pnpm exec cap sync android
+        run: |
+          mkdir -p android/app/src/main/assets
+          pnpm exec cap sync android
 
       - name: Build debug APK
         run: gradle -p android assembleDebug
