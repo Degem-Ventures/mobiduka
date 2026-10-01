@@ -35,6 +35,11 @@ const getExpenseIcon = (expense: Expense) => {
   return '💸'
 }
 
+const formatExpenseDate = (value: string) => {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Date unavailable' : new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date)
+}
+
 interface Props { onNavigate: (s: string) => void }
 
 export default function ExpensesScreen({ onNavigate }: Props) {
@@ -48,6 +53,14 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   const [saving, setSaving] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const emptyExpenseForm = () => ({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
+
+  const openAdd = () => {
+    setForm(emptyExpenseForm())
+    setEditingExpense(null)
+    setConfirmDeleteId(null)
+    setShowAdd(true)
+  }
 
   const loadExpenses = async () => {
     if (!session) { setDataError('Please sign in to load expenses.'); return }
@@ -80,7 +93,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
         }),
       })
       await loadExpenses()
-      setForm({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
+      setForm(emptyExpenseForm())
       setShowAdd(false)
       setEditingExpense(null)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save expense.') }
@@ -120,7 +133,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
       <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <button className="btn" onClick={() => { setShowAdd(false); setEditingExpense(null); setForm(emptyExpenseForm()) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>{editingExpense ? 'Edit Expense' : 'Add Expense'}</div>
@@ -191,7 +204,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
             </button>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Expense Tracking</div>
           </div>
-          <button className="btn" onClick={() => setShowAdd(true)} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" onClick={openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
             <span style={{ fontSize: 18, color: '#0D1B3D', lineHeight: 1 }}>+</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Add</span>
           </button>
@@ -220,21 +233,25 @@ export default function ExpensesScreen({ onNavigate }: Props) {
                 <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{e.description}</div>
                 {e.recurring && <span style={{ fontSize: 9, background: c.iconBg, color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>RECURRING</span>}
               </div>
-              <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{normalizeCategory(e.category)} · {getExpenseMethod(e)} · {new Date(e.createdAt).toLocaleDateString()}</div>
+              <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{normalizeCategory(e.category)} · {getExpenseMethod(e)} · {formatExpenseDate(e.createdAt)}</div>
             </div>
             <div style={{ fontSize: 15, fontWeight: 800, color: '#D32F2F', flexShrink: 0 }}>KSh {e.amount.toLocaleString()}</div>
+            {confirmDeleteId !== e.id && <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button className="btn" onClick={() => startEdit(e)} aria-label={`Edit ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button className="btn" onClick={() => setConfirmDeleteId(e.id)} aria-label={`Delete ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
+            </div>}
             </div>
             {confirmDeleteId === e.id ? (
               <div role="alert" style={{ marginTop: 12, paddingTop: 12, borderTop: c.divider }}>
-                <div style={{ fontSize: 12, color: '#B71C1C', fontWeight: 700, marginBottom: 9 }}>Delete this expense permanently?</div>
+                <div style={{ fontSize: 12, color: '#B71C1C', fontWeight: 700, marginBottom: 9 }}>Delete &quot;{e.description}&quot;?</div>
                 <div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setConfirmDeleteId(null)} style={{ flex: 1, padding: 8, border: 'none', borderRadius: 8, background: c.iconBg, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteExpense(e)} style={{ flex: 1, padding: 8, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div>
               </div>
-            ) : <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}><button className="btn" onClick={() => startEdit(e)} style={{ padding: '6px 10px', border: 'none', borderRadius: 8, background: c.iconBg, color: '#123A8F', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button><button className="btn" onClick={() => setConfirmDeleteId(e.id)} style={{ padding: '6px 10px', border: 'none', borderRadius: 8, background: c.errorBg, color: '#D32F2F', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Delete</button></div>}
+            ) : null}
           </div>
         ))}
       </div>
       <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={() => setShowAdd(true)} style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', fontSize: 24, color: 'white', boxShadow: '0 4px 16px rgba(211,47,47,0.45)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+        <button className="btn" onClick={openAdd} style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', fontSize: 24, color: 'white', boxShadow: '0 4px 16px rgba(211,47,47,0.45)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
       </div>
     </div>
   )

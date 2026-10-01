@@ -12,6 +12,9 @@ const supplierSelect = {
   location: true,
   contactPerson: true,
   notes: true,
+  paymentTerms: true,
+  rating: true,
+  outstandingBalance: true,
   createdAt: true,
   _count: { select: { products: true, purchaseOrders: true } },
 } as const;
@@ -20,6 +23,11 @@ function normalizeOptional(value: unknown) {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized || null;
+}
+
+function normalizeRating(value: unknown) {
+  const rating = Number(value)
+  return Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : 5
 }
 
 export async function GET(request: Request) {
@@ -59,6 +67,9 @@ export async function POST(request: Request) {
         location: normalizeOptional(body.location),
         contactPerson: normalizeOptional(body.contactPerson ?? body.contact),
         notes: normalizeOptional(body.notes),
+        paymentTerms: normalizeOptional(body.paymentTerms) ?? "Net 30",
+        rating: normalizeRating(body.rating),
+        outstandingBalance: Number.isFinite(Number(body.outstandingBalance)) && Number(body.outstandingBalance) >= 0 ? Number(body.outstandingBalance) : 0,
       },
       select: supplierSelect,
     });
@@ -100,6 +111,9 @@ export async function PATCH(request: Request) {
         ...(body.location !== undefined ? { location: normalizeOptional(body.location) } : {}),
         ...(body.contactPerson !== undefined || body.contact !== undefined ? { contactPerson: normalizeOptional(body.contactPerson ?? body.contact) } : {}),
         ...(body.notes !== undefined ? { notes: normalizeOptional(body.notes) } : {}),
+        ...(body.paymentTerms !== undefined ? { paymentTerms: normalizeOptional(body.paymentTerms) ?? "Net 30" } : {}),
+        ...(body.rating !== undefined ? { rating: normalizeRating(body.rating) } : {}),
+        ...(body.outstandingBalance !== undefined && Number.isFinite(Number(body.outstandingBalance)) && Number(body.outstandingBalance) >= 0 ? { outstandingBalance: Number(body.outstandingBalance) } : {}),
       },
       select: supplierSelect,
     });

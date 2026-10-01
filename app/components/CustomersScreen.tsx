@@ -7,6 +7,7 @@ type Transaction = { id: string; date: string; type: string; amount: number; met
 type CustomerDetails = Customer & { transactions: Transaction[] }
 
 const avatarColors = ['#123A8F', '#2E7D32', '#D32F2F', '#D4AF37', '#7B1FA2', '#F57C00', '#00796B']
+const customerColor = (id: string) => avatarColors[Array.from(id).reduce((total, character) => total + character.charCodeAt(0), 0) % avatarColors.length]
 
 interface Props {
   onNavigate: (s: string) => void
@@ -24,6 +25,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
   const [addSaved, setAddSaved] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null)
   const [dataError, setDataError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -36,7 +38,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
     purchases: customer._count?.sales ?? 0,
     lastVisit: customer.sales?.[0]?.createdAt ? new Date(customer.sales[0].createdAt).toLocaleDateString() : 'No visits',
     initials: customer.name.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase(),
-    color: avatarColors[customers.length % avatarColors.length] ?? avatarColors[0],
+    color: customerColor(customer.id),
   })
 
   const loadCustomers = () => {
@@ -91,15 +93,16 @@ export default function CustomersScreen({ onNavigate }: Props) {
   }
 
   const deleteCustomer = async () => {
-    if (!session || !selected) return
+    const target = customerToDelete ?? selected
+    if (!session || !target) return
     setSaving(true)
     setDataError('')
     try {
-      await apiFetch(`/api/customers?id=${encodeURIComponent(selected.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
-      setCustomers(previous => previous.filter(customer => customer.id !== selected.id))
+      await apiFetch(`/api/customers?id=${encodeURIComponent(target.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
+      setCustomers(previous => previous.filter(customer => customer.id !== target.id))
       setSelected(null)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to delete customer.') }
-    finally { setSaving(false); setConfirmDelete(false) }
+    finally { setSaving(false); setConfirmDelete(false); setCustomerToDelete(null) }
   }
 
   const recordPayment = async () => {
@@ -121,13 +124,18 @@ export default function CustomersScreen({ onNavigate }: Props) {
   )
 
   const totalCredit = customers.reduce((s, cust) => s + cust.credit, 0)
+  const openAdd = () => {
+    setAddForm({ name: '', phone: '', initialCreditLimit: '', note: '' })
+    setEditingCustomer(null)
+    setShowAdd(true)
+  }
 
   if (showAdd) {
     return (
       <div className="screen" style={{ background: c.bg }}>
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <button className="btn" onClick={() => { setShowAdd(false); setEditingCustomer(null) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
             </button>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>{editingCustomer ? 'Edit Customer' : 'Add Customer'}</div>
@@ -264,7 +272,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
             </button>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Customers</div>
           </div>
-          <button className="btn" onClick={() => setShowAdd(true)} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" onClick={openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
             <span style={{ fontSize: 16 }}>+</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Add Customer</span>
           </button>
@@ -305,27 +313,19 @@ export default function CustomersScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
+        {customerToDelete && <div role="alert" className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid #EF9A9A', background: c.errorBg }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete &quot;{customerToDelete.name}&quot;?</div><div style={{ fontSize: 12, color: c.muted, marginBottom: 12 }}>Customers with sales or credit history are retained for record accuracy.</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setCustomerToDelete(null)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.card, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteCustomer()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div></div>}
         {filtered.map(cust => (
-          <button key={cust.id} className="btn card" onClick={() => void handleSelectCustomer(cust)} style={{
-            width: '100%', marginBottom: 8, padding: '14px 16px',
-            display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
-          }}>
-            <div style={{ width: 46, height: 46, borderRadius: '50%', background: cust.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: 'white', flexShrink: 0 }}>{cust.initials}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{cust.name}</div>
-              <div style={{ fontSize: 12, color: c.muted, marginTop: 1 }}>{cust.phone} · {cust.purchases} purchases</div>
+          <div key={cust.id} className="card" style={{ width: '100%', marginBottom: 8, padding: '14px 12px 14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="btn" onClick={() => void handleSelectCustomer(cust)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <div style={{ width: 46, height: 46, borderRadius: '50%', background: cust.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: 'white', flexShrink: 0 }}>{cust.initials}</div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{cust.name}</div><div style={{ fontSize: 12, color: c.muted, marginTop: 1 }}>{cust.phone ?? 'No phone'} · {cust.purchases} purchases</div></div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>{cust.credit > 0 ? <><div style={{ fontSize: 13, fontWeight: 700, color: '#D32F2F' }}>KSh {cust.credit.toLocaleString()}</div><div style={{ fontSize: 11, color: '#D32F2F', marginTop: 1 }}>Credit</div></> : <span className="badge badge-success">Cleared</span>}</div>
+            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <button className="btn" onClick={() => startEdit(cust)} aria-label={`Edit ${cust.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2 2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button className="btn" onClick={() => setCustomerToDelete(cust)} aria-label={`Delete ${cust.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              {cust.credit > 0 ? (
-                <>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#D32F2F' }}>KSh {cust.credit.toLocaleString()}</div>
-                  <div style={{ fontSize: 11, color: '#D32F2F', marginTop: 1 }}>Credit</div>
-                </>
-              ) : (
-                <span className="badge badge-success">Cleared</span>
-              )}
-            </div>
-          </button>
+          </div>
         ))}
       </div>
     </div>

@@ -17,7 +17,7 @@ export async function GET(request: Request) {
         category: { select: { id: true, name: true, emoji: true } },
         inventory: { select: { quantity: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ category: { name: "asc" } }, { name: "asc" }],
     });
 
     return NextResponse.json(products);

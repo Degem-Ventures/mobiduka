@@ -46,7 +46,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
     if (!session) { setDataError('Please sign in to load shifts.'); return }
     try {
       const [employeeResponse, shiftResponse, shiftTypeResponse] = await Promise.all([
-        apiFetch<{ employees: Array<{ id: string; fullName: string; role: string }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`),
+        apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; isActive: boolean }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`),
         apiFetch<{ sessions: Array<{ id: string; shiftType: string; shift: ShiftType | null; openedAt: string; closedAt: string | null; sales: number; amount: number; cashier: { id: string; fullName: string; role: { name: string } | null } | null }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`),
         apiFetch<{ shiftTypes: ShiftType[] }>(`/api/shift-types?businessId=${encodeURIComponent(session.user.businessId)}`),
       ])
@@ -61,7 +61,12 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
       if (availableShift) setSelectedShift(availableShift.id)
       const operationalSessions = shiftResponse.sessions.filter(item => ['CASHIER', 'SUPERVISOR'].includes(item.cashier?.role?.name?.toUpperCase() ?? ''))
       const activeCashierIds = new Set(operationalSessions.filter(item => !item.closedAt && item.cashier?.id).map(item => item.cashier?.id as string))
-      const staff = employeeResponse.employees.filter(employee => (employee.role === 'CASHIER' || employee.role === 'SUPERVISOR') && !activeCashierIds.has(employee.id)).map(employee => ({ id: employee.id, name: employee.fullName, role: employee.role, initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() }))
+      const staff = employeeResponse.employees
+        .filter(employee => {
+          const role = employee.role.trim().toUpperCase()
+          return employee.isActive && (role === 'CASHIER' || role === 'SUPERVISOR') && !activeCashierIds.has(employee.id)
+        })
+        .map(employee => ({ id: employee.id, name: employee.fullName, role: employee.role, initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() }))
       setStaffList(staff)
       if (!selectedStaff && staff[0]) setSelectedStaff(staff[0].id)
       const mappedSessions = operationalSessions.map(item => {
@@ -157,6 +162,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
 
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>Assign Cashier</div>
           <div className="card" style={{ overflow: 'hidden', marginBottom: 20 }}>
+            {staffList.length === 0 && <div style={{ padding: '16px', fontSize: 12, color: c.muted, lineHeight: 1.5 }}>No available active cashiers or supervisors. Add an active employee with the Cashier or Supervisor role, or end their current shift first.</div>}
             {staffList.map((member, i, arr) => (
               <button key={member.id} className="btn" onClick={() => setSelectedStaff(member.id)} style={{
                 width: '100%', display: 'flex', alignItems: 'center', gap: 14,
@@ -179,7 +185,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
             ))}
           </div>
 
-          <button className="btn" onClick={startShift} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)' }}>
+          <button className="btn" disabled={!selectedStaff || !selectedShift} onClick={startShift} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: !selectedStaff || !selectedShift ? 'not-allowed' : 'pointer', opacity: !selectedStaff || !selectedShift ? 0.5 : 1, fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)' }}>
             ▶ Start Shift Now
           </button>
         </div>
