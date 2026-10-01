@@ -1,14 +1,16 @@
 # Build the Android APK
 
-The React/Vite app is packaged with Capacitor. The native Android project is in `android/` and uses the app ID `com.mobiduka.pos`.
+The server-backed Next.js app is loaded by Capacitor from its deployed HTTPS origin. The native Android project is in `android/` and uses the app ID `com.mobiduka.pos`.
 
 ## Local build
 
 Install Android Studio or the Android command-line SDK first. Then run:
 
 ```bash
-npm ci
-npm run android:debug
+pnpm install
+CAPACITOR_SERVER_URL=https://mobiduka.vercel.app pnpm exec cap sync android
+cd android
+./gradlew assembleDebug
 ```
 
 The debug APK is created at:
@@ -21,24 +23,24 @@ The GitHub Actions workflow uses the runner's Gradle installation, so it does no
 
 ## GitHub Actions build
 
-The workflow at `.github/workflows/build-capacitor-apk.yml` builds the APK on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner.
+The workflow at `.github/workflows/build-capacitor-apk.yml` configures Capacitor to load the deployed MobiDuka HTTPS app and creates the APK on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner. Set the `MOBIDUKA_API_ORIGIN` repository variable to the deployed app origin when it differs from `https://mobiduka.vercel.app`.
 
 1. Push this project to GitHub.
 2. Open the repository's **Actions** tab.
-3. Run **Build Capacitor Android APK** with **Run workflow**.
-4. Download the `mobiduka-debug-apk` artifact from the completed workflow.
+3. Run **Build Capacitor Android APK (Next.js UI)** with **Run workflow**.
+4. Download the `mobiduka-capacitor-debug-apk-<run number>` artifact from the completed workflow.
 
-The workflow also runs automatically for pushes to `main` or `master`.
+The workflow also runs automatically for pushes to `dev`.
 
 ## Updating the app
 
-After changing React code, rebuild and sync the native project:
+After changing React code, rebuild and sync the native project with `CAPACITOR_SERVER_URL` set to the deployed app origin:
 
 ```bash
-npm run cap:sync
+CAPACITOR_SERVER_URL=https://mobiduka.vercel.app pnpm exec cap sync android
 ```
 
-Then rebuild the APK with `npm run android:debug` or rerun the GitHub workflow.
+Then rerun the sync and Gradle build commands above, or rerun the GitHub workflow.
 
 ## iOS GitHub Actions build
 

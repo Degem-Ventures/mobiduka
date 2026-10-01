@@ -1,4 +1,4 @@
-name: Build Flutter Android APK
+name: Build Flutter Android APK (Flutter UI)
 
 on:
   workflow_dispatch:
@@ -46,6 +46,32 @@ jobs:
           cd flutter_app
           flutter pub get
 
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::No Android release keystore is configured; the APK will use the debug signing key."
+            exit 0
+          fi
+
+          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Android release signing is incomplete. Set all four ANDROID_* secrets."
+            exit 1
+          fi
+
+          keystore_path="$RUNNER_TEMP/mobiduka-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          {
+            printf 'storeFile=%s\n' "$keystore_path"
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > flutter_app/android/key.properties
+
       - name: Align Android plugin SDKs
         run: |
           node <<'NODE'
@@ -89,6 +115,7 @@ jobs:
           cd flutter_app
           set -o pipefail
           if ! flutter build apk --release \
+            --build-number="$GITHUB_RUN_NUMBER" \
             --dart-define=MOBIDUKA_API_ORIGIN="$MOBIDUKA_API_ORIGIN" \
             --dart-define=SENTRY_DSN="$SENTRY_DSN" \
             --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
@@ -108,8 +135,18 @@ jobs:
           path: ${{ runner.temp }}/flutter-apk-build.log
           if-no-files-found: ignore
 
+      - name: Record Flutter build source
+        run: |
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "branch=$GITHUB_REF_NAME"
+            echo "run=$GITHUB_RUN_NUMBER"
+          } > "$RUNNER_TEMP/flutter-apk-build-info.txt"
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mobiduka-flutter-release-apk
-          path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          name: mobiduka-flutter-release-apk-${{ github.run_number }}
+          path: |
+            flutter_app/build/app/outputs/flutter-apk/app-release.apk
+            ${{ runner.temp }}/flutter-apk-build-info.txt

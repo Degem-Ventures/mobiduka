@@ -1,4 +1,4 @@
-name: Build Capacitor iOS App
+name: Build Capacitor iOS App (Next.js UI)
 
 on:
   workflow_dispatch:
@@ -28,41 +28,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Prepare Capacitor web assets
-        run: |
-          mkdir -p dist
-          if [ -d public ]; then
-            cp -R public/. dist/
-          fi
-          python - <<'PY'
-          from pathlib import Path
-
-          dist = Path('dist')
-          dist.mkdir(exist_ok=True)
-          index = dist / 'index.html'
-          if not index.exists():
-              index.write_text(
-                  '''<!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="UTF-8" />
-              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-              <title>MobiDuka</title>
-            </head>
-            <body>
-              <main style="font-family: sans-serif; padding: 2rem; text-align: center;">
-                <h1>MobiDuka</h1>
-                <p>Capacitor web bundle placeholder.</p>
-              </main>
-            </body>
-          </html>
-          ''',
-                  encoding='utf-8',
-              )
-          PY
-
       - name: Build and sync Capacitor iOS
-        run: pnpm run cap:sync:ios
+        env:
+          CAPACITOR_SERVER_URL: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
+        run: pnpm exec cap sync ios
 
       - name: Install CocoaPods dependencies
         run: pod install --project-directory=ios/App
