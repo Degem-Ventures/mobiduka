@@ -85,13 +85,13 @@ test("selects the Daraja environment only from server configuration", () => {
     )
 
     delete process.env.MPESA_ENVIRONMENT
-    process.env.NODE_ENV = "production"
+    Reflect.set(process.env, "NODE_ENV", "production")
     assert.throws(() => mpesaEnvironment(), MpesaConfigurationError)
   } finally {
     if (environment === undefined) delete process.env.MPESA_ENVIRONMENT
     else process.env.MPESA_ENVIRONMENT = environment
-    if (nodeEnvironment === undefined) delete process.env.NODE_ENV
-    else process.env.NODE_ENV = nodeEnvironment
+    if (nodeEnvironment === undefined) Reflect.deleteProperty(process.env, "NODE_ENV")
+    else Reflect.set(process.env, "NODE_ENV", nodeEnvironment)
   }
 })
 
