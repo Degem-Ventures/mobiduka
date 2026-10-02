@@ -57,7 +57,7 @@ jobs:
           done
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          
+
       # - name: Install Latest Vercel CLI Toolchain
       #   run: pnpm add --global vercel@latest
 
