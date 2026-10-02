@@ -4,6 +4,10 @@ on:
   push:
     branches: [dev, main]
 
+concurrency:
+  group: deploy-and-migrate-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   deploy_vercel_cloud:
     runs-on: ubuntu-latest
@@ -29,7 +33,28 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Apply pending Prisma database migrations
-        run: pnpm exec prisma migrate deploy
+        run: |
+          set -o pipefail
+          log_file=$(mktemp)
+          trap 'rm -f "$log_file"' EXIT
+
+          for attempt in 1 2 3; do
+            if pnpm exec prisma migrate deploy 2>&1 | tee "$log_file"; then
+              exit 0
+            fi
+
+            if ! grep -q 'P1002' "$log_file"; then
+              exit 1
+            fi
+
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Prisma migration lock timed out after 3 attempts."
+              exit 1
+            fi
+
+            echo "Prisma migration lock is busy; retrying in 15 seconds ($attempt/3)."
+            sleep 15
+          done
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           
