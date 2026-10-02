@@ -56,6 +56,9 @@ type MpesaForm = {
   accountType: "TILL" | "PAYBILL"
   shortcode: string
   accountReference: string
+}
+
+type MpesaCredentialDraft = {
   consumerKey: string
   consumerSecret: string
   passkey: string
@@ -111,10 +114,13 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
     accountType: "TILL",
     shortcode: "",
     accountReference: "",
-    consumerKey: "",
-    consumerSecret: "",
-    passkey: "",
   })
+  const [mpesaCredentialDrafts, setMpesaCredentialDrafts] =
+    useState<Record<MpesaForm["environment"], MpesaCredentialDraft>>({
+      sandbox: { consumerKey: "", consumerSecret: "", passkey: "" },
+      production: { consumerKey: "", consumerSecret: "", passkey: "" },
+    })
+  const [showMpesaCredentials, setShowMpesaCredentials] = useState(false)
   const [mpesaIntegration, setMpesaIntegration] = useState<MpesaIntegration>({
     configured: false,
   })
@@ -142,6 +148,10 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState("")
   const [saving, setSaving] = useState(false)
+  const activeMpesaCredentials = mpesaCredentialDrafts[mpesaForm.environment]
+  const hasStoredCredentialsForSelectedEnvironment =
+    mpesaIntegration.configured &&
+    (mpesaIntegration.environment ?? "sandbox") === mpesaForm.environment
 
   const paymentConfig = (): PaymentConfig => ({
     methods: Object.fromEntries(
@@ -211,10 +221,12 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
       accountType: integration.accountType ?? "TILL",
       shortcode: integration.shortcode ?? "",
       accountReference: integration.accountReference ?? "",
-      consumerKey: "",
-      consumerSecret: "",
-      passkey: "",
     })
+    setMpesaCredentialDrafts({
+      sandbox: { consumerKey: "", consumerSecret: "", passkey: "" },
+      production: { consumerKey: "", consumerSecret: "", passkey: "" },
+    })
+    setShowMpesaCredentials(false)
     setMpesaFormDirty(false)
   }
 
@@ -247,6 +259,20 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
     setMpesaFormDirty(true)
   }
 
+  const updateMpesaCredential = (
+    key: keyof MpesaCredentialDraft,
+    value: string,
+  ) => {
+    setMpesaCredentialDrafts((current) => ({
+      ...current,
+      [mpesaForm.environment]: {
+        ...current[mpesaForm.environment],
+        [key]: value,
+      },
+    }))
+    setMpesaFormDirty(true)
+  }
+
   const validateMpesaForm = () => {
     if (!/^\d{5,8}$/.test(mpesaForm.shortcode.trim()))
       return "Enter a valid 5 to 8 digit till or paybill number."
@@ -255,13 +281,16 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
       mpesaForm.accountReference.trim().length > 12
     )
       return "Enter an account reference of up to 12 characters."
+    const credentialsRequired =
+      !mpesaIntegration.configured ||
+      (mpesaIntegration.environment ?? "sandbox") !== mpesaForm.environment
     if (
-      !mpesaIntegration.configured &&
-      (!mpesaForm.consumerKey.trim() ||
-        !mpesaForm.consumerSecret.trim() ||
-        !mpesaForm.passkey.trim())
+      credentialsRequired &&
+      (!activeMpesaCredentials.consumerKey.trim() ||
+        !activeMpesaCredentials.consumerSecret.trim() ||
+        !activeMpesaCredentials.passkey.trim())
     ) {
-      return "Consumer key, consumer secret, and online passkey are required."
+      return `Enter the Consumer Key, Consumer Secret, and passkey for the selected ${mpesaForm.environment} environment.`
     }
     return ""
   }
@@ -293,6 +322,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
             body: JSON.stringify({
               businessId: session.user.businessId,
               ...mpesaForm,
+              ...activeMpesaCredentials,
             }),
           },
         )
@@ -618,12 +648,58 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                       )}
                     </div>
                   </div>
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    style={{
+                      background:
+                        mpesaForm.environment === "production"
+                          ? c.isDark
+                            ? "rgba(249,168,37,0.12)"
+                            : "#FFF8E1"
+                          : c.infoBg,
+                      borderRadius: 10,
+                      padding: "10px 12px",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        color: c.text,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        marginBottom: 3,
+                      }}
+                    >
+                      {mpesaForm.environment === "production"
+                        ? "Live mode"
+                        : "Test mode"}
+                    </div>
+                    <div
+                      style={{ color: c.muted, fontSize: 11, lineHeight: 1.5 }}
+                    >
+                      {mpesaForm.environment === "production"
+                        ? "Live payments use this merchant's approved production shortcode and credentials."
+                        : "Use Safaricom sandbox credentials. No real money is moved."}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: c.text,
+                      marginBottom: 8,
+                    }}
+                  >
+                    Merchant account
+                  </div>
                   <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                    Daraja {mpesaForm.environment} credentials
                     {(["TILL", "PAYBILL"] as const).map((accountType) => (
                       <button
                         key={accountType}
+                        type="button"
                         className="btn"
+                        aria-pressed={mpesaForm.accountType === accountType}
                         onClick={() => updateMpesaForm({ accountType })}
                         style={{
                           flex: 1,
@@ -777,13 +853,47 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                   >
                     <div
                       style={{
-                        fontSize: 12,
-                        fontWeight: 700,
-                        color: c.text,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
                         marginBottom: 4,
                       }}
                     >
-                      Daraja production credentials
+                      <div
+                        style={{
+                          flex: 1,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: c.text,
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        {mpesaForm.environment} credentials
+                      </div>
+                      <button
+                        type="button"
+                        className="btn"
+                        aria-label={
+                          showMpesaCredentials
+                            ? "Hide M-Pesa credential values"
+                            : "Show M-Pesa credential values"
+                        }
+                        onClick={() =>
+                          setShowMpesaCredentials((visible) => !visible)
+                        }
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: "3px 0",
+                          color: c.muted,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          fontFamily: "inherit",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {showMpesaCredentials ? "Hide values" : "Show values"}
+                      </button>
                     </div>
                     <div
                       style={{
@@ -793,34 +903,28 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                         marginBottom: 14,
                       }}
                     >
-                      Use the credentials linked to this merchant&apos;s Till or
-                      Use credentials from the selected Daraja{" "}
-                      {mpesaForm.environment} environment linked to this
-                      merchant&apos;s Till or Paybill. Enter them once;
-                      sensitive values are encrypted by the backend.
-                      placeholder: `Enter Daraja ${mpesaForm.environment}{" "}
-                      consumer key`, placeholder: `Enter Daraja $
-                      {mpesaForm.environment} consumer secret`, placeholder:
-                      `Enter ${mpesaForm.environment} passkey`,
+                      Use matching {mpesaForm.environment} credentials for this
+                      merchant&apos;s Till or Paybill. Credentials are encrypted
+                      by the backend before storage.
                     </div>
                     {[
                       {
                         id: "mpesa-consumer-key",
                         label: "Consumer Key",
                         key: "consumerKey" as const,
-                        placeholder: "Enter Daraja consumer key",
+                        placeholder: `Enter Daraja ${mpesaForm.environment} consumer key`,
                       },
                       {
                         id: "mpesa-consumer-secret",
                         label: "Consumer Secret",
                         key: "consumerSecret" as const,
-                        placeholder: "Enter Daraja consumer secret",
+                        placeholder: `Enter Daraja ${mpesaForm.environment} consumer secret`,
                       },
                       {
                         id: "mpesa-passkey",
                         label: "Lipa Na M-PESA Passkey",
                         key: "passkey" as const,
-                        placeholder: "Enter production passkey",
+                        placeholder: `Enter ${mpesaForm.environment} passkey`,
                       },
                     ].map((field) => (
                       <div
@@ -844,17 +948,18 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                         <input
                           id={field.id}
                           className="input"
-                          type="password"
+                          type={showMpesaCredentials ? "text" : "password"}
                           autoComplete="new-password"
                           spellCheck={false}
+                          maxLength={512}
                           placeholder={
-                            mpesaIntegration.configured
+                            hasStoredCredentialsForSelectedEnvironment
                               ? "Leave blank to keep unchanged"
                               : field.placeholder
                           }
-                          value={mpesaForm[field.key]}
+                          value={activeMpesaCredentials[field.key]}
                           onChange={(e) =>
-                            updateMpesaForm({ [field.key]: e.target.value })
+                            updateMpesaCredential(field.key, e.target.value)
                           }
                         />
                       </div>
