@@ -60,6 +60,7 @@ model Business {
   cashSessions      CashSession[]
   purchaseOrders    PurchaseOrder[]
   creditEntries     CreditLedgerEntry[]
+  mpesaIntegration  MpesaIntegration?
   mpesaTransactions MpesaTransaction[]
   mpesaSmsReceipts  MpesaSmsReceipt[]
   auditLogs         AuditLog[]
@@ -387,9 +388,25 @@ model CreditLedgerEntry {
   customer Customer @relation(fields: [customerId], references: [id])
 }
 
+model MpesaIntegration {
+  id                   String   @id @default(uuid())
+  businessId           String   @unique
+  environment          String   @default("sandbox")
+  accountType          String
+  shortcode            String
+  accountReference     String?
+  credentialCiphertext String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  business     Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  transactions MpesaTransaction[]
+}
+
 model MpesaTransaction {
   id                String   @id @default(uuid())
   businessId        String
+  mpesaIntegrationId String?
   phoneNumber       String
   amount            Float
   accountReference  String
@@ -402,7 +419,11 @@ model MpesaTransaction {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  business Business @relation(fields: [businessId], references: [id])
+  business         Business          @relation(fields: [businessId], references: [id])
+  mpesaIntegration MpesaIntegration? @relation(fields: [mpesaIntegrationId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([mpesaIntegrationId])
 }
 
 model MpesaSmsReceipt {

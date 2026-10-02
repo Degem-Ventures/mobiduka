@@ -117,24 +117,24 @@ When a valid customer account QR code is scanned:
 
 ## 📲 6. Live Lipa Na M-Pesa Till Configuration
 
-Configure your commercial Daraja credentials through protected deployment environment variables inside your console settings panel:
+Set the server environment once in the deployment console:
 
 ```bash
-MPESA_CONSUMER_KEY="your_live_daraja_consumer_key"
-MPESA_CONSUMER_SECRET="your_live_daraja_consumer_secret"
-MPESA_PASSKEY="your_live_production_online_passkey"
-MPESA_SHORTCODE="401234"                        # Your 6-digit parent STORE NUMBER
-MPESA_TILL_NUMBER="789012"                      # The public 6-digit counter TILL NUMBER
-MPESA_TRANSACTION_TYPE="CustomerBuyGoodsOnline" # Configures proper routing directly to the Till
+# Generate once with: openssl rand -base64 32
+MPESA_CREDENTIALS_ENCRYPTION_KEY="base64_encoded_32_byte_key"
+MPESA_ENVIRONMENT="production"
+MPESA_CALLBACK_URL="https://your-domain.example/api/payments/mpesa-callback"
 ```
 
-> 🔒 Security Notice: Never commit these values to Git or place them in screenshots, manuals, or support requests.
+Then sign in with a role that has **Configure Payment Methods**, open **Payment Methods**, enable M-Pesa, and enter the business's Till or Paybill number, account reference, Daraja consumer key, consumer secret, and online passkey. The credentials are encrypted for that business and are never shown again after saving.
+
+> 🔒 Security Notice: Keep `MPESA_CREDENTIALS_ENCRYPTION_KEY` only in deployment secrets. Do not rotate or lose it while tenant credentials exist, or those encrypted credentials cannot be read.
 
 ### Before going live, verify:
 
-- Till number and store shortcode match your Safaricom certificate.
-- The callback URL points to: `https://vercel.app`.
-- STK query credentials are valid.
+- Till or Paybill number matches the Safaricom certificate for that business.
+- The callback URL is the public HTTPS `/api/payments/mpesa-callback` endpoint.
+- The payment administrator can see the configuration status without seeing saved secrets.
 - Production Daraja approval status is complete.
 - A successful test transaction has been completed.
 

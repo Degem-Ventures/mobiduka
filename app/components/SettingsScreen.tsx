@@ -18,7 +18,7 @@ const CURRENCIES = [
 
 type PaymentConfig = { methods: Record<string, boolean> }
 type SettingsResponse = {
-  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; salesNotifications: boolean; dailyReport: boolean; autoBackup: boolean; mpesaEnabled: boolean; themeMode: ThemeMode; paymentConfig: PaymentConfig | null }
+  preferences: { receiptPrint: boolean; lowStockAlerts: boolean; salesNotifications: boolean; dailyReport: boolean; autoBackup: boolean; themeMode: ThemeMode; paymentConfig: PaymentConfig | null }
 }
 type BusinessResponse = { business: { name: string; branch: string | null; country: string | null; phone: string | null; kraPin: string | null; currency: string | null } }
 
@@ -30,7 +30,6 @@ export default function SettingsScreen({ onNavigate }: Props) {
   const [salesNotifications, setSalesNotifications] = useState(true)
   const [dailyReport, setDailyReport] = useState(false)
   const [autoBackup, setAutoBackup] = useState(true)
-  const [mpesaEnabled, setMpesaEnabled] = useState(true)
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null)
 
   const [currency, setCurrency] = useState('KES')
@@ -48,7 +47,6 @@ export default function SettingsScreen({ onNavigate }: Props) {
     setSalesNotifications(response.preferences.salesNotifications)
     setDailyReport(response.preferences.dailyReport)
     setAutoBackup(response.preferences.autoBackup)
-    setMpesaEnabled(response.preferences.mpesaEnabled)
     setPaymentConfig(response.preferences.paymentConfig)
     setTheme(response.preferences.themeMode)
   }
@@ -126,7 +124,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
       .filter(([id]) => paymentConfig.methods[id])
       .map(([, label]) => label)
       .join(' · ') || 'No payment methods enabled'
-    : 'Cash · M-Pesa · Credit'
+    : 'Cash · Credit'
 
   if (showCurrencyPicker) {
     return (
@@ -242,7 +240,6 @@ export default function SettingsScreen({ onNavigate }: Props) {
             { label: 'Sales Completed Alerts', sub: 'Notify after each completed sale', value: salesNotifications, onChange: (value: boolean) => { setSalesNotifications(value); void saveSettings({ salesNotifications: value }) } },
             { label: 'Daily Report Email', sub: 'Send end-of-day report to email', value: dailyReport, onChange: (value: boolean) => { setDailyReport(value); void saveSettings({ dailyReport: value }) } },
             { label: 'Auto Cloud Backup', sub: 'Backup data daily at midnight', value: autoBackup, onChange: (value: boolean) => { setAutoBackup(value); void saveSettings({ autoBackup: value }) } },
-            { label: 'M-Pesa Integration', sub: 'Accept M-Pesa payments', value: mpesaEnabled, onChange: (value: boolean) => { setMpesaEnabled(value); void saveSettings({ mpesaEnabled: value }) } },
           ].map((item, i, arr) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: i < arr.length - 1 ? border : 'none', gap: 14 }}>
               <div style={{ flex: 1 }}>

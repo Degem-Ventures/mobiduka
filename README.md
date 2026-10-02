@@ -110,13 +110,20 @@ The Swagger UI assets are bundled locally under `public/swagger-ui/` so the docs
 
 The project uses Prisma with PostgreSQL. Set `DATABASE_URL` to the pooled PostgreSQL connection string in local development and in Vercel Project Settings. The canonical schema lives in `prisma/schema.prisma`.
 
-For a new database, apply the schema once before deploying API routes:
+For a new database, bootstrap the current schema once before deploying API routes:
 
 ```bash
 DATABASE_URL="postgresql://user:password@host:5432/mobiduka?sslmode=require" pnpm exec prisma db push
 ```
 
 In Vercel, add the same connection string as the `DATABASE_URL` environment variable for every environment that serves the API. Do not rely on `prisma/dev.db`; a Vercel function filesystem is not a durable application database.
+
+The M-Pesa tenant-integration migration is tracked at `20261002000000_add_mpesa_integrations`.
+
+- For an existing database that predates this feature, apply it with `pnpm exec prisma migrate deploy`.
+- For a database already synchronized with the current schema using `prisma db push`, record the matching migration with `pnpm exec prisma migrate resolve --applied 20261002000000_add_mpesa_integrations`.
+
+Do not run both commands against the same already-synchronized database: `migrate deploy` would try to create objects that already exist.
 
 ### Common commands
 
@@ -174,10 +181,13 @@ This is designed to support the small retailer workflow for stock replenishment 
 
 The payment integration is designed for resilient checkout confirmation:
 
-- The server initiates Daraja requests and polls payment status where configured.
+- Each business has one encrypted M-Pesa integration record configured by a user with the `payments` permission.
+- The server initiates Daraja requests and polls payment status using the transaction's authenticated business integration.
 - The mobile terminal can support device-level payment confirmation workflows where the required Android permissions and services are available.
 - Payment callbacks and status updates must remain tenant-scoped and idempotent.
-- Production Daraja credentials belong in protected deployment environment variables, never in source control.
+- The server selects `sandbox` or `production` exclusively from `MPESA_ENVIRONMENT`; tenants cannot select an endpoint.
+- Set `MPESA_CREDENTIALS_ENCRYPTION_KEY` to a base64-encoded 32-byte key generated with `openssl rand -base64 32`, then retain it for the lifetime of the encrypted records.
+- Set `MPESA_CALLBACK_URL` to the public callback endpoint. Tenant Daraja credentials are entered in Payment Methods, encrypted at rest, and never returned by the API.
 
 ## Flutter app
 
@@ -222,6 +232,9 @@ Required GitHub Actions secrets and Vercel environment variables include:
 | `VERCEL_ORG_ID` | Identifies the Vercel organization or team. |
 | `VERCEL_PROJECT_ID` | Identifies the Vercel project. |
 | `DATABASE_URL` | Connects Prisma to the production PostgreSQL database. |
+| `MPESA_CREDENTIALS_ENCRYPTION_KEY` | Base64-encoded 32-byte key used to encrypt each tenant's Daraja credentials. |
+| `MPESA_ENVIRONMENT` | Server-only Daraja target: `sandbox` or `production`. |
+| `MPESA_CALLBACK_URL` | Public HTTPS M-Pesa callback endpoint. |
 
 The workflow currently uses Node 24 and the pnpm version declared in `package.json`. Keep these versions aligned when changing CI configuration.
 

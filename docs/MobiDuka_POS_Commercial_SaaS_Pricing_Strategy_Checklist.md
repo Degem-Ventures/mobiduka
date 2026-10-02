@@ -91,7 +91,7 @@ Choose one commercial model for the Daraja API deployment:
 
 #### Option A: SaaS-only model
 
-- The merchant supplies and manages their own Daraja credentials, including `MPESA_CONSUMER_KEY` and `MPESA_PASSKEY`.
+- The merchant supplies and manages their own Daraja credentials through the tenant's protected Payment Methods setup.
 - The merchant settles applicable transaction fees directly with Safaricom.
 - MobiDuka charges strictly for the software subscription.
 - This is recommended for initial low-friction onboarding because it keeps payment settlement and merchant ownership clear.
