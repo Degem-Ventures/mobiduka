@@ -519,16 +519,7 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
           const SizedBox(width: 72),
           Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
         ];
-      case 'SUPERVISOR':
-        return [
-          Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
-          Expanded(child: _navButton(1, Icons.shopping_bag_rounded, 'POS')),
-          const SizedBox(width: 72),
-          Expanded(child: _navButton(2, Icons.inventory_2_rounded, 'Stock')),
-          Expanded(child: _navButton(3, Icons.menu_rounded, 'More')),
-        ];
       case 'ACCOUNTANT':
-      case 'ADMIN':
         return [
           Expanded(child: _navButton(0, Icons.home_filled, 'Home')),
           const SizedBox(width: 72),
@@ -649,13 +640,16 @@ class _MobiDukaAppState extends State<MobiDukaApp> with WidgetsBindingObserver {
                               detail == null &&
                               !showingSmartScan &&
                               !showingGlobalShiftManagement
-                          ? BottomAppBar(
-                              shape: const CircularNotchedRectangle(),
-                              notchMargin: 7,
-                              color: const Color(0xFF0A0A0A),
-                              child: SizedBox(
-                                height: 64,
-                                child: Row(children: _navigationButtons()),
+                          ? SafeArea(
+                              top: false,
+                              child: BottomAppBar(
+                                shape: const CircularNotchedRectangle(),
+                                notchMargin: 7,
+                                color: const Color(0xFF0A0A0A),
+                                child: SizedBox(
+                                  height: 64,
+                                  child: Row(children: _navigationButtons()),
+                                ),
                               ),
                             )
                           : null,
@@ -1190,6 +1184,10 @@ class WebMobileViewportFrame extends StatelessWidget {
 
   final Widget child;
 
+  static const double _viewportWidth = 373;
+  static const double _viewportHeight = 832;
+  static const double _desktopGutter = 20;
+
   @override
   Widget build(BuildContext context) {
     if (!kIsWeb) return child;
@@ -1198,13 +1196,29 @@ class WebMobileViewportFrame extends StatelessWidget {
       builder: (context, constraints) {
         final isDesktop =
             constraints.maxWidth >= 480 && constraints.maxHeight >= 700;
-        final height = isDesktop
-            ? (constraints.maxHeight - 48).clamp(0.0, 852.0).toDouble()
+        final maxWidth = isDesktop
+            ? (constraints.maxWidth - (_desktopGutter * 2))
+                .clamp(0.0, _viewportWidth)
+                .toDouble()
+            : constraints.maxWidth;
+        final maxHeight = isDesktop
+            ? (constraints.maxHeight - (_desktopGutter * 2))
+                .clamp(0.0, _viewportHeight)
+                .toDouble()
             : constraints.maxHeight;
+        final aspectRatio = _viewportWidth / _viewportHeight;
+        final constrainedByWidth =
+            maxHeight == 0 || maxWidth / maxHeight <= aspectRatio;
+        final width = isDesktop
+            ? (constrainedByWidth ? maxWidth : maxHeight * aspectRatio)
+            : maxWidth;
+        final height = isDesktop
+            ? (constrainedByWidth ? maxWidth / aspectRatio : maxHeight)
+            : maxHeight;
         final radius = BorderRadius.circular(isDesktop ? 8 : 0);
 
         return SizedBox(
-          width: isDesktop ? 393 : constraints.maxWidth,
+          width: width,
           height: height,
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -3531,7 +3545,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             physics: const NeverScrollableScrollPhysics(),
                             mainAxisSpacing: 10,
                             crossAxisSpacing: 10,
-                            childAspectRatio: 0.72,
+                            mainAxisExtent: 108,
                             children: [
                               {
                                 'label': 'New Sale',
@@ -3561,49 +3575,76 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               final color = item['color'] as Color;
                               return Material(
                                 color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () => widget
-                                      .onQuickAction(item['screen'] as String),
-                                  borderRadius: BorderRadius.circular(14),
-                                  child: Ink(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 4, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: color.withValues(alpha: 0.08),
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final compact = constraints.maxWidth < 72;
+                                    final horizontalPadding = compact ? 2.0 : 4.0;
+                                    final iconSize = compact
+                                        ? (constraints.maxWidth -
+                                                (horizontalPadding * 2))
+                                            .clamp(0.0, 34.0)
+                                            .toDouble()
+                                        : 42.0;
+
+                                    return InkWell(
+                                      onTap: () => widget.onQuickAction(
+                                          item['screen'] as String),
                                       borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        Container(
-                                          width: 42,
-                                          height: 42,
-                                          decoration: BoxDecoration(
-                                            color:
-                                                color.withValues(alpha: 0.12),
-                                            borderRadius:
-                                                BorderRadius.circular(12),
-                                          ),
-                                          child: Center(
-                                              child: Text(
+                                      child: Ink(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: horizontalPadding,
+                                          vertical: compact ? 4 : 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: color.withValues(alpha: 0.08),
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                        ),
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Container(
+                                              width: iconSize,
+                                              height: iconSize,
+                                              decoration: BoxDecoration(
+                                                color: color.withValues(
+                                                    alpha: 0.12),
+                                                borderRadius:
+                                                    BorderRadius.circular(
+                                                        compact ? 10 : 12),
+                                              ),
+                                              child: Center(
+                                                child: Text(
                                                   item['icon'] as String,
-                                                  style: const TextStyle(
-                                                      fontSize: 20))),
+                                                  style: TextStyle(
+                                                    fontSize:
+                                                        compact ? 17 : 20,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            SizedBox(height: compact ? 4 : 6),
+                                            Flexible(
+                                              child: Text(
+                                                item['label'] as String,
+                                                maxLines: 2,
+                                                overflow:
+                                                    TextOverflow.ellipsis,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  fontSize: compact ? 9 : 10,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: color,
+                                                  height: compact ? 1.1 : 1.2,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          item['label'] as String,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w600,
-                                              color: color,
-                                              height: 1.2),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                                      ),
+                                    );
+                                  },
                                 ),
                               );
                             }).toList(),
@@ -4048,6 +4089,8 @@ class _POSScreenState extends State<POSScreen> {
   final ProfileService _profileService = ProfileService();
   final TextEditingController _mpesaPhoneController =
       TextEditingController(text: '254');
+  final TextEditingController _productSearchController =
+      TextEditingController();
   List<BluetoothDevice> _pairedPrinters = const [];
   List<Map<String, String>> _activeOperators = const [];
   String? _selectedOperatorId;
@@ -4423,6 +4466,7 @@ class _POSScreenState extends State<POSScreen> {
     _smsWatcherService.stopSmsWatcher();
     _smsWatcherService.stopMpesaInboxIngestion();
     _mpesaPhoneController.dispose();
+    _productSearchController.dispose();
     super.dispose();
   }
 
@@ -4526,9 +4570,23 @@ class _POSScreenState extends State<POSScreen> {
     _saveCartDraftSoon();
   }
 
+  bool _matchesProductSearch(Product product) {
+    final query = search.trim().toLowerCase();
+    if (query.isEmpty) return true;
+
+    return product.name.toLowerCase().contains(query) ||
+        product.category.toLowerCase().contains(query) ||
+        (product.barcode?.toLowerCase().contains(query) ?? false);
+  }
+
+  void _clearProductSearch() {
+    if (search.isEmpty) return;
+    _productSearchController.clear();
+    setState(() => search = '');
+  }
+
   List<Product> get visibleProducts => products.where((product) {
-        final matchesSearch =
-            product.name.toLowerCase().contains(search.toLowerCase());
+        final matchesSearch = _matchesProductSearch(product);
         final matchesCategory =
             category == 'All' || product.category == category;
         return matchesSearch && matchesCategory;
@@ -6263,6 +6321,8 @@ class _POSScreenState extends State<POSScreen> {
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: TextField(
+                                      controller: _productSearchController,
+                                      textInputAction: TextInputAction.search,
                                       onChanged: (value) =>
                                           setState(() => search = value),
                                       style: const TextStyle(
@@ -6276,6 +6336,19 @@ class _POSScreenState extends State<POSScreen> {
                                       ),
                                     ),
                                   ),
+                                  if (search.isNotEmpty)
+                                    IconButton(
+                                      onPressed: _clearProductSearch,
+                                      tooltip: 'Clear product search',
+                                      color: const Color(0xCCFFFFFF),
+                                      iconSize: 18,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints.tightFor(
+                                        width: 30,
+                                        height: 32,
+                                      ),
+                                      icon: const Icon(Icons.close_rounded),
+                                    ),
                                 ],
                               ),
                             ),

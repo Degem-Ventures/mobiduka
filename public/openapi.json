@@ -283,7 +283,7 @@
       "post": {
         "tags": ["Payments"],
         "summary": "Initiate Safaricom M-Pesa STK Push",
-        "description": "Requests a customer PIN prompt through the Daraja sandbox and stores the pending checkout correlation record. Use the tenant ID returned by login; the seed generates business UUIDs at runtime.",
+        "description": "Requests a customer PIN prompt through the server-selected Daraja environment and stores the pending checkout correlation record against the authenticated tenant integration. Use the tenant ID returned by login; the seed generates business UUIDs at runtime.",
         "requestBody": {
           "required": true,
           "content": {
@@ -294,8 +294,7 @@
                 "properties": {
                   "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
                   "phoneNumber": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$", "example": "254700000001", "description": "Seeded business phone in Kenyan format; replace with the customer's handset number for a real checkout." },
-                  "amount": { "type": "number", "minimum": 1, "example": 1250 },
-                  "accountReference": { "type": "string", "maxLength": 12, "example": "MobiDuka POS" }
+                  "amount": { "type": "number", "minimum": 1, "example": 1250 }
                 }
               }
             }
@@ -333,6 +332,50 @@
         }
       }
     },
+    "/payments/mpesa-integration": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "Get Tenant M-Pesa Setup Status",
+        "description": "Requires the payments permission. Returns configuration status and public account fields only; credential values are never returned.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Public M-Pesa integration status returned." },
+          "403": { "description": "Payment configuration permission is required." }
+        }
+      },
+      "put": {
+        "tags": ["Payments"],
+        "summary": "Configure Tenant M-Pesa Credentials",
+        "description": "Requires the payments permission. The server encrypts credential fields before storage and returns only public setup metadata.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "accountType", "shortcode", "accountReference"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "accountType": { "type": "string", "enum": ["TILL", "PAYBILL"] },
+                  "shortcode": { "type": "string", "pattern": "^[0-9]{5,8}$" },
+                  "accountReference": { "type": "string", "maxLength": 12 },
+                  "consumerKey": { "type": "string", "writeOnly": true },
+                  "consumerSecret": { "type": "string", "writeOnly": true },
+                  "passkey": { "type": "string", "writeOnly": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Encrypted M-Pesa integration saved." },
+          "400": { "description": "Invalid account details or missing first-time credentials." },
+          "403": { "description": "Payment configuration permission is required." }
+        }
+      }
+    },
     "/payments/stk-query": {
       "post": {
         "tags": ["Payments"],
@@ -344,8 +387,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["checkoutRequestId"],
+                "required": ["businessId", "checkoutRequestId"],
                 "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "description": "Authenticated tenant ID returned by login." },
                   "checkoutRequestId": { "type": "string", "description": "Use checkoutRequestId returned by /payments/stk-push or persisted by the M-Pesa callback." }
                 }
               }

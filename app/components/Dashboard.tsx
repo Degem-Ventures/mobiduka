@@ -17,6 +17,8 @@ type DashboardData = {
 }
 
 const money = (value: number) => `KSh ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+const lowStockPreviewCount = 10
+const lowStockExpandedCount = 20
 
 const calendarDate = (value: Date, timeZone: string) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -62,7 +64,7 @@ export default function Dashboard({ onNavigate }: Props) {
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState('')
   const [unreadNotifications, setUnreadNotifications] = useState(0)
-  const [showAllLowStock, setShowAllLowStock] = useState(false)
+  const [lowStockDisplay, setLowStockDisplay] = useState<'preview' | 'expanded' | 'all'>('preview')
   const statsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -153,7 +155,15 @@ export default function Dashboard({ onNavigate }: Props) {
     .map(scan => ({ ...scan, timeLabel: relativeTimeLabel(scan.createdAt, timeZone) }))
   const lowStockItems = [...(data?.lowStockItems ?? [])]
     .sort((left, right) => left.quantity - right.quantity || left.name.localeCompare(right.name))
-  const displayedLowStockItems = lowStockItems.slice(0, showAllLowStock ? 20 : 10)
+  const lowStockVisibleCount = lowStockDisplay === 'all'
+    ? lowStockItems.length
+    : Math.min(lowStockDisplay === 'expanded' ? lowStockExpandedCount : lowStockPreviewCount, lowStockItems.length)
+  const displayedLowStockItems = lowStockItems.slice(0, lowStockVisibleCount)
+  const lowStockAction = lowStockVisibleCount >= lowStockItems.length
+    ? { label: 'Show less', onClick: () => setLowStockDisplay('preview') }
+    : lowStockVisibleCount < Math.min(lowStockExpandedCount, lowStockItems.length)
+      ? { label: 'View more', onClick: () => setLowStockDisplay('expanded') }
+      : { label: 'View all', onClick: () => setLowStockDisplay('all') }
 
   return (
     <div className="screen">
@@ -370,11 +380,11 @@ export default function Dashboard({ onNavigate }: Props) {
                 {(summary.lowStockCount ?? 0) > 0 ? 'Action needed before end of day' : 'All monitored stock levels are healthy'}
               </div>
             </div>
-            {lowStockItems.length > 10 && <button className="btn" onClick={() => setShowAllLowStock(value => !value)} style={{
+            {lowStockItems.length > lowStockPreviewCount && <button className="btn" onClick={lowStockAction.onClick} style={{
               marginLeft: 'auto', background: '#F9A825', border: 'none',
               borderRadius: 10, padding: '6px 12px', fontSize: 12, fontWeight: 600,
               color: 'white', cursor: 'pointer', fontFamily: 'inherit'
-            }}>{showAllLowStock ? 'Show less' : 'View all'}</button>}
+            }}>{lowStockAction.label}</button>}
           </div>
           {displayedLowStockItems.map((item, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i > 0 ? `1px solid ${c.isDark ? 'rgba(249,168,37,0.15)' : 'rgba(0,0,0,0.06)'}` : 'none' }}>
@@ -383,7 +393,11 @@ export default function Dashboard({ onNavigate }: Props) {
               <span className="badge badge-warning">{item.quantity} left</span>
             </div>
           ))}
-          {showAllLowStock && lowStockItems.length > 20 && <div style={{ fontSize: 11, color: c.isDark ? '#F9A825' : '#8D6E63', textAlign: 'center', paddingTop: 8 }}>Showing 20 of {lowStockItems.length} low-stock items</div>}
+          {lowStockItems.length > lowStockPreviewCount && <div style={{ fontSize: 11, color: c.isDark ? '#F9A825' : '#8D6E63', textAlign: 'center', paddingTop: 8 }}>
+            {lowStockVisibleCount === lowStockItems.length
+              ? `Showing all ${lowStockItems.length} low-stock items`
+              : `Showing ${lowStockVisibleCount} of ${lowStockItems.length} low-stock items`}
+          </div>}
         </div>
       </div>
     </div>
