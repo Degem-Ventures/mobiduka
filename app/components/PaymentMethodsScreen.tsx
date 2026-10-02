@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useColors } from "../utils/theme"
 import { apiFetch, getClientSession } from "../../lib/client-api"
 
+
 interface Method {
   id: string
   label: string
