@@ -66,6 +66,7 @@ export default function Dashboard({ onNavigate }: Props) {
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [lowStockDisplay, setLowStockDisplay] = useState<'preview' | 'expanded' | 'all'>('preview')
   const statsRef = useRef<HTMLDivElement>(null)
+  const statsTrackRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const session = getClientSession()
@@ -94,28 +95,38 @@ export default function Dashboard({ onNavigate }: Props) {
   useEffect(() => {
     const el = statsRef.current
     if (!el) return
-    let raf: number
-    const step = () => {
-      if (el.scrollLeft >= el.scrollWidth - el.clientWidth - 1) {
-        el.scrollLeft = 0
-      } else {
-        el.scrollLeft += 0.4
+    let raf = 0
+    let previousTime = 0
+    let paused = false
+    const step = (time: number) => {
+      const track = statsTrackRef.current
+      const cycleWidth = track?.children[1] && track.children[0]
+        ? (track.children[1] as HTMLElement).offsetLeft - (track.children[0] as HTMLElement).offsetLeft
+        : 0
+
+      if (!paused && cycleWidth > 0 && el.scrollWidth > el.clientWidth) {
+        if (previousTime > 0) el.scrollLeft += Math.min(time - previousTime, 50) * 0.024
+        if (el.scrollLeft >= cycleWidth) el.scrollLeft -= cycleWidth
       }
+
+      previousTime = time
       raf = requestAnimationFrame(step)
     }
+    const pause = () => { paused = true }
+    const resume = () => { paused = false; previousTime = 0 }
     raf = requestAnimationFrame(step)
-    const pause = () => cancelAnimationFrame(raf)
-    const resume = () => { raf = requestAnimationFrame(step) }
     el.addEventListener('mouseenter', pause)
-    el.addEventListener('touchstart', pause)
+    el.addEventListener('touchstart', pause, { passive: true })
     el.addEventListener('mouseleave', resume)
     el.addEventListener('touchend', resume)
+    el.addEventListener('touchcancel', resume)
     return () => {
       cancelAnimationFrame(raf)
       el.removeEventListener('mouseenter', pause)
       el.removeEventListener('touchstart', pause)
       el.removeEventListener('mouseleave', resume)
       el.removeEventListener('touchend', resume)
+      el.removeEventListener('touchcancel', resume)
     }
   }, [])
 
@@ -200,18 +211,24 @@ export default function Dashboard({ onNavigate }: Props) {
           </div>
         </div>
 
-        {/* Quick stats strip — auto-scrolls, pauses on hover/touch */}
-        <div ref={statsRef} style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          {quickStats.map((s, i) => (
-            <div key={i} style={{
-              background: 'rgba(255,255,255,0.1)', borderRadius: 12, padding: '10px 14px',
-              flexShrink: 0, border: '1px solid rgba(255,255,255,0.12)'
-            }}>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>{s.icon} {s.label}</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'white' }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 1 }}>{s.sub}</div>
-            </div>
-          ))}
+        {/* Quick stats strip — continuously loops without a visible reset */}
+        <div ref={statsRef} style={{ overflow: 'hidden', paddingBottom: 4 }}>
+          <div ref={statsTrackRef} style={{ display: 'flex', width: 'max-content' }}>
+            {[0, 1].map(copy => (
+              <div key={copy} aria-hidden={copy === 1} style={{ display: 'flex', gap: 8, paddingRight: 8 }}>
+                {quickStats.map((s, i) => (
+                  <div key={i} style={{
+                    background: 'rgba(255,255,255,0.1)', borderRadius: 12, padding: '10px 14px',
+                    flexShrink: 0, border: '1px solid rgba(255,255,255,0.12)'
+                  }}>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>{s.icon} {s.label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'white' }}>{s.value}</div>
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 1 }}>{s.sub}</div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -245,7 +262,7 @@ export default function Dashboard({ onNavigate }: Props) {
                 padding: '12px 6px', borderRadius: 14,
                 background: c.tint(a.color), border: 'none', cursor: 'pointer', fontFamily: 'inherit'
               }}>
-                <div className="quick-action-icon" style={{
+                <div style={{
                   width: 42, height: 42, borderRadius: 12,
                   background: a.color, display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 20
