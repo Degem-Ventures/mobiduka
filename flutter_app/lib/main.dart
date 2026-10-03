@@ -2115,9 +2115,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         child: Center(
-                          child: SizedBox(
-                            width: 24,
-                            height: 24,
+                          child: FractionallySizedBox(
+                            widthFactor: 0.98,
+                            heightFactor: 0.98,
                             child: SvgPicture.asset(
                               'assets/mobiduka_icon.svg',
                               fit: BoxFit.contain,
@@ -2452,9 +2452,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                       child: Center(
-                        child: SizedBox(
-                          width: 56,
-                          height: 56,
+                        child: FractionallySizedBox(
+                          widthFactor: 0.98,
+                          heightFactor: 0.98,
                           child: SvgPicture.asset(
                             'assets/mobiduka_icon.svg',
                             fit: BoxFit.contain,
@@ -2572,7 +2572,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           shadowColor: Colors.transparent,
                           surfaceTintColor: Colors.transparent,
                           elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          padding: const EdgeInsets.all(16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16),
                           ),
@@ -2596,7 +2596,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         backgroundColor: const Color(0x1AFFFFFF),
                         foregroundColor: Colors.white,
                         side: const BorderSide(color: Color(0x33FFFFFF)),
-                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        padding: const EdgeInsets.all(14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),

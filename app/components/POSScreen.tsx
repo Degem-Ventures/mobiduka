@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useColors } from "../utils/theme"
-import { apiFetch, getClientSession } from "../../lib/client-api"
+import { apiFetch, getClientSession, takeCreditorSaleIntent } from "../../lib/client-api"
 
 type ProductItem = {
   id: string
@@ -94,6 +94,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [isCompletingSale, setIsCompletingSale] = useState(false)
   const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
   const [isCartDraftReady, setIsCartDraftReady] = useState(false)
+  const [hasLoadedPOSData, setHasLoadedPOSData] = useState(false)
   // Measured from the lower-left edge of the POS phone frame.
   const [cartBannerPosition, setCartBannerPosition] = useState({ x: 0, y: 68 })
   const cartBannerDrag = useRef<{ x: number; y: number } | null>(null)
@@ -268,13 +269,31 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             balance: Number(customer.creditAccount?.balance ?? 0),
           })),
         )
+        setHasLoadedPOSData(true)
       })
       .catch((reason) =>
-        setDataError(
-          reason instanceof Error ? reason.message : "Unable to load POS data.",
-        ),
+        {
+          setHasLoadedPOSData(true)
+          setDataError(
+            reason instanceof Error ? reason.message : "Unable to load POS data.",
+          )
+        },
       )
   }, [session?.user.businessId])
+
+  useEffect(() => {
+    if (!isCartDraftReady || !hasLoadedPOSData || !currentBusinessId || !currentUserId) return
+    const intent = takeCreditorSaleIntent(currentBusinessId, currentUserId)
+    if (!intent) return
+    const customer = creditCustomers.find((item) => item.id === intent.customerId)
+    if (!customer) {
+      setDataError("That customer could not be loaded. Choose the customer again and retry the sale.")
+      return
+    }
+    setSelectedCreditor({ id: customer.id, name: customer.name, phone: customer.phone })
+    setPaymentMethod("credit")
+    setView("cart")
+  }, [cart.length, creditCustomers, currentBusinessId, currentUserId, hasLoadedPOSData, isCartDraftReady])
 
   useEffect(() => {
     if (!initialCartItem) return
@@ -1590,6 +1609,20 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: "16px", flex: 1 }}>
+          {selectedCreditor && paymentMethod === "credit" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 12px", marginBottom: 14, borderRadius: 10, background: "rgba(211,47,47,0.09)", color: "#B71C1C" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>Charged to customer</div>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, fontWeight: 800 }}>{selectedCreditor.name}</div>
+              </div>
+              <button className="btn" onClick={() => setView("payment")} style={{ border: "none", borderRadius: 8, padding: "7px 10px", background: "white", color: "#B71C1C", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Change</button>
+            </div>
+          )}
+          {selectedCreditor && paymentMethod === "credit" && (
+            <button className="btn" onClick={() => setView("pos")} style={{ width: "100%", marginBottom: 12, padding: "10px 12px", border: "1px solid #123A8F", borderRadius: 10, background: "rgba(18,58,143,0.06)", color: "#123A8F", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              + Add products
+            </button>
+          )}
           {cart.length === 0 ? (
             <div
               style={{
@@ -1946,6 +1979,15 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             )}
           </button>
         </div>
+
+        {paymentMethod === "credit" && selectedCreditor && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 10, borderRadius: 10, background: "rgba(211,47,47,0.1)", color: "#B71C1C", fontSize: 12, fontWeight: 700 }}>
+            <span>Credit sale for {selectedCreditor.name}</span>
+            <button className="btn" onClick={() => { setSelectedCreditor(null); setPaymentMethod("cash") }} style={{ marginLeft: "auto", border: "none", background: "transparent", color: "#B71C1C", font: "inherit", cursor: "pointer" }}>
+              Change
+            </button>
+          </div>
+        )}
 
         {/* Categories */}
         <div
