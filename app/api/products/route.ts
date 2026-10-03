@@ -2,6 +2,12 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { composeProductDisplayName } from "@/lib/product-display-name";
+
+function optionalIdentityText(value: unknown) {
+  if (typeof value !== "string") return null;
+  return value.trim().replace(/\s+/g, " ") || null;
+}
 
 export async function GET(request: Request) {
   try {
@@ -38,10 +44,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     }
 
+    const hasStructuredIdentity =
+      body.brand !== undefined ||
+      body.productType !== undefined ||
+      body.packSize !== undefined;
+    const productType = String(body.productType ?? body.name ?? "").trim();
+    if (hasStructuredIdentity && !productType) {
+      return NextResponse.json({ error: "Product name is required." }, { status: 400 });
+    }
+    const brand = optionalIdentityText(body.brand);
+    const packSize = optionalIdentityText(body.packSize);
+
     const product = await prisma.product.create({
       data: {
         businessId,
-        name: String(body.name ?? ""),
+        name: hasStructuredIdentity
+          ? composeProductDisplayName(brand, productType, packSize)
+          : String(body.name ?? "").trim(),
+        ...(hasStructuredIdentity ? { brand, productType, packSize } : {}),
         sellingPrice: Number(body.sellingPrice ?? body.price ?? 0),
         costPrice: Number(body.costPrice ?? 0),
         trackStock: body.trackStock !== false,
@@ -112,11 +132,46 @@ export async function PATCH(request: Request) {
       }
     }
 
+    const structuredIdentityProvided =
+      body.brand !== undefined ||
+      body.productType !== undefined ||
+      body.packSize !== undefined;
+    const identityData: {
+      name?: string;
+      brand?: string | null;
+      productType?: string | null;
+      packSize?: string | null;
+    } = {};
+    if (structuredIdentityProvided) {
+      const brand = body.brand === undefined
+        ? existing.brand
+        : optionalIdentityText(body.brand);
+      const productType = body.productType === undefined
+        ? body.name === undefined
+          ? existing.productType ?? existing.name
+          : String(body.name).trim()
+        : String(body.productType).trim();
+      const packSize = body.packSize === undefined
+        ? existing.packSize
+        : optionalIdentityText(body.packSize);
+      if (!productType) {
+        return NextResponse.json({ error: "Product name is required." }, { status: 400 });
+      }
+      Object.assign(identityData, {
+        name: composeProductDisplayName(brand, productType, packSize),
+        brand,
+        productType,
+        packSize,
+      });
+    } else if (body.name !== undefined) {
+      identityData.name = String(body.name).trim();
+    }
+
     const product = await prisma.$transaction(async (tx) => {
       const updated = await tx.product.update({
         where: { id: productId },
         data: {
-          ...(body.name !== undefined ? { name: String(body.name).trim() } : {}),
+          ...identityData,
           ...(body.sku !== undefined ? { sku: body.sku ? String(body.sku).trim() : null } : {}),
           ...(body.barcode !== undefined ? { barcode: body.barcode ? String(body.barcode).trim() : null } : {}),
           ...(body.costPrice !== undefined ? { costPrice: Number(body.costPrice) } : {}),

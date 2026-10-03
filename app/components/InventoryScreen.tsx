@@ -3,10 +3,37 @@ import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 import { Html5Qrcode } from 'html5-qrcode'
 import { DEFAULT_INVENTORY_EMOJI, INVENTORY_EMOJIS } from '../utils/inventory-emojis'
+import { composeProductDisplayName } from '../../lib/product-display-name'
 
-type ProductItem = { id: string; name: string; categoryId: string | null; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: 'good' | 'low' | 'critical'; barcode: string | null; deletedAt?: string | null }
+type ProductItem = { id: string; name: string; brand: string; productType: string; packSize: string; categoryId: string | null; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: 'good' | 'low' | 'critical'; barcode: string | null; deletedAt?: string | null }
 type CategoryItem = { id: string; name: string; emoji: string | null; deletedAt?: string | null }
+type ProductApiRow = {
+  id: string
+  name: string
+  brand: string | null
+  productType: string | null
+  packSize: string | null
+  emoji: string | null
+  barcode: string | null
+  costPrice: number | null
+  sellingPrice: number | null
+  minimumStock: number | null
+  deletedAt?: string | null
+  category: { id: string; name: string; emoji: string | null } | null
+  inventory: { quantity: number } | null
+}
 type Toast = { message: string; tone: 'success' | 'error' }
+
+const productTypePresets = [
+  { name: 'Soda', categories: ['Beverages', 'Soft Drinks'], emoji: '🥤', sizes: ['250ml', '500ml', '1L', '2L'] },
+  { name: 'Water', categories: ['Beverages', 'Water'], emoji: '💧', sizes: ['250ml', '500ml'] },
+  { name: 'Yoghurt', categories: ['Dairy', 'Yoghurt'], emoji: '🥣', sizes: ['150ml', '250ml', '500ml'] },
+]
+
+const createProductForm = (categoryId = '', barcode = '') => ({
+  name: '', brand: '', packSize: '', categoryId, cost: '', price: '', stock: '', reorder: '', barcode,
+  emoji: DEFAULT_INVENTORY_EMOJI,
+})
 
 const sortProductsByCategoryThenName = (left: ProductItem, right: ProductItem) =>
   left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
@@ -32,7 +59,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [showManageCategories, setShowManageCategories] = useState(false)
   const [editProduct, setEditProduct] = useState<ProductItem | null>(null)
   const [newCat, setNewCat] = useState({ name: '', emoji: DEFAULT_INVENTORY_EMOJI })
-  const [productForm, setProductForm] = useState({ name: '', categoryId: '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: DEFAULT_INVENTORY_EMOJI })
+  const [productForm, setProductForm] = useState(() => createProductForm())
   const [showBulkCalculator, setShowBulkCalculator] = useState(false)
   const [bulkPurchase, setBulkPurchase] = useState({ boxPrice: '', unitsPerBox: '', boxes: '1' })
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
@@ -119,9 +146,9 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     setIsInventoryLoading(true)
     setDataError('')
     Promise.all([
-      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; deletedAt?: string | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
+      apiFetch<ProductApiRow[]>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
       apiFetch<CategoryItem[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; deletedAt?: string | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}&includeDeleted=true`),
+      apiFetch<ProductApiRow[]>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}&includeDeleted=true`),
     ]).then(([productRows, categoryRows, deletedRows]) => {
       if (requestId !== inventoryRequestId.current) return
       setDeletedProductCount(deletedRows.length)
@@ -132,6 +159,9 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
         return {
           id: product.id,
           name: product.name,
+          brand: product.brand ?? '',
+          productType: product.productType ?? '',
+          packSize: product.packSize ?? '',
           categoryId: product.category?.id ?? null,
           category: product.category?.name ?? 'Uncategorized',
           cost: Number(product.costPrice ?? 0),
@@ -163,7 +193,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
 
   useEffect(() => {
     if (!initialBarcode) return
-    setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: initialBarcode, emoji: DEFAULT_INVENTORY_EMOJI })
+    setProductForm(createProductForm(categories[0]?.id ?? '', initialBarcode))
     setEditProduct(null)
     setShowAddProduct(true)
   }, [initialBarcode, categories])
@@ -184,7 +214,9 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
 
   const openEditProduct = (product: ProductItem) => {
     setProductForm({
-      name: product.name,
+      name: product.productType || product.name,
+      brand: product.brand,
+      packSize: product.packSize,
       categoryId: product.categoryId ?? '',
       cost: String(product.cost),
       price: String(product.price),
@@ -430,7 +462,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
                   marginTop: 2,
                 }}
               >
-                {selected.category}
+                {[selected.category, selected.productType, selected.packSize].filter(Boolean).join(' · ')}
               </div>
             </div>
           </div>
@@ -606,6 +638,9 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           businessId: session.user.businessId,
           ...(editProduct ? { id: editProduct.id } : {}),
           name: p.name.trim(),
+          brand: p.brand.trim() || null,
+          productType: p.name.trim(),
+          packSize: p.packSize.trim() || null,
           categoryId: p.categoryId,
           costPrice: Number(p.cost),
           sellingPrice: Number(p.price),
@@ -615,11 +650,11 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           emoji: p.emoji,
         }),
       })
-      const refreshed = await apiFetch<Array<{ id: string; name: string; emoji: string | null; barcode: string | null; costPrice: number | null; sellingPrice: number | null; minimumStock: number | null; category: { id: string; name: string; emoji: string | null } | null; inventory: { quantity: number } | null }>>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`)
+      const refreshed = await apiFetch<ProductApiRow[]>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`)
       setProducts(refreshed.map(product => {
         const stock = Number(product.inventory?.quantity ?? 0)
         const reorder = Number(product.minimumStock ?? 0)
-        return { id: product.id, name: product.name, categoryId: product.category?.id ?? null, category: product.category?.name ?? 'Uncategorized', cost: Number(product.costPrice ?? 0), price: Number(product.sellingPrice ?? 0), stock, reorder, emoji: product.emoji ?? product.category?.emoji ?? DEFAULT_INVENTORY_EMOJI, status: getStatus(stock, reorder), barcode: product.barcode }
+        return { id: product.id, name: product.name, brand: product.brand ?? '', productType: product.productType ?? '', packSize: product.packSize ?? '', categoryId: product.category?.id ?? null, category: product.category?.name ?? 'Uncategorized', cost: Number(product.costPrice ?? 0), price: Number(product.sellingPrice ?? 0), stock, reorder, emoji: product.emoji ?? product.category?.emoji ?? DEFAULT_INVENTORY_EMOJI, status: getStatus(stock, reorder), barcode: product.barcode }
       }).sort(sortProductsByCategoryThenName))
       setShowAddProduct(false)
       setEditProduct(null)
@@ -631,6 +666,43 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     } finally {
       setSaving(false)
     }
+  }
+
+  const activeProductTypePreset = productTypePresets.find(
+    preset => preset.name.toLowerCase() === productForm.name.trim().toLowerCase(),
+  )
+  const productDisplayName = composeProductDisplayName(
+    productForm.brand,
+    productForm.name,
+    productForm.packSize,
+  )
+  const updateProductType = (name: string) => {
+    const preset = productTypePresets.find(
+      item => item.name.toLowerCase() === name.trim().toLowerCase(),
+    )
+    const category = preset
+      ? categories.find(item =>
+          preset.categories.some(candidate => candidate.toLowerCase() === item.name.toLowerCase()),
+        )
+      : null
+    setProductForm(current => ({
+      ...current,
+      name,
+      ...(preset
+        ? {
+            categoryId: category?.id ?? current.categoryId,
+            emoji: preset.emoji,
+            packSize: preset.sizes.includes(current.packSize) ? current.packSize : '',
+          }
+        : {}),
+    }))
+  }
+  const startNewProduct = () => {
+    setProductForm(createProductForm(categories[0]?.id ?? ''))
+    setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' })
+    setShowBulkCalculator(false)
+    setEditProduct(null)
+    setShowAddProduct(true)
   }
 
   if (showManageCategories) {
@@ -812,8 +884,29 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           <div className="card" style={{ padding: '20px', marginBottom: 14 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Product Details</div>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name *</label>
-              <input className="input" placeholder="e.g. Unga Jogoo 2kg" value={productForm.name} onChange={e => setProductForm(f => ({ ...f, name: e.target.value }))} />
+              <label htmlFor="inventory-product-brand" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Brand <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input id="inventory-product-brand" className="input" maxLength={80} placeholder="e.g. Dairy Joy, Kristal, Afia" value={productForm.brand} onChange={e => setProductForm(f => ({ ...f, brand: e.target.value }))} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label htmlFor="inventory-product-name" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name / Type *</label>
+              <input id="inventory-product-name" className="input" list="inventory-product-type-suggestions" maxLength={120} placeholder="e.g. Soda, Milk, Petroleum Jelly" value={productForm.name} onChange={e => updateProductType(e.target.value)} />
+              <datalist id="inventory-product-type-suggestions">
+                {productTypePresets.map(preset => <option key={preset.name} value={preset.name} />)}
+              </datalist>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label htmlFor="inventory-product-pack-size" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Pack Size <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              {activeProductTypePreset && <div role="group" aria-label={`${activeProductTypePreset.name} pack sizes`} style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 8 }}>
+                {activeProductTypePreset.sizes.map(size => {
+                  const selectedSize = productForm.packSize === size
+                  return <button key={size} type="button" className="btn" aria-pressed={selectedSize} onClick={() => setProductForm(current => ({ ...current, packSize: selectedSize ? '' : size }))} style={{ padding: '7px 11px', borderRadius: 9, border: selectedSize ? '2px solid #123A8F' : `1px solid ${c.border}`, background: selectedSize ? c.infoBg : c.card, color: selectedSize ? '#123A8F' : c.muted, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{size}</button>
+                })}
+              </div>}
+              <input id="inventory-product-pack-size" className="input" maxLength={24} placeholder="e.g. 500ml, 2kg, 12s" value={productForm.packSize} onChange={e => setProductForm(current => ({ ...current, packSize: e.target.value }))} />
+            </div>
+            <div role="status" aria-live="polite" style={{ padding: '10px 12px', borderRadius: 10, background: c.cardAlt, border: `1px solid ${c.divider}`, marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: c.muted, textTransform: 'uppercase', marginBottom: 3 }}>Display name</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{productDisplayName || 'Brand + product name + size'}</div>
             </div>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Barcode</label>
@@ -884,7 +977,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Inventory</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={() => setShowManageCategories(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Categories</button>
-            <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: DEFAULT_INVENTORY_EMOJI }); setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' }); setShowBulkCalculator(false); setEditProduct(null); setShowAddProduct(true) }} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" onClick={startNewProduct} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
               <span style={{ fontSize: 16, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Product</span>
             </button>
@@ -956,7 +1049,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             <div style={{ width: 44, height: 44, borderRadius: 12, background: c.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{p.emoji}</div>
             <button className="btn" onClick={() => setSelected(p)} style={{ flex: 1, minWidth: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 2 }}>{p.name}</div>
-              <div style={{ fontSize: 11, color: c.muted }}>{p.category} · Cost: KSh {p.cost}</div>
+              <div style={{ fontSize: 11, color: c.muted }}>{[p.category, p.productType, p.packSize].filter(Boolean).join(' · ')} · Cost: KSh {p.cost}</div>
             </button>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: '#123A8F', marginBottom: 3 }}>KSh {p.price}</div>
@@ -999,7 +1092,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
 
       {/* FAB */}
       <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={() => { setProductForm({ name: '', categoryId: categories[0]?.id ?? '', cost: '', price: '', stock: '', reorder: '', barcode: '', emoji: DEFAULT_INVENTORY_EMOJI }); setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' }); setShowBulkCalculator(false); setEditProduct(null); setShowAddProduct(true) }} style={{
+        <button className="btn" onClick={startNewProduct} style={{
           width: 52, height: 52, borderRadius: '50%',
           background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
           border: 'none', fontSize: 24, color: '#0D1B3D',

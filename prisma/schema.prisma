@@ -248,6 +248,9 @@ model Product {
   barcode      String?   @unique
   sku          String?   @unique
   name         String
+  brand        String?
+  productType  String?
+  packSize     String?
   description  String?
   unit         String?
   emoji        String?
