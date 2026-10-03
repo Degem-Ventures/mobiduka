@@ -245,7 +245,7 @@ export default function Dashboard({ onNavigate }: Props) {
                 padding: '12px 6px', borderRadius: 14,
                 background: c.tint(a.color), border: 'none', cursor: 'pointer', fontFamily: 'inherit'
               }}>
-                <div style={{
+                <div className="quick-action-icon" style={{
                   width: 42, height: 42, borderRadius: 12,
                   background: a.color, display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 20
