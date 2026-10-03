@@ -46,7 +46,7 @@ jobs:
           pnpm exec cap sync android
 
       - name: Build debug APK
-        run: gradle -p android assembleDebug
+        run: gradle -p android clean assembleDebug
         # run: |
         #   cd android
         #   ./gradlew assembleDebug
