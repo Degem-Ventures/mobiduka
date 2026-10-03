@@ -285,17 +285,11 @@ export default function LoginScreen({ onLogin }: Props) {
               boxShadow: '0 8px 32px rgba(212,175,55,0.4)',
               marginBottom: 20
             }}>
-              {/* Shop + phone icon */}
-              <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
-                {/* Awning */}
-                <path d="M8 22 L28 10 L48 22 Z" fill="#0D1B3D" opacity="0.9" />
-                <rect x="10" y="22" width="36" height="22" rx="3" fill="#0D1B3D" opacity="0.8" />
-                <rect x="17" y="28" width="10" height="16" rx="2" fill="#D4AF37" opacity="0.9" />
-                {/* Phone overlay */}
-                <rect x="30" y="26" width="16" height="22" rx="4" fill="white" opacity="0.95" />
-                <rect x="32" y="30" width="12" height="14" rx="2" fill="#123A8F" opacity="0.8" />
-                <circle cx="38" cy="46" r="1.5" fill="#666" />
-              </svg>
+              <img
+                src="/mobiduka_icon.svg"
+                alt="MobiDuka"
+                style={{ width: '98%', height: '98%', display: 'block', objectFit: 'contain' }}
+              />
             </div>
             <div style={{ fontSize: 32, fontWeight: 800, color: 'white', letterSpacing: -0.5 }}>MobiDuka</div>
             <div style={{ fontSize: 14, color: 'rgba(212,175,55,0.9)', fontWeight: 500, letterSpacing: 3, textTransform: 'uppercase', marginTop: 4 }}>Point of Sale</div>
@@ -430,11 +424,11 @@ export default function LoginScreen({ onLogin }: Props) {
             background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
             display: 'flex', alignItems: 'center', justifyContent: 'center'
           }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-              <path d="M3 9L12 4L21 9V20H3V9Z" fill="#0D1B3D" opacity="0.9" />
-              <rect x="7" y="12" width="4" height="8" rx="1" fill="#D4AF37" />
-              <rect x="13" y="12" width="4" height="5" rx="1" fill="white" opacity="0.8" />
-            </svg>
+            <img
+              src="/mobiduka_icon.svg"
+              alt="MobiDuka"
+              style={{ width: '98%', height: '98%', display: 'block', objectFit: 'contain' }}
+            />
           </div>
           <div>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>MobiDuka POS</div>

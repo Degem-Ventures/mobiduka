@@ -11,6 +11,39 @@ export type ClientSession = {
 const SESSION_KEY = "mobiduka_session";
 const PIN_LOGIN_CONTEXT_KEY = "mobiduka_pin_login_context";
 const LAST_SCREEN_KEY = "mobiduka_last_screen";
+const POS_CREDITOR_INTENT_PREFIX = "mobiduka.pos_credit_sale_intent.v1";
+
+function posCreditorIntentKey(businessId: string, userId: string) {
+  return `${POS_CREDITOR_INTENT_PREFIX}:${businessId}:${userId}`;
+}
+
+export function startCreditorSale(customerId: string) {
+  const session = getClientSession();
+  if (!session || !customerId) return false;
+  window.localStorage.setItem(
+    posCreditorIntentKey(session.user.businessId, session.user.id),
+    JSON.stringify({ customerId, createdAt: Date.now() }),
+  );
+  return true;
+}
+
+export function takeCreditorSaleIntent(businessId: string, userId: string) {
+  const key = posCreditorIntentKey(businessId, userId);
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return null;
+  window.localStorage.removeItem(key);
+  try {
+    const intent = JSON.parse(raw) as { customerId?: unknown; createdAt?: unknown };
+    if (
+      typeof intent.customerId !== "string" ||
+      typeof intent.createdAt !== "number" ||
+      Date.now() - intent.createdAt > 5 * 60 * 1000
+    ) return null;
+    return { customerId: intent.customerId };
+  } catch {
+    return null;
+  }
+}
 
 export type PinLoginContext = {
   identifier?: string;

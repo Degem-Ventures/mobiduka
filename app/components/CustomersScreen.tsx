@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { apiFetch, getClientSession, startCreditorSale } from '../../lib/client-api'
 
 type Customer = { id: string; name: string; phone: string | null; creditLimit: number; credit: number; purchases: number; lastVisit: string; initials: string; color: string }
 type Transaction = { id: string; date: string; type: string; amount: number; method: string; items: number }
@@ -233,7 +233,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
 
           {/* Action buttons */}
           <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-            <button className="btn" onClick={() => onNavigate('pos')} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>New Sale</button>
+            <button className="btn" onClick={() => { startCreditorSale(selected.id); onNavigate('pos') }} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Make Sale</button>
             <button className="btn" onClick={() => startEdit(selected)} style={{ flex: 1, padding: '12px', background: 'rgba(18,58,143,0.1)', border: '1px solid #123A8F', borderRadius: 12, color: '#123A8F', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
             <button className="btn" onClick={() => setConfirmDelete(true)} style={{ padding: '12px', background: c.errorBg, border: '1px solid #D32F2F', borderRadius: 12, color: '#D32F2F', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
           </div>

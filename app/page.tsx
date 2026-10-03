@@ -332,20 +332,12 @@ function AppInner() {
   if (isHydratingSession) return null;
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #0D1B3D 0%, #123A8F 100%)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "20px",
-      }}
-    >
+    <div className="app-shell">
       {/* Phone frame */}
       <div className="phone-frame" data-theme={isDark ? "dark" : "light"}>
         {/* Notch */}
         <div
+          className="phone-notch"
           style={{
             position: "absolute",
             top: 0,

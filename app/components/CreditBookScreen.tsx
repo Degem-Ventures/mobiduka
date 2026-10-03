@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { apiFetch, getClientSession, startCreditorSale as saveCreditorSaleIntent } from '../../lib/client-api'
 
 type Transaction = { id: string; date: string; desc: string; amount: number; type: 'credit' | 'payment' }
 type Credit = { id: string; customer: string; phone: string | null; balance: number; lastTx: string; txCount: number; initials: string; color: string; daysOld: number; transactions: Transaction[] }
@@ -82,6 +82,12 @@ export default function CreditBookScreen({ onNavigate }: Props) {
     finally { setSaving(false) }
   }
 
+  const startCreditorSale = () => {
+    if (!session || !selected) return
+    saveCreditorSaleIntent(selected.id)
+    onNavigate('pos')
+  }
+
   const total = credits.reduce((s, cr) => s + cr.balance, 0)
 
   if (selected && showRecord) {
@@ -157,6 +163,9 @@ export default function CreditBookScreen({ onNavigate }: Props) {
           </div>
           <button className="btn" onClick={() => setShowRecord(true)} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(46,125,50,0.3)' }}>
             💰 Record Payment
+          </button>
+          <button className="btn" onClick={startCreditorSale} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(18,58,143,0.3)' }}>
+            🛒 Make Sale · Charge to Credit
           </button>
           <div className="card" style={{ padding: '16px' }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 14 }}>Transaction History</div>
