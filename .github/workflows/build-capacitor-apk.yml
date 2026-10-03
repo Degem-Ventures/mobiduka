@@ -11,6 +11,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Verify launcher icon assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          icon_files = (
+              list(Path("android/app/src/main/res").glob("mipmap-*/mobiduka_launcher*.png"))
+              + list(Path("android/app/src/main/res").glob("drawable-*/mobiduka_launcher_foreground.png"))
+          )
+          if len(icon_files) != 15:
+              raise SystemExit(f"Expected 15 launcher PNGs, found {len(icon_files)}")
+
+          png_signature = b"\x89PNG\r\n\x1a\n"
+          for icon_file in icon_files:
+              if not icon_file.read_bytes().startswith(png_signature):
+                  raise SystemExit(f"{icon_file} is not a PNG; Git LFS content may be missing")
+          PY
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
