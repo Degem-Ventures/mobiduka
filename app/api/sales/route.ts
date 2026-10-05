@@ -3,6 +3,116 @@ import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
 
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const businessId = requireBusinessAccess(request, searchParams.get("businessId"));
+    if (!businessId) {
+      return NextResponse.json(
+        { error: "Authenticated business context is required." },
+        { status: 401 },
+      );
+    }
+
+    const limitValue = Number(searchParams.get("limit") ?? 10);
+    const limit = Number.isInteger(limitValue)
+      ? Math.min(Math.max(limitValue, 1), 20)
+      : 10;
+    const cursor = searchParams.get("cursor");
+    if (cursor) {
+      const cursorSale = await prisma.sale.findFirst({
+        where: { id: cursor, businessId, saleStatus: "COMPLETED" },
+        select: { id: true },
+      });
+      if (!cursorSale) {
+        return NextResponse.json(
+          { error: "Receipt history cursor is invalid." },
+          { status: 400 },
+        );
+      }
+    }
+
+    const [business, sales] = await Promise.all([
+      prisma.business.findUnique({
+        where: { id: businessId },
+        select: { name: true, branch: true },
+      }),
+      prisma.sale.findMany({
+        where: { businessId, saleStatus: "COMPLETED" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+        select: {
+          id: true,
+          saleNumber: true,
+          createdAt: true,
+          subtotal: true,
+          discount: true,
+          total: true,
+          cashier: { select: { fullName: true } },
+          customer: { select: { name: true } },
+          items: {
+            select: {
+              id: true,
+              quantity: true,
+              unitPrice: true,
+              total: true,
+              product: { select: { name: true, emoji: true } },
+            },
+          },
+          payments: {
+            orderBy: { receivedAt: "asc" },
+            select: { paymentMethod: { select: { name: true } } },
+          },
+        },
+      }),
+    ]);
+    if (!business) {
+      return NextResponse.json({ error: "Business not found." }, { status: 404 });
+    }
+
+    const hasNextPage = sales.length > limit;
+    if (hasNextPage) sales.pop();
+    return NextResponse.json({
+      success: true,
+      business,
+      nextCursor: hasNextPage ? sales.at(-1)?.id ?? null : null,
+      receipts: sales.map((sale) => ({
+        id: sale.id,
+        saleNumber: sale.saleNumber ?? sale.id,
+        createdAt: sale.createdAt,
+        businessName: business.name,
+        businessBranch: business.branch,
+        subtotal: sale.items.reduce(
+          (sum, item) => sum + item.unitPrice * item.quantity,
+          0,
+        ),
+        discountAmount: sale.discount,
+        total: sale.total,
+        cashier: sale.cashier?.fullName ?? "Unknown cashier",
+        customer: sale.customer?.name ?? null,
+        paymentMethod: sale.payments[0]?.paymentMethod.name ?? "CASH",
+        items: sale.items.map((item) => ({
+          id: item.id,
+          name: item.product.name,
+          price: item.unitPrice,
+          quantity: item.quantity,
+          total: item.total,
+          emoji: item.product.emoji ?? "📦",
+        })),
+      })),
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      {
+        error: "Failed to fetch receipt history.",
+        details: error.message,
+      },
+      { status: 500 },
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -13,6 +123,8 @@ export async function POST(request: Request) {
       customerId,
       invoiceNo,
       totalAmount,
+      subtotal: requestedSubtotal,
+      discountAmount: requestedDiscount,
       paymentMode,
       mpesaRef,
       items,
@@ -23,6 +135,8 @@ export async function POST(request: Request) {
       customerId?: string | null;
       invoiceNo?: string;
       totalAmount?: number | string;
+      subtotal?: number | string;
+      discountAmount?: number | string;
       paymentMode?: string;
       mpesaRef?: string | null;
       items?: Array<{
@@ -97,8 +211,12 @@ export async function POST(request: Request) {
       total: Number(item.total ?? Number(item.unitPrice ?? item.price ?? 0) * Number(item.quantity ?? 0)),
     }));
 
-    const subtotal = normalizedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-    const discountTotal = normalizedItems.reduce((sum, item) => sum + item.discount, 0);
+    const itemSubtotal = normalizedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    const subtotal = Number(requestedSubtotal ?? itemSubtotal);
+    const discountTotal = Number(
+      requestedDiscount ??
+        normalizedItems.reduce((sum, item) => sum + item.discount, 0),
+    );
     const taxTotal = normalizedItems.reduce((sum, item) => sum + item.tax, 0);
     const computedTotal = subtotal - discountTotal + taxTotal;
     const normalizedPaymentMode = String(paymentMode ?? "CASH").trim().toUpperCase();
@@ -111,7 +229,7 @@ export async function POST(request: Request) {
           cashierId: resolvedCashierId,
           customerId: customerId ?? null,
           saleNumber: String(invoiceNo).trim(),
-          subtotal: Number(totalAmount ?? subtotal),
+          subtotal,
           discount: discountTotal,
           tax: taxTotal,
           total: saleTotal,

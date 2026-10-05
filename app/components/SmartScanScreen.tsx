@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useId } from 'react'
 import { Html5Qrcode } from 'html5-qrcode'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { composeProductDisplayName } from '../../lib/product-display-name'
+import { loadProductTypes, productTypesStorageKey, type ProductTypeOption } from '../utils/product-types'
 
 type ScannedProduct = { name: string; barcode: string; category: string | null; price: number; stock: number; supplier: { name: string } | null; emoji: string; status: string; id: string }
 type ScanLog = { name: string; barcode: string; action: string; time: string; emoji: string }
@@ -10,6 +12,16 @@ type CartItemSeed = { id: string; name: string; price: number; emoji: string }
 type CategoryItem = { id: string; name: string; emoji: string | null }
 
 const productEmojis = ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦', '🥤', '🍫', '🧃']
+const quickScanItems = [
+  { emoji: '🌾', barcode: '6001068023227' },
+  { emoji: '🥛', barcode: '6009876541230' },
+  { emoji: '🫙', barcode: '6001253001021' },
+  { emoji: '💊', barcode: '6002200022220' },
+  { emoji: '🍬', barcode: '6005001234567' },
+  { emoji: '🌶️', barcode: '6006543219876' },
+  { emoji: '🧈', barcode: '6007112233445' },
+  { emoji: '🧺', barcode: '6008998877661' },
+]
 
 interface Props { onNavigate: (s: string, options?: { barcode?: string; productId?: string; cartItem?: CartItemSeed }) => void }
 
@@ -28,7 +40,9 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   const [scanCounts, setScanCounts]     = useState<Record<string, number>>({})
   const [error, setError]               = useState('')
   const [categories, setCategories]     = useState<CategoryItem[]>([])
-  const [addProductForm, setAddProductForm] = useState({ name: '', cost: '', price: '', stock: '', reorder: '10', categoryId: '', emoji: '📦' })
+  const [addProductForm, setAddProductForm] = useState({ brand: '', name: '', packSize: '', cost: '', price: '', stock: '', reorder: '10', categoryId: '', emoji: '📦' })
+  const [productTypes, setProductTypes] = useState<ProductTypeOption[]>([])
+  const [productIdentityExpanded, setProductIdentityExpanded] = useState(false)
   const [savingProduct, setSavingProduct] = useState(false)
   const [addProductError, setAddProductError] = useState('')
   const [productAdded, setProductAdded] = useState<string | null>(null)
@@ -53,6 +67,15 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     ]).then(([response, categoryRows]) => {
         setCategories(categoryRows)
         setAddProductForm(form => ({ ...form, categoryId: form.categoryId || categoryRows[0]?.id || '' }))
+      try {
+        setProductTypes(loadProductTypes(
+          categoryRows,
+          window.localStorage.getItem(productTypesStorageKey(session.user.businessId)),
+        ))
+      } catch (reason) {
+        setError(reason instanceof Error ? `Unable to load saved product types: ${reason.message}` : 'Unable to load saved product types.')
+        setProductTypes(loadProductTypes(categoryRows, null))
+      }
         setScanCounts(response.scanActivity.counts)
         setScanLog(response.scanActivity.recent.map(scan => ({
           name: scan.name,
@@ -206,6 +229,9 @@ export default function SmartScanScreen({ onNavigate }: Props) {
         body: JSON.stringify({
           businessId: session.user.businessId,
           name,
+          brand: addProductForm.brand.trim() || null,
+          productType: name,
+          packSize: addProductForm.packSize.trim() || null,
           barcode: scanned,
           categoryId: addProductForm.categoryId,
           costPrice: cost,
@@ -215,8 +241,9 @@ export default function SmartScanScreen({ onNavigate }: Props) {
           emoji: addProductForm.emoji,
         }),
       })
-      setAddProductForm({ name: '', cost: '', price: '', stock: '', reorder: '10', categoryId: categories[0]?.id ?? '', emoji: '📦' })
-      setProductAdded(name)
+      setAddProductForm({ brand: '', name: '', packSize: '', cost: '', price: '', stock: '', reorder: '10', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+      setProductIdentityExpanded(false)
+      setProductAdded(composeProductDisplayName(addProductForm.brand, name, addProductForm.packSize))
       await lookup(scanned)
     } catch (reason) {
       setAddProductError(reason instanceof Error ? reason.message : 'Unable to add product.')
@@ -232,6 +259,22 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     setAddProductForm(form => ({ ...form, cost: (boxPrice / unitsPerBox).toFixed(2), stock: String(unitsPerBox) }))
   }
 
+  const activeProductType = productTypes.find(
+    type => type.name.toLowerCase() === addProductForm.name.trim().toLowerCase(),
+  )
+  const updateProductType = (name: string) => {
+    const preset = productTypes.find(type => type.name.toLowerCase() === name.trim().toLowerCase())
+    setAddProductForm(current => {
+      const nameChanged = current.name.trim().toLowerCase() !== name.trim().toLowerCase()
+      return {
+        ...current,
+        name,
+        ...(nameChanged ? { packSize: '' } : {}),
+        ...(preset ? { categoryId: preset.categoryId || current.categoryId, emoji: preset.emoji } : {}),
+      }
+    })
+  }
+
   const reset = () => {
     setMode('idle')
     setScanned('')
@@ -243,7 +286,8 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     setShowAddProductForm(false)
     setShowBulkCalculator(false)
     setBulkPurchase({ boxPrice: '', unitsPerBox: '' })
-    setAddProductForm({ name: '', cost: '', price: '', stock: '', reorder: '10', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+    setAddProductForm({ brand: '', name: '', packSize: '', cost: '', price: '', stock: '', reorder: '10', categoryId: categories[0]?.id ?? '', emoji: '📦' })
+    setProductIdentityExpanded(false)
   }
 
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current) }, [])
@@ -444,8 +488,12 @@ export default function SmartScanScreen({ onNavigate }: Props) {
             {showAddProductForm ? <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}><span style={{ fontSize: 22 }}>➕</span><div><div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>Add New Product</div><div style={{ fontSize: 11, color: c.muted, fontFamily: 'monospace' }}>{scanned}</div></div></div>
               <div style={{ marginBottom: 12 }}>
+                <label htmlFor="smartscan-product-brand" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Brand <span style={{ fontWeight: 400 }}>(optional)</span></label>
+                <input id="smartscan-product-brand" className="input" maxLength={80} placeholder="e.g. Dairy Joy, Kristal, Afia" value={addProductForm.brand} onChange={event => setAddProductForm(form => ({ ...form, brand: event.target.value }))} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name *</label>
-                <input className="input" placeholder="e.g. Unga Jogoo 2kg" value={addProductForm.name} onChange={e => setAddProductForm(form => ({ ...form, name: e.target.value }))} />
+                <input className="input" placeholder="e.g. Soda, Milk, Unga Jogoo" value={addProductForm.name} onChange={e => updateProductType(e.target.value)} />
               </div>
               <div style={{ marginBottom: 12 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
@@ -454,6 +502,46 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                   {categories.map(category => <option key={category.id} value={category.id}>{category.emoji ?? '📦'} {category.name}</option>)}
                 </select>
               </div>
+              <div style={{ marginBottom: 14, borderTop: c.divider, paddingTop: 12 }}>
+                <button type="button" className="btn" aria-expanded={productIdentityExpanded} onClick={() => setProductIdentityExpanded(open => !open)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                  <span style={{ width: 34, height: 34, borderRadius: 10, background: activeProductType ? c.infoBg : c.cardAlt, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                    <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={activeProductType ? '#123A8F' : c.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 12V8H4v4" /><path d="M12 4v16" /><path d="m8 16 4 4 4-4" />
+                    </svg>
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: c.text }}>Product Type &amp; Pack Size</span>
+                    <span style={{ display: 'block', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, color: c.muted }}>
+                      {activeProductType ? `${activeProductType.name}${addProductForm.packSize ? ` · ${addProductForm.packSize}` : ' · Select a size'}` : 'Optional product variant'}
+                    </span>
+                  </span>
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c.muted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: productIdentityExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                {productIdentityExpanded && <div style={{ paddingTop: 14 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: activeProductType ? 12 : 10 }}>
+                    {productTypes.map(type => {
+                      const active = activeProductType?.id === type.id
+                      return <button key={type.id} type="button" className="btn" aria-pressed={active} onClick={() => updateProductType(active ? '' : type.name)} style={{ padding: '8px 12px', borderRadius: 10, border: active ? '2px solid #123A8F' : `1.5px solid ${c.border}`, background: active ? c.infoBg : c.card, color: active ? (c.isDark ? '#90CAF9' : '#123A8F') : c.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{type.name}</button>
+                    })}
+                  </div>
+                  {activeProductType && activeProductType.sizes.length > 0 && <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: c.muted, marginBottom: 7 }}>Select pack size</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                      {activeProductType.sizes.map(size => {
+                        const active = addProductForm.packSize === size
+                        return <button key={size} type="button" className="btn" aria-pressed={active} onClick={() => setAddProductForm(form => ({ ...form, packSize: active ? '' : size }))} style={{ minWidth: 54, padding: '7px 10px', borderRadius: 20, border: active ? '1.5px solid #D4AF37' : `1px solid ${c.border}`, background: active ? c.warningBg : c.card, color: active ? (c.isDark ? '#F0D060' : '#8B6914') : c.muted, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{size}</button>
+                      })}
+                    </div>
+                  </div>}
+                  <button type="button" className="btn" onClick={() => onNavigate('inventory')} style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: `1px dashed ${c.isDark ? '#31518E' : '#B0BAD3'}`, background: 'none', color: c.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Manage product types and sizes in Inventory</button>
+                </div>}
+              </div>
+              {(addProductForm.name.trim() || addProductForm.packSize) && <div role="status" aria-live="polite" style={{ padding: '10px 12px', borderRadius: 10, background: c.cardAlt, border: `1px solid ${c.divider}`, marginBottom: 14 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: c.muted, textTransform: 'uppercase', marginBottom: 3 }}>Display name</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{composeProductDisplayName(addProductForm.brand, addProductForm.name, addProductForm.packSize)}</div>
+              </div>}
               <div style={{ marginBottom: 14 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 7 }}>Product Emoji</label>
                 <div role="radiogroup" aria-label="Product emoji" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
@@ -549,6 +637,23 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                     <div style={{ fontSize: 11, color: '#2E7D32', fontWeight: 600 }}>{s.action}</div>
                     <div style={{ fontSize: 10, color: c.faint, marginTop: 2 }}>{s.time}</div>
                   </div>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 10 }}>Quick Scan (tap any barcode)</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 16 }}>
+              {quickScanItems.map(({ emoji, barcode }) => (
+                <button
+                  key={barcode}
+                  type="button"
+                  className="btn"
+                  aria-label={`Quick scan barcode ending ${barcode.slice(-5)}`}
+                  onClick={() => startScan(barcode)}
+                  style={{ minWidth: 0, minHeight: 76, padding: '10px 6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 5, background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', boxShadow: c.isDark ? '0 3px 10px rgba(0,0,0,0.18)' : '0 3px 10px rgba(13,27,61,0.06)' }}
+                >
+                  <span aria-hidden="true" style={{ fontSize: 22, lineHeight: 1 }}>{emoji}</span>
+                  <span style={{ color: c.muted, fontFamily: 'monospace', fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>{barcode.slice(-5)}</span>
                 </button>
               ))}
             </div>

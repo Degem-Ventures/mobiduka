@@ -17,16 +17,41 @@ export async function GET(request: Request) {
     }
 
     const includeDeleted = new URL(request.url).searchParams.get("includeDeleted") === "true";
-    const products = await prisma.product.findMany({
-      where: { businessId, ...(includeDeleted ? { deletedAt: { not: null } } : { deletedAt: null }) },
-      include: {
-        category: { select: { id: true, name: true, emoji: true } },
-        inventory: { select: { quantity: true } },
-      },
-      orderBy: [{ category: { name: "asc" } }, { name: "asc" }],
-    });
+    const popularityStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [products, recentSales] = await Promise.all([
+      prisma.product.findMany({
+        where: { businessId, ...(includeDeleted ? { deletedAt: { not: null } } : { deletedAt: null }) },
+        include: {
+          category: { select: { id: true, name: true, emoji: true } },
+          inventory: { select: { quantity: true } },
+        },
+        orderBy: [{ category: { name: "asc" } }, { name: "asc" }],
+      }),
+      prisma.saleItem.groupBy({
+        by: ["productId"],
+        where: {
+          sale: {
+            is: {
+              businessId,
+              saleStatus: "COMPLETED",
+              createdAt: { gte: popularityStart },
+            },
+          },
+        },
+        _sum: { quantity: true },
+        orderBy: { _sum: { quantity: "desc" } },
+      }),
+    ]);
+    const unitsSoldByProduct = new Map(
+      recentSales.map((sale) => [sale.productId, sale._sum.quantity ?? 0]),
+    );
 
-    return NextResponse.json(products);
+    return NextResponse.json(
+      products.map((product) => ({
+        ...product,
+        recentUnitsSold: unitsSoldByProduct.get(product.id) ?? 0,
+      })),
+    );
   } catch (error) {
     console.error("Failed to fetch products:", error);
     return NextResponse.json(

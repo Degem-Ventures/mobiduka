@@ -8,6 +8,7 @@ type ProductItem = {
   price: number
   category: string
   stock: number
+  recentUnitsSold: number
   emoji: string
   barcode?: string | null
 }
@@ -28,6 +29,31 @@ type ReceiptInfo = {
   businessName: string
   businessBranch: string | null
 }
+type HistoricalReceipt = {
+  id: string
+  saleNumber: string
+  createdAt: string
+  businessName: string
+  businessBranch: string | null
+  subtotal: number
+  discountAmount: number
+  total: number
+  cashier: string
+  customer: string | null
+  paymentMethod: string
+  items: Array<{
+    id: string
+    name: string
+    price: number
+    quantity: number
+    total: number
+    emoji: string
+  }>
+}
+type ReceiptHistoryResponse = {
+  receipts: HistoricalReceipt[]
+  nextCursor: string | null
+}
 type PaymentSettingsResponse = {
   preferences: {
     mpesaEnabled: boolean
@@ -46,6 +72,9 @@ type PosDraft = {
 
 const cartDraftKey = (businessId: string, userId: string) =>
   `mobiduka.pos_draft.v1:${businessId}:${userId}`
+const receiptPageSize = 10
+const normalizePaymentMethod = (value: string) =>
+  value.toLowerCase().replace(/[^a-z]/g, "")
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -65,9 +94,9 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [category, setCategory] = useState("All")
   const [cart, setCart] = useState<CartItem[]>([])
   const [productView, setProductView] = useState<"grid" | "details">("grid")
-  const [view, setView] = useState<"pos" | "cart" | "payment" | "receipt">(
-    "pos",
-  )
+  const [view, setView] = useState<
+    "pos" | "cart" | "payment" | "receipt" | "history"
+  >("pos")
   const [paymentMethod, setPaymentMethod] =
     useState<"cash" | "mpesa" | "credit">("cash")
   const [enabledPaymentMethods, setEnabledPaymentMethods] =
@@ -93,6 +122,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [selectedOperatorId, setSelectedOperatorId] = useState("")
   const [isCompletingSale, setIsCompletingSale] = useState(false)
   const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
+  const [receiptHistory, setReceiptHistory] = useState<HistoricalReceipt[]>([])
+  const [receiptHistoryCursor, setReceiptHistoryCursor] = useState<string | null>(null)
+  const [receiptHistoryLoading, setReceiptHistoryLoading] = useState(false)
+  const [receiptHistoryLoadingMore, setReceiptHistoryLoadingMore] = useState(false)
+  const [receiptHistoryError, setReceiptHistoryError] = useState("")
+  const [receiptHistoryRefresh, setReceiptHistoryRefresh] = useState(0)
+  const [historicalReceipt, setHistoricalReceipt] = useState<HistoricalReceipt | null>(null)
+  const [viewingPastReceipt, setViewingPastReceipt] = useState(false)
   const [isCartDraftReady, setIsCartDraftReady] = useState(false)
   const [hasLoadedPOSData, setHasLoadedPOSData] = useState(false)
   // Measured from the lower-left edge of the POS phone frame.
@@ -192,13 +229,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     if (!isCartDraftReady || !currentBusinessId || !currentUserId) return
     const key = cartDraftKey(currentBusinessId, currentUserId)
     // A completed receipt must never be restored as an unpaid cart.
-    if (cart.length === 0 || view === "receipt") {
+    if (cart.length === 0 || (view === "receipt" && !viewingPastReceipt)) {
       window.localStorage.removeItem(key)
       return
     }
     const draft: PosDraft = {
       cart,
-      view,
+      view: view === "receipt" || view === "history" ? "pos" : view,
       paymentMethod,
       mpesaPhone,
       discount,
@@ -216,8 +253,38 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     paymentMethod,
     selectedCreditor,
     selectedOperatorId,
+    viewingPastReceipt,
     view,
   ])
+
+  useEffect(() => {
+    if (view !== "history" || !currentBusinessId) return
+    let cancelled = false
+    setReceiptHistoryLoading(true)
+    setReceiptHistoryError("")
+    apiFetch<ReceiptHistoryResponse>(
+      `/api/sales?businessId=${encodeURIComponent(currentBusinessId)}&limit=${receiptPageSize}`,
+    )
+      .then((response) => {
+        if (cancelled) return
+        setReceiptHistory(response.receipts)
+        setReceiptHistoryCursor(response.nextCursor)
+      })
+      .catch((reason) => {
+        if (cancelled) return
+        setReceiptHistoryError(
+          reason instanceof Error
+            ? reason.message
+            : "Unable to load receipt history.",
+        )
+      })
+      .finally(() => {
+        if (!cancelled) setReceiptHistoryLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [currentBusinessId, receiptHistoryRefresh, view])
 
   useEffect(() => {
     if (!session) {
@@ -231,6 +298,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         emoji: string | null
         barcode: string | null
         sellingPrice: number | null
+        recentUnitsSold: number
         category: { id: string; name: string; emoji: string | null } | null
         inventory: { quantity: number } | null
       }>>(
@@ -257,6 +325,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             price: Number(product.sellingPrice ?? 0),
             category: product.category?.name ?? "Uncategorized",
             stock: Number(product.inventory?.quantity ?? 0),
+            recentUnitsSold: Number(product.recentUnitsSold ?? 0),
             emoji: product.emoji ?? product.category?.emoji ?? "📦",
             barcode: product.barcode,
           })),
@@ -363,8 +432,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       [p.name, p.category, p.barcode ?? ""].some((value) =>
         value.toLowerCase().includes(normalizedSearch),
       )
-    return (category === "All" || p.category === category) && matchesSearch
-  })
+    return p.stock > 0 && (category === "All" || p.category === category) && matchesSearch
+  }).sort((left, right) => right.recentUnitsSold - left.recentUnitsSold)
 
   const addToCart = (p: typeof products[0]) => {
     setCart((prev) => {
@@ -420,6 +489,17 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         )
         .filter((x) => x.qty > 0),
     )
+  }
+
+  const clearCart = () => {
+    setCart([])
+    setDiscount(0)
+    setSelectedCreditor(null)
+    setCreditSearch("")
+    setShowQuickAdd(false)
+    setQuickName("")
+    setQuickPhone("")
+    setPaymentMethod((current) => (current === "credit" ? "cash" : current))
   }
 
   const subtotal = cart.reduce((s, x) => s + x.price * x.qty, 0)
@@ -516,6 +596,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           cashierId: selectedOperatorId,
           invoiceNo: `POS-${Date.now()}`,
           totalAmount: total,
+          subtotal,
+          discountAmount: discountAmt,
           paymentMode:
             paymentMethod === "mpesa"
               ? "MPESA"
@@ -540,6 +622,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         businessName: response.business.name,
         businessBranch: response.business.branch,
       })
+      setViewingPastReceipt(false)
+      setHistoricalReceipt(null)
       setView("receipt")
     } catch (reason) {
       const message =
@@ -555,6 +639,60 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     }
   }
 
+  const loadMoreReceiptHistory = async () => {
+    if (!receiptHistoryCursor || receiptHistoryLoadingMore) return
+    setReceiptHistoryLoadingMore(true)
+    setReceiptHistoryError("")
+    try {
+      const response = await apiFetch<ReceiptHistoryResponse>(
+        `/api/sales?businessId=${encodeURIComponent(currentBusinessId)}&limit=${receiptPageSize}&cursor=${encodeURIComponent(receiptHistoryCursor)}`,
+      )
+      setReceiptHistory((previous) => [...previous, ...response.receipts])
+      setReceiptHistoryCursor(response.nextCursor)
+    } catch (reason) {
+      setReceiptHistoryError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to load more receipt history.",
+      )
+    } finally {
+      setReceiptHistoryLoadingMore(false)
+    }
+  }
+
+  const pastReceipt = viewingPastReceipt ? historicalReceipt : null
+  const displayedReceiptItems = pastReceipt
+    ? pastReceipt.items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        qty: item.quantity,
+        emoji: item.emoji,
+      }))
+    : cart
+  const displayedReceiptSubtotal = pastReceipt?.subtotal ?? subtotal
+  const displayedReceiptDiscountAmount =
+    pastReceipt?.discountAmount ?? discountAmt
+  const displayedReceiptTotal = pastReceipt?.total ?? total
+  const displayedReceiptPaymentMethod =
+    pastReceipt?.paymentMethod.toLowerCase() ?? paymentMethod
+  const normalizedReceiptPaymentMethod = normalizePaymentMethod(
+    displayedReceiptPaymentMethod,
+  )
+  const displayedReceiptCreatedAt =
+    pastReceipt?.createdAt ?? receiptInfo?.createdAt ?? new Date().toISOString()
+  const displayedReceiptNumber =
+    pastReceipt?.saleNumber ?? receiptInfo?.saleNumber ?? "Pending"
+  const displayedReceiptCashier =
+    pastReceipt?.cashier ?? receiptInfo?.cashierName ?? "—"
+  const displayedReceiptBusiness = pastReceipt
+    ? [pastReceipt.businessName, pastReceipt.businessBranch]
+        .filter(Boolean)
+        .join(" · ")
+    : [receiptInfo?.businessName, receiptInfo?.businessBranch]
+        .filter(Boolean)
+        .join(" · ")
+
   if (view === "receipt") {
     const receiptOperator = activeOperators.find(
       (operator) => operator.id === selectedOperatorId,
@@ -563,16 +701,48 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       <div className="screen" style={{ background: c.bg }}>
         <div
           style={{
-            background: "linear-gradient(135deg, #2E7D32, #388E3C)",
-            padding: "52px 20px 28px",
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 48, marginBottom: 8 }}>✅</div>
-            <div style={{ color: "white", fontSize: 22, fontWeight: 800 }}>
-              Sale Complete!
-            </div>
+              background: viewingPastReceipt
+                ? "linear-gradient(135deg, #0D1B3D, #123A8F)"
+                : "linear-gradient(135deg, #2E7D32, #388E3C)",
+              padding: "52px 20px 28px",
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ textAlign: "center" }}>
+              {viewingPastReceipt ? (
+                <div
+                  style={{
+                    width: 44,
+                    height: 44,
+                    margin: "0 auto 8px",
+                    borderRadius: 14,
+                    background: "rgba(255,255,255,0.12)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <svg
+                    aria-hidden="true"
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="white"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M6 2h12v20l-3-2-3 2-3-2-3 2Z" />
+                    <path d="M9 8h6M9 12h6" />
+                  </svg>
+                </div>
+              ) : (
+                <div style={{ fontSize: 48, marginBottom: 8 }}>✅</div>
+              )}
+              <div style={{ color: "white", fontSize: 22, fontWeight: 800 }}>
+                {viewingPastReceipt ? "Receipt Details" : "Sale Complete!"}
+              </div>
             <div
               style={{
                 color: "rgba(255,255,255,0.8)",
@@ -580,7 +750,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 marginTop: 4,
               }}
             >
-              Receipt #{receiptInfo?.saleNumber ?? "Pending"}
+              Receipt #{displayedReceiptNumber}
             </div>
           </div>
         </div>
@@ -588,12 +758,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           <div className="card" style={{ padding: "20px" }}>
             <div style={{ textAlign: "center", marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: c.muted, marginBottom: 4 }}>
-                {[receiptInfo?.businessName, receiptInfo?.businessBranch]
-                  .filter(Boolean)
-                  .join(" · ") || "Business"}
+                {displayedReceiptBusiness || "Business"}
               </div>
               <div style={{ fontSize: 12, color: c.faint }}>
-                {new Date(receiptInfo?.createdAt ?? Date.now()).toLocaleString(
+                {new Date(displayedReceiptCreatedAt).toLocaleString(
                   "en-KE",
                   {
                     weekday: "short",
@@ -635,7 +803,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     color: c.text,
                   }}
                 >
-                  {receiptInfo?.cashierName ?? receiptOperator?.name ?? "—"}
+                  {displayedReceiptCashier ?? receiptOperator?.name ?? "—"}
                 </div>
               </div>
               <div style={{ background: c.isDark ? "#1A3366" : "#E8ECF4" }} />
@@ -655,7 +823,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     color: c.text,
                   }}
                 >
-                  {receiptOperator?.shift ?? "—"}
+                  {viewingPastReceipt ? "—" : receiptOperator?.shift ?? "—"}
                 </div>
               </div>
               <div style={{ background: c.isDark ? "#1A3366" : "#E8ECF4" }} />
@@ -676,7 +844,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     fontFamily: "monospace",
                   }}
                 >
-                  {receiptInfo?.saleNumber ?? "—"}
+                  {displayedReceiptNumber}
                 </div>
               </div>
             </div>
@@ -687,7 +855,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 marginBottom: 16,
               }}
             >
-              {cart.map((item, i) => (
+              {displayedReceiptItems.map((item, i) => (
                 <div
                   key={i}
                   style={{
@@ -715,10 +883,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               >
                 <div style={{ fontSize: 13, color: c.muted }}>Subtotal</div>
                 <div style={{ fontSize: 13, color: c.text }}>
-                  KSh {subtotal}
+                  KSh {displayedReceiptSubtotal.toLocaleString()}
                 </div>
               </div>
-              {discountAmt > 0 && (
+              {displayedReceiptDiscountAmount > 0 && (
                 <div
                   style={{
                     display: "flex",
@@ -727,10 +895,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                   }}
                 >
                   <div style={{ fontSize: 13, color: "#D32F2F" }}>
-                    Discount ({discount}%)
+                    Discount
                   </div>
                   <div style={{ fontSize: 13, color: "#D32F2F" }}>
-                    -KSh {discountAmt}
+                    -KSh {displayedReceiptDiscountAmount.toLocaleString()}
                   </div>
                 </div>
               )}
@@ -749,7 +917,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 <div
                   style={{ fontSize: 16, fontWeight: 800, color: "#123A8F" }}
                 >
-                  KSh {total.toLocaleString()}
+                  KSh {displayedReceiptTotal.toLocaleString()}
                 </div>
               </div>
               <div
@@ -764,22 +932,23 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span
                     className={`badge ${
-                      paymentMethod === "mpesa"
+                      normalizedReceiptPaymentMethod.includes("mpesa")
                         ? "badge-success"
-                        : paymentMethod === "credit"
+                        : normalizedReceiptPaymentMethod.includes("credit")
                           ? "badge-error"
                           : "badge-blue"
                     }`}
                   >
-                    {paymentMethod === "mpesa"
+                    {normalizedReceiptPaymentMethod.includes("mpesa")
                       ? "M-Pesa"
-                      : paymentMethod === "credit"
+                      : normalizedReceiptPaymentMethod.includes("credit")
                         ? "Credit / Tab"
                         : "Cash"}
                   </span>
                 </div>
               </div>
-              {paymentMethod === "credit" && selectedCreditor && (
+              {normalizedReceiptPaymentMethod.includes("credit") &&
+                (pastReceipt?.customer || selectedCreditor) && (
                 <div
                   style={{
                     marginTop: 8,
@@ -792,7 +961,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                   <div
                     style={{ fontSize: 13, fontWeight: 700, color: "#D32F2F" }}
                   >
-                    {selectedCreditor.name}
+                    {pastReceipt?.customer ?? selectedCreditor?.name}
                   </div>
                 </div>
               )}
@@ -801,7 +970,11 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
             <button
               className="btn"
-              onClick={() => onNavigate("dashboard")}
+              aria-label="Receipt history"
+              onClick={() => {
+                setViewingPastReceipt(false)
+                setView("history")
+              }}
               style={{
                 padding: "14px 12px",
                 background: "rgba(13,27,61,0.08)",
@@ -823,11 +996,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2.5"
+                strokeWidth="2.2"
                 strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                <polyline points="9,22 9,12 15,12 15,22" />
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M12 7v5l3 2" />
               </svg>
             </button>
             <button
@@ -850,6 +1025,11 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             <button
               className="btn"
               onClick={() => {
+                if (viewingPastReceipt) {
+                  setViewingPastReceipt(false)
+                  setView("history")
+                  return
+                }
                 setCart([])
                 setView("pos")
                 setDiscount(0)
@@ -870,9 +1050,393 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 fontFamily: "inherit",
               }}
             >
-              New Sale
+              {viewingPastReceipt ? "Back to History" : "New Sale"}
             </button>
           </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (view === "history") {
+    const recordedTotal = receiptHistory.reduce(
+      (sum, receipt) => sum + receipt.total,
+      0,
+    )
+    return (
+      <div className="screen" style={{ background: c.bg }}>
+        <div
+          style={{
+            background: "linear-gradient(135deg, #0D1B3D, #123A8F)",
+            padding: "52px 20px 24px",
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <button
+              className="btn"
+              aria-label="Back to Point of Sale"
+              onClick={() => setView("pos")}
+              style={{
+                background: "rgba(255,255,255,0.12)",
+                border: "none",
+                borderRadius: 10,
+                width: 36,
+                height: 36,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+            >
+              <svg
+                aria-hidden="true"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="white"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              >
+                <path d="M19 12H5M12 5l-7 7 7 7" />
+              </svg>
+            </button>
+            <div>
+              <div style={{ color: "white", fontSize: 18, fontWeight: 700 }}>
+                Receipt History
+              </div>
+              <div
+                style={{
+                  color: "rgba(255,255,255,0.6)",
+                  fontSize: 12,
+                  marginTop: 2,
+                }}
+              >
+                Most recent first
+              </div>
+            </div>
+            <div
+              aria-hidden="true"
+              style={{
+                marginLeft: "auto",
+                width: 38,
+                height: 38,
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.12)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <svg
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 2h12v20l-3-2-3 2-3-2-3 2Z" />
+                <path d="M9 8h6M9 12h6" />
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div className="scroll-area" style={{ padding: "16px", paddingBottom: 90 }}>
+          {receiptHistoryError && (
+            <div
+              role="alert"
+              style={{
+                padding: "12px 14px",
+                marginBottom: 14,
+                borderRadius: 10,
+                background: "#FFEBEE",
+                color: "#C62828",
+                fontSize: 12,
+              }}
+            >
+              {receiptHistoryError}
+              <button
+                className="btn"
+                onClick={() => setReceiptHistoryRefresh((value) => value + 1)}
+                style={{
+                  display: "block",
+                  marginTop: 8,
+                  padding: 0,
+                  border: "none",
+                  background: "none",
+                  color: "#B71C1C",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+          <div
+            className="card"
+            style={{
+              padding: "14px 16px",
+              marginBottom: 16,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 11, color: c.muted }}>
+                Receipts loaded
+              </div>
+              <div
+                style={{
+                  fontSize: 20,
+                  fontWeight: 800,
+                  color: c.text,
+                  marginTop: 2,
+                }}
+              >
+                {receiptHistory.length}
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, color: c.muted }}>
+                Loaded sales total
+              </div>
+              <div
+                style={{
+                  fontSize: 15,
+                  fontWeight: 800,
+                  color: "#123A8F",
+                  marginTop: 2,
+                }}
+              >
+                KSh {recordedTotal.toLocaleString()}
+              </div>
+            </div>
+          </div>
+          {receiptHistoryLoading && receiptHistory.length === 0 ? (
+            <div
+              role="status"
+              style={{
+                padding: "44px 20px",
+                textAlign: "center",
+                color: c.muted,
+                fontSize: 13,
+              }}
+            >
+              Loading receipt history…
+            </div>
+          ) : receiptHistory.length === 0 && !receiptHistoryError ? (
+            <div
+              className="card"
+              style={{ padding: "48px 20px", textAlign: "center" }}
+            >
+              <div
+                style={{
+                  width: 48,
+                  height: 48,
+                  margin: "0 auto 12px",
+                  display: "grid",
+                  placeItems: "center",
+                  borderRadius: 14,
+                  background: c.cardAlt,
+                  color: c.muted,
+                }}
+              >
+                <svg
+                  aria-hidden="true"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M6 2h12v20l-3-2-3 2-3-2-3 2Z" />
+                  <path d="M9 8h6M9 12h6" />
+                </svg>
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: c.text }}>
+                No receipts yet
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, color: c.muted }}>
+                Completed sales will appear here.
+              </div>
+            </div>
+          ) : (
+            receiptHistory.map((receipt, index) => {
+              const itemCount = receipt.items.reduce(
+                (sum, item) => sum + item.quantity,
+                0,
+              )
+              const paymentMethod = normalizePaymentMethod(
+                receipt.paymentMethod,
+              )
+              const paymentLabel = paymentMethod.includes("mpesa")
+                ? "M-Pesa"
+                : paymentMethod.includes("credit")
+                  ? "Credit / Tab"
+                  : "Cash"
+              return (
+                <button
+                  key={receipt.id}
+                  className="btn card"
+                  onClick={() => {
+                    setHistoricalReceipt(receipt)
+                    setViewingPastReceipt(true)
+                    setView("receipt")
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "14px 16px",
+                    marginBottom: 10,
+                    border: "none",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 12,
+                      background: index === 0 ? c.infoBg : c.cardAlt,
+                      color: index === 0 ? "#123A8F" : c.muted,
+                      display: "grid",
+                      placeItems: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M6 2h12v20l-3-2-3 2-3-2-3 2Z" />
+                      <path d="M9 8h6M9 12h6" />
+                    </svg>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 7,
+                        marginBottom: 3,
+                      }}
+                    >
+                      <div
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: c.text,
+                        }}
+                      >
+                        {receipt.saleNumber}
+                      </div>
+                      {index === 0 && (
+                        <span className="badge badge-blue" style={{ fontSize: 9 }}>
+                          Latest
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: c.muted }}>
+                      {new Date(receipt.createdAt).toLocaleDateString("en-GB", {
+                        day: "numeric",
+                        month: "short",
+                      })}{" "}
+                      ·{" "}
+                      {new Date(receipt.createdAt).toLocaleTimeString("en-GB", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}{" "}
+                      · {itemCount} {itemCount === 1 ? "item" : "items"}
+                    </div>
+                    <div
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        fontSize: 10,
+                        color: c.faint,
+                        marginTop: 3,
+                      }}
+                    >
+                      {receipt.cashier} · {paymentLabel}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 800,
+                        color: c.text,
+                      }}
+                    >
+                      KSh {receipt.total.toLocaleString()}
+                    </div>
+                    <svg
+                      aria-hidden="true"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke={c.faint}
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ marginTop: 5, marginLeft: "auto" }}
+                    >
+                      <path d="m9 18 6-6-6-6" />
+                    </svg>
+                  </div>
+                </button>
+              )
+            })
+          )}
+          {receiptHistoryCursor && (
+            <button
+              className="btn"
+              onClick={() => void loadMoreReceiptHistory()}
+              disabled={receiptHistoryLoadingMore}
+              style={{
+                width: "100%",
+                padding: "13px 16px",
+                marginTop: 4,
+                border: `1px solid ${c.divider}`,
+                borderRadius: 12,
+                background: c.card,
+                color: c.text,
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: receiptHistoryLoadingMore ? "wait" : "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {receiptHistoryLoadingMore ? "Loading…" : "Load older receipts"}
+            </button>
+          )}
         </div>
       </div>
     )
@@ -1603,9 +2167,48 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 <path d="M19 12H5M12 5l-7 7 7 7" />
               </svg>
             </button>
-            <div style={{ color: "white", fontSize: 18, fontWeight: 700 }}>
+            <div style={{ flex: 1, color: "white", fontSize: 18, fontWeight: 700 }}>
               Cart ({cartCount} items)
             </div>
+            <button
+              className="btn"
+              onClick={clearCart}
+              disabled={cart.length === 0}
+              style={{
+                minHeight: 36,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                padding: "0 11px",
+                border: "1px solid rgba(255,138,128,0.32)",
+                borderRadius: 10,
+                background: cart.length === 0
+                  ? "rgba(255,255,255,0.08)"
+                  : "rgba(211,47,47,0.2)",
+                color: cart.length === 0 ? "rgba(255,255,255,0.45)" : "#FFD0CC",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: cart.length === 0 ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+                flexShrink: 0,
+              }}
+            >
+              <svg
+                aria-hidden="true"
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 6h18M8 6V4h8v2m3 0-.9 14H5.9L5 6m4 4v6m6-6v6" />
+              </svg>
+              Clear
+            </button>
           </div>
         </div>
         <div className="scroll-area" style={{ padding: "16px", flex: 1 }}>
@@ -1926,6 +2529,41 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           </button>
           <button
             className="btn"
+            type="button"
+            onClick={() => setView("history")}
+            aria-label="Receipt history"
+            title="Receipt history"
+            style={{
+              width: 44,
+              height: 44,
+              background: "rgba(255,255,255,0.12)",
+              border: "1.5px solid rgba(255,255,255,0.2)",
+              borderRadius: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              cursor: "pointer",
+              color: "white",
+            }}
+          >
+            <svg
+              aria-hidden="true"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M6 2h12v20l-3-2-3 2-3-2-3 2Z" />
+              <path d="M9 8h6M9 12h6" />
+            </svg>
+          </button>
+          <button
+            className="btn"
             onClick={() => setView("cart")}
             style={{
               width: 44,
@@ -2149,7 +2787,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             <div style={{ marginTop: 5, fontSize: 12 }}>
               {normalizedSearch
                 ? `No products match "${search.trim()}".`
-                : "No products are available in this category."}
+                : "No in-stock products are available in this category."}
             </div>
           </div>
         ) : productView === "grid" ? (
@@ -2162,7 +2800,19 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           >
             {filtered.map((p) => {
               const inCart = cart.find((x) => x.id === p.id)
-              const lowStock = p.stock <= 5
+              const cartQuantity = inCart?.qty ?? 0
+              const remainingStock = p.stock - cartQuantity
+              const overStock = remainingStock < 0
+              const lowStock = remainingStock <= 5
+              const stockLabel = cartQuantity > 0
+                ? overStock
+                  ? `${remainingStock} left · stock may be stale`
+                  : remainingStock === 0
+                    ? "0 left · at stock limit"
+                    : `${p.stock} − ${cartQuantity} = ${remainingStock} left`
+                : lowStock
+                  ? `Low: ${p.stock}`
+                  : `${p.stock} in stock`
               return (
                 <button
                   key={p.id}
@@ -2176,7 +2826,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     position: "relative",
                     fontFamily: "inherit",
                     textAlign: "left",
-                    outline: inCart ? "2px solid #123A8F" : "none",
+                    outline: overStock
+                      ? "2px solid #D32F2F"
+                      : remainingStock === 0
+                        ? "2px solid #F9A825"
+                        : inCart
+                          ? "2px solid #123A8F"
+                          : "none",
                     outlineOffset: inCart ? "-2px" : "0",
                   }}
                 >
@@ -2189,14 +2845,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                         width: 8,
                         height: 8,
                         borderRadius: "50%",
-                        background: "#F9A825",
+                        background: overStock ? "#D32F2F" : "#F9A825",
                       }}
                     />
                   )}
                   {inCart && (
                     <div style={{ position: "absolute", top: 6, left: 6 }}>
                       <span
-                        className="badge badge-blue"
+                        className={`badge ${overStock ? "badge-error" : remainingStock === 0 ? "badge-warning" : "badge-blue"}`}
                         style={{ fontSize: 9 }}
                       >
                         ×{inCart.qty}
@@ -2231,12 +2887,12 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                   <div
                     style={{
                       fontSize: 10,
-                      color: lowStock ? "#F9A825" : c.muted,
+                      color: overStock ? "#D32F2F" : lowStock ? "#F9A825" : c.muted,
                       marginTop: 2,
-                      fontWeight: lowStock ? 600 : 400,
+                      fontWeight: overStock || lowStock ? 700 : 400,
                     }}
                   >
-                    {lowStock ? `Low: ${p.stock}` : `${p.stock} in stock`}
+                    {stockLabel}
                   </div>
                 </button>
               )
@@ -2246,7 +2902,19 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           <div style={{ display: "grid", gap: 10 }}>
             {filtered.map((p) => {
               const inCart = cart.find((x) => x.id === p.id)
-              const lowStock = p.stock <= 5
+              const cartQuantity = inCart?.qty ?? 0
+              const remainingStock = p.stock - cartQuantity
+              const overStock = remainingStock < 0
+              const lowStock = remainingStock <= 5
+              const stockLabel = cartQuantity > 0
+                ? overStock
+                  ? `${remainingStock} left · stock may be stale`
+                  : remainingStock === 0
+                    ? "0 left · at stock limit"
+                    : `${p.stock} − ${cartQuantity} = ${remainingStock} left`
+                : lowStock
+                  ? `Low: ${p.stock}`
+                  : `${p.stock} in stock`
               return (
                 <div
                   key={p.id}
@@ -2256,7 +2924,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     display: "flex",
                     alignItems: "center",
                     gap: 12,
-                    border: inCart ? "2px solid #123A8F" : c.divider,
+                    border: overStock
+                      ? "2px solid #D32F2F"
+                      : remainingStock === 0
+                        ? "2px solid #F9A825"
+                        : inCart
+                          ? "2px solid #123A8F"
+                          : c.divider,
                   }}
                 >
                   <div
@@ -2290,11 +2964,15 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                       {p.category} ·{" "}
                       <span
                         style={{
-                          color: lowStock ? "#F9A825" : c.muted,
-                          fontWeight: lowStock ? 700 : 400,
+                          color: overStock
+                            ? "#D32F2F"
+                            : lowStock
+                              ? "#F9A825"
+                              : c.muted,
+                          fontWeight: overStock || lowStock ? 700 : 400,
                         }}
                       >
-                        {lowStock ? `Low: ${p.stock}` : `${p.stock} in stock`}
+                        {stockLabel}
                       </span>
                     </div>
                   </div>

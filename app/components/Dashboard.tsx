@@ -8,6 +8,8 @@ interface Props {
 
 type DashboardData = {
   metadata: { name: string; branch: string | null; country: string; currency: string; timezone: string; date: string }
+  lastCashCountAt: string | null
+  shiftTypes: Array<{ name: string; scheduledStart: string; scheduledEnd: string }>
   summary: Record<string, number>
   paymentBreakdown: Record<string, { amount: number; transactions: number }>
   topProducts: Array<{ name: string; units: number; revenue: number }>
@@ -19,6 +21,16 @@ type DashboardData = {
 const money = (value: number) => `KSh ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 const lowStockPreviewCount = 10
 const lowStockExpandedCount = 20
+
+const paymentMethodPresentation = (method: string) => {
+  const normalized = method.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+  if (normalized === 'MPESA') return { label: 'M-Pesa', icon: '📱', badge: 'badge-success', tone: 'success' as const }
+  if (normalized === 'CREDIT') return { label: 'Credit', icon: '📝', badge: 'badge-error', tone: 'error' as const }
+  if (normalized === 'CASH') return { label: 'Cash', icon: '💵', badge: 'badge-blue', tone: 'cash' as const }
+
+  const label = method.trim().replace(/[_-]+/g, ' ').toLowerCase().replace(/\b[a-z]/g, letter => letter.toUpperCase())
+  return { label: label || 'Unknown', icon: '💳', badge: 'badge-blue', tone: 'other' as const }
+}
 
 const calendarDate = (value: Date, timeZone: string) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -57,6 +69,60 @@ const relativeTimeLabel = (timestamp: string, timeZone: string) => {
   return `${years === 1 ? 'a' : years} year${years === 1 ? '' : 's'} ago · ${time}`
 }
 
+const shortTimeAgo = (timestamp: string | null | undefined) => {
+  if (!timestamp) return 'not counted yet'
+  const countTime = new Date(timestamp).getTime()
+  if (!Number.isFinite(countTime)) return 'not counted yet'
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - countTime) / 60000))
+  if (elapsedMinutes < 1) return 'just now'
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) return `${elapsedHours}h ago`
+  const elapsedDays = Math.floor(elapsedHours / 24)
+  if (elapsedDays < 7) return `${elapsedDays}d ago`
+  const elapsedWeeks = Math.floor(elapsedDays / 7)
+  if (elapsedWeeks < 5) return `${elapsedWeeks}w ago`
+  return `${Math.floor(elapsedDays / 30)}mo ago`
+}
+
+const dashboardDateTime = (date: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const part = (type: string) => parts.find(item => item.type === type)?.value ?? ''
+  return `${part('weekday')}, ${part('day')} ${part('month')} ${part('year')} · ${part('hour')}:${part('minute')}`
+}
+
+const shiftAtTime = (shiftTypes: DashboardData['shiftTypes'] | undefined, date: Date, timeZone: string) => {
+  const localTime = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const part = (type: string) => Number(localTime.find(item => item.type === type)?.value ?? 0)
+  const currentMinutes = part('hour') * 60 + part('minute')
+  const toMinutes = (time: string) => {
+    const [hours, minutes] = time.split(':').map(Number)
+    return hours * 60 + minutes
+  }
+  const orderedShifts = [...(shiftTypes ?? [])].sort((left, right) => toMinutes(left.scheduledStart) - toMinutes(right.scheduledStart))
+  const currentShift = orderedShifts.find(shift => {
+    const start = toMinutes(shift.scheduledStart)
+    const end = toMinutes(shift.scheduledEnd)
+    if (start === end) return true
+    return start < end ? currentMinutes >= start && currentMinutes < end : currentMinutes >= start || currentMinutes < end
+  })
+  return currentShift?.name ?? 'Off shift'
+}
+
 export default function Dashboard({ onNavigate }: Props) {
   const c = useColors()
   const session = getClientSession()
@@ -65,6 +131,7 @@ export default function Dashboard({ onNavigate }: Props) {
   const [error, setError] = useState('')
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [lowStockDisplay, setLowStockDisplay] = useState<'preview' | 'expanded' | 'all'>('preview')
+  const [clockNow, setClockNow] = useState(() => new Date())
   const statsRef = useRef<HTMLDivElement>(null)
   const statsTrackRef = useRef<HTMLDivElement>(null)
 
@@ -77,6 +144,11 @@ export default function Dashboard({ onNavigate }: Props) {
     apiFetch<DashboardData>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
       .then(setData)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load dashboard data.'))
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(new Date()), 30_000)
+    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -142,14 +214,24 @@ export default function Dashboard({ onNavigate }: Props) {
     { label: 'Low Stock', value: `${summary.lowStockCount ?? 0} items`, sub: 'Need reorder', icon: '⚠️' },
     { label: 'Transactions', value: String(summary.todayTransactionCount ?? 0), sub: 'Today', icon: '🧾' },
   ]
+  const todayRevenue = summary.todayRevenue ?? 0
+  const yesterdayRevenue = summary.yesterdayRevenue ?? 0
+  const salesChange = yesterdayRevenue > 0 ? ((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100 : 0
+  const todaySalesComparison = yesterdayRevenue > 0
+    ? `${salesChange > 0 ? '+' : ''}${Math.round(salesChange)}% vs yesterday`
+    : todayRevenue > 0 ? 'New sales vs yesterday' : '0% vs yesterday'
   const stats = [
-    { label: "Today's Sales", value: money(summary.todayRevenue ?? 0), sub: `${summary.todayTransactionCount ?? 0} transactions`, icon: '📈', bg: 'linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)' },
+    { label: "Today's Sales", value: money(summary.todayRevenue ?? 0), sub: todaySalesComparison, icon: '📈', bg: 'linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)' },
     { label: "Today's Net Profit", value: money(summary.todayProfit ?? 0), sub: `${summary.profitMarginPercentage ?? 0}% margin · ${money(summary.todayExpenseTotal ?? 0)} expenses`, icon: '💰', bg: 'linear-gradient(135deg, #2E7D32 0%, #388E3C 100%)' },
-    { label: 'Cash in Till', value: money(summary.cashInTill ?? 0), sub: 'Open sessions', icon: '💵', bg: 'linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)' },
+    { label: 'Cash in Till/Drawer', value: money(summary.cashInTill ?? 0), sub: `Last count: ${shortTimeAgo(data?.lastCashCountAt)}`, icon: '💵', bg: 'linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)' },
     { label: 'M-Pesa Sales', value: money(data?.paymentBreakdown?.MPESA?.amount ?? 0), sub: `${data?.paymentBreakdown?.MPESA?.transactions ?? 0} transactions`, icon: '📱', bg: 'linear-gradient(135deg, #005F2E 0%, #00A651 100%)' },
   ]
   const topProducts = (data?.topProducts ?? []).map(product => ({ ...product, sold: product.units, revenueLabel: money(product.revenue), change: 'Today' }))
   const timeZone = data?.metadata.timezone ?? 'Africa/Nairobi'
+  const currentShift = shiftAtTime(data?.shiftTypes, clockNow, timeZone)
+  const businessLocationLine = data
+    ? `${data.metadata.name}${data.metadata.branch ? ` · ${data.metadata.branch}` : ''} · Shift: ${currentShift}`
+    : 'Loading business details…'
   const recentTransactions = [...(data?.recentTransactions ?? [])]
     .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime())
     .slice(0, 5)
@@ -183,10 +265,10 @@ export default function Dashboard({ onNavigate }: Props) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: 500, marginBottom: 2 }}>
-              {data?.metadata.date ?? 'Loading dashboard…'}
+              {dashboardDateTime(clockNow, timeZone)}
             </div>
             <div style={{ color: 'white', fontSize: 22, fontWeight: 800 }}>Welcome, {session?.user.name ?? 'there'}</div>
-            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{data?.metadata.name ?? 'MobiDuka Store'} · Live data</div>
+            <div style={{ color: 'rgba(212,175,55,0.9)', fontSize: 12, fontWeight: 500, marginTop: 2 }}>{businessLocationLine}</div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn" onClick={() => onNavigate('notifications')} aria-label="Open notifications" style={{
@@ -309,25 +391,28 @@ export default function Dashboard({ onNavigate }: Props) {
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>Recent Transactions</div>
             <button className="btn" onClick={() => onNavigate('reports')} style={{ background: 'none', border: 'none', color: '#123A8F', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>View all</button>
           </div>
-          {recentTransactions.map((t, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < recentTransactions.length - 1 ? c.divider : 'none' }}>
-              <div style={{
-                width: 38, height: 38, borderRadius: 12, flexShrink: 0,
-                background: t.method === 'M-Pesa' ? c.successBg : t.method === 'Credit' ? c.errorBg : c.iconBg,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16
-              }}>
-                {t.method === 'M-Pesa' ? '📱' : t.method === 'Credit' ? '📝' : '💵'}
+          {recentTransactions.map((t, i) => {
+            const payment = paymentMethodPresentation(t.method)
+            return (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: i < recentTransactions.length - 1 ? c.divider : 'none' }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: 12, flexShrink: 0,
+                  background: payment.tone === 'success' ? c.successBg : payment.tone === 'error' ? c.errorBg : c.iconBg,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16
+                }}>
+                  {payment.icon}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{t.customer}</div>
+                  <div style={{ fontSize: 11, color: c.muted }}>{t.items} items · {t.timeLabel}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{t.amountLabel}</div>
+                  <span className={`badge ${payment.badge}`} style={{ marginTop: 3 }}>{payment.label}</span>
+                </div>
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{t.customer}</div>
-                <div style={{ fontSize: 11, color: c.muted }}>{t.items} items · {t.timeLabel}</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{t.amountLabel}</div>
-                <span className={`badge ${t.method === 'M-Pesa' ? 'badge-success' : t.method === 'Credit' ? 'badge-error' : 'badge-blue'}`} style={{ marginTop: 3 }}>{t.method}</span>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         {/* SmartScan Widget */}

@@ -13,6 +13,12 @@ function dateKey(date: Date, timeZone: string) {
   }).format(date);
 }
 
+function previousDateKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const previous = new Date(Date.UTC(year, month - 1, day - 1));
+  return `${previous.getUTCFullYear()}-${String(previous.getUTCMonth() + 1).padStart(2, "0")}-${String(previous.getUTCDate()).padStart(2, "0")}`;
+}
+
 function money(value: number) {
   return Number(value.toFixed(2));
 }
@@ -35,7 +41,7 @@ export async function GET(request: NextRequest) {
     const today = dateKey(new Date(), timeZone);
     const periodStart = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000);
 
-    const [sales, expenses, products, customers, cashSessions, scans, scanCountEvents] = await Promise.all([
+    const [sales, expenses, products, customers, cashSessions, lastCashCount, shiftTypes, scans, scanCountEvents] = await Promise.all([
       prisma.sale.findMany({
         where: { businessId, createdAt: { gte: periodStart }, saleStatus: "COMPLETED" },
         include: {
@@ -47,7 +53,7 @@ export async function GET(request: NextRequest) {
       }),
       prisma.expense.findMany({
         where: { businessId, createdAt: { gte: periodStart } },
-        select: { amount: true, createdAt: true, recordedBy: true },
+        select: { amount: true, createdAt: true, recordedBy: true, paymentMethod: true },
       }),
       prisma.product.findMany({
         where: { businessId, status: "ACTIVE", deletedAt: null },
@@ -60,6 +66,15 @@ export async function GET(request: NextRequest) {
       prisma.cashSession.findMany({
         where: { businessId, closedAt: null },
         select: { id: true, cashierId: true, openingBalance: true, openedAt: true },
+      }),
+      prisma.cashSession.findFirst({
+        where: { businessId, closedAt: { not: null }, closingBalance: { not: null } },
+        select: { closedAt: true },
+        orderBy: { closedAt: "desc" },
+      }),
+      prisma.shiftType.findMany({
+        where: { businessId, active: true },
+        select: { name: true, scheduledStart: true, scheduledEnd: true },
       }),
       prisma.scanEvent.findMany({
         where: { businessId, createdAt: { gte: periodStart } },
@@ -74,9 +89,12 @@ export async function GET(request: NextRequest) {
     ]);
 
     const todaySales = sales.filter((sale) => dateKey(sale.createdAt, timeZone) === today);
+    const yesterday = previousDateKey(today);
+    const yesterdaySales = sales.filter((sale) => dateKey(sale.createdAt, timeZone) === yesterday);
     const todayExpenses = expenses.filter((expense) => dateKey(expense.createdAt, timeZone) === today);
     const periodRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
     const todayRevenue = todaySales.reduce((sum, sale) => sum + sale.total, 0);
+    const yesterdayRevenue = yesterdaySales.reduce((sum, sale) => sum + sale.total, 0);
     const costOfGoods = sales.reduce((sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + (item.product.costPrice ?? item.total * 0.6) * item.quantity, 0), 0);
     const totalExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
     const todayCostOfGoods = todaySales.reduce((sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + (item.product.costPrice ?? item.total * 0.6) * item.quantity, 0), 0);
@@ -110,7 +128,10 @@ export async function GET(request: NextRequest) {
       .map((product) => ({ id: product.id, name: product.name, barcode: product.barcode, quantity: product.inventory?.quantity ?? 0, minimumStock: product.minimumStock }));
     const creditBalance = customers.reduce((sum, customer) => sum + (customer.creditAccount?.balance ?? 0), 0);
     const cashPayments = paymentBreakdown.get("CASH")?.amount ?? 0;
-    const cashExpenses = todayExpenses.filter((expense) => !expense.recordedBy || cashSessions.some((session) => session.cashierId === expense.recordedBy)).reduce((sum, expense) => sum + expense.amount, 0);
+    const cashExpenses = todayExpenses
+      .filter((expense) => expense.paymentMethod?.trim().toUpperCase() === "CASH")
+      .filter((expense) => !expense.recordedBy || cashSessions.some((session) => session.cashierId === expense.recordedBy))
+      .reduce((sum, expense) => sum + expense.amount, 0);
     const currentTill = cashSessions.reduce((sum, session) => sum + session.openingBalance, 0) + cashPayments - cashExpenses;
     const todaysScanCountEvents = scanCountEvents.filter((scan) => dateKey(scan.createdAt, timeZone) === today);
     const scanCounts = todaysScanCountEvents.reduce((counts, scan) => {
@@ -121,8 +142,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       metadata: { businessId: business.id, name: business.name, branch: business.branch, country: business.country, currency: business.currency, timezone: timeZone, date: today },
+      lastCashCountAt: lastCashCount?.closedAt?.toISOString() ?? null,
+      shiftTypes,
       summary: {
         todayRevenue: money(todayRevenue),
+        yesterdayRevenue: money(yesterdayRevenue),
         todayProfit: money(todayProfit),
         todayExpenseTotal: money(todayExpenseTotal),
         todayTransactionCount: todaySales.length,
