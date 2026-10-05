@@ -130,6 +130,22 @@
       }
     },
     "/sales": {
+      "get": {
+        "tags": ["Sales"],
+        "summary": "List completed receipts with cursor pagination",
+        "description": "Returns the most recent completed sales first. The requested page size defaults to 10 and is capped at 20.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 20, "default": 10 } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Sale ID returned as nextCursor on the preceding page." }
+        ],
+        "responses": {
+          "200": { "description": "Receipt page returned.", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "type": "boolean" }, "business": { "type": "object", "properties": { "name": { "type": "string" }, "branch": { "type": "string", "nullable": true } } }, "nextCursor": { "type": "string", "nullable": true }, "receipts": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "saleNumber": { "type": "string" }, "createdAt": { "type": "string", "format": "date-time" }, "businessName": { "type": "string" }, "businessBranch": { "type": "string", "nullable": true }, "subtotal": { "type": "number" }, "discountAmount": { "type": "number" }, "total": { "type": "number" }, "cashier": { "type": "string" }, "customer": { "type": "string", "nullable": true }, "paymentMethod": { "type": "string" }, "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "price": { "type": "number" }, "quantity": { "type": "number" }, "total": { "type": "number" }, "emoji": { "type": "string" } } } } } } } } } } } },
+          "400": { "description": "Receipt history cursor is invalid." },
+          "401": { "description": "Authenticated business context is required." },
+          "404": { "description": "Business not found." }
+        }
+      },
       "post": {
         "tags": ["Sales"],
         "summary": "Process Sales Order Records",
@@ -144,6 +160,8 @@
                   "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
                   "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID. For another deployment, use the authenticated user id from login." },
                   "invoiceNo": { "type": "string", "example": "INV-1001" },
+                  "subtotal": { "type": "number", "description": "Pre-discount item subtotal. Defaults to the sum of item line prices." },
+                  "discountAmount": { "type": "number", "minimum": 0, "description": "Sale-level discount amount." },
                   "totalAmount": { "type": "number", "example": 100.0 },
                   "paymentMode": { "type": "string", "example": "CASH" },
                   "mpesaRef": { "type": "string", "example": "QX728HJ92K" },
@@ -171,13 +189,9 @@
     },
     "/cash/session": {
       "get": {
-        "tags": ["Business"],
-        "summary": "List cash sessions and shift performance",
+        "tags": ["Business"], "summary": "List cash sessions and shift performance",
         "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": {
-          "200": { "description": "Sessions ordered from earliest start to latest, including cashier, shift type, sales count, and revenue. Open sessions have closedAt set to null.", "content": { "application/json": { "example": { "sessions": [{ "id": "session-kevin-2026-09-20", "cashierId": "634e13ed-41e5-4177-bb0a-a4a40d948292", "cashier": { "id": "634e13ed-41e5-4177-bb0a-a4a40d948292", "fullName": "Kevin Ochieng", "role": { "name": "CASHIER" } }, "shiftType": "morning", "shift": { "code": "morning", "name": "Morning", "scheduledStart": "06:00", "scheduledEnd": "14:00", "icon": "🌅", "color": "#F57C00" }, "openedAt": "2026-09-20T08:12:02.585Z", "closedAt": null, "sales": 0, "amount": 0 }] } } } },
-          "401": { "description": "Authenticated business context is required." }
-        }
+        "responses": { "200": { "description": "Sessions ordered from earliest start to latest, including cashier, shift type, sales count, and revenue. Open sessions have closedAt set to null." }, "401": { "description": "Authenticated business context is required." } }
       },
       "post": {
         "tags": ["Business"],
@@ -209,12 +223,7 @@
       }
     },
     "/purchase-orders": {
-      "get": {
-        "tags": ["Business"],
-        "summary": "List purchase orders for a business",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": { "200": { "description": "Purchase orders with suppliers and items returned." }, "401": { "description": "Authenticated business context is required." } }
-      },
+      "get": { "tags": ["Business"], "summary": "List purchase orders for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Purchase orders with suppliers and items returned." }, "401": { "description": "Authenticated business context is required." } } },
       "post": {
         "tags": ["Business"],
         "summary": "Supply Chain & Restock Procurement System",
@@ -292,7 +301,7 @@
       "post": {
         "tags": ["Payments"],
         "summary": "Initiate Safaricom M-Pesa STK Push",
-        "description": "Requests a customer PIN prompt through the Daraja sandbox and stores the pending checkout correlation record. Use the tenant ID returned by login; the seed generates business UUIDs at runtime.",
+        "description": "Requests a customer PIN prompt through the server-selected Daraja environment and stores the pending checkout correlation record against the authenticated tenant integration. Use the tenant ID returned by login; the seed generates business UUIDs at runtime.",
         "requestBody": {
           "required": true,
           "content": {
@@ -303,8 +312,7 @@
                 "properties": {
                   "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
                   "phoneNumber": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$", "example": "254700000001", "description": "Seeded business phone in Kenyan format; replace with the customer's handset number for a real checkout." },
-                  "amount": { "type": "number", "minimum": 1, "example": 1250 },
-                  "accountReference": { "type": "string", "maxLength": 12, "example": "MobiDuka POS" }
+                  "amount": { "type": "number", "minimum": 1, "example": 1250 }
                 }
               }
             }
@@ -342,6 +350,50 @@
         }
       }
     },
+    "/payments/mpesa-integration": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "Get Tenant M-Pesa Setup Status",
+        "description": "Requires the payments permission. Returns configuration status and public account fields only; credential values are never returned.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Public M-Pesa integration status returned." },
+          "403": { "description": "Payment configuration permission is required." }
+        }
+      },
+      "put": {
+        "tags": ["Payments"],
+        "summary": "Configure Tenant M-Pesa Credentials",
+        "description": "Requires the payments permission. The server encrypts credential fields before storage and returns only public setup metadata.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "accountType", "shortcode", "accountReference"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "accountType": { "type": "string", "enum": ["TILL", "PAYBILL"] },
+                  "shortcode": { "type": "string", "pattern": "^[0-9]{5,8}$" },
+                  "accountReference": { "type": "string", "maxLength": 12 },
+                  "consumerKey": { "type": "string", "writeOnly": true },
+                  "consumerSecret": { "type": "string", "writeOnly": true },
+                  "passkey": { "type": "string", "writeOnly": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Encrypted M-Pesa integration saved." },
+          "400": { "description": "Invalid account details or missing first-time credentials." },
+          "403": { "description": "Payment configuration permission is required." }
+        }
+      }
+    },
     "/payments/stk-query": {
       "post": {
         "tags": ["Payments"],
@@ -353,8 +405,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["checkoutRequestId"],
+                "required": ["businessId", "checkoutRequestId"],
                 "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "description": "Authenticated tenant ID returned by login." },
                   "checkoutRequestId": { "type": "string", "description": "Use checkoutRequestId returned by /payments/stk-push or persisted by the M-Pesa callback." }
                 }
               }
@@ -432,6 +485,7 @@
                       "properties": {
                         "businessId": { "type": "string", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
                         "name": { "type": "string", "example": "MobiDuka Wholesale Eldoret" },
+                        "branch": { "type": "string", "nullable": true },
                         "country": { "type": "string", "example": "Kenya" },
                         "currency": { "type": "string", "example": "KES" },
                         "timezone": { "type": "string", "example": "Africa/Nairobi" },
@@ -442,11 +496,14 @@
                       "type": "object",
                       "properties": {
                         "todayRevenue": { "type": "number", "example": 84250 },
+                        "yesterdayRevenue": { "type": "number" },
                         "todayProfit": { "type": "number", "example": 61210 },
+                        "todayExpenseTotal": { "type": "number" },
                         "todayTransactionCount": { "type": "integer", "example": 18 },
                         "periodRevenue": { "type": "number", "example": 524850 },
                         "periodProfit": { "type": "number", "example": 318172 },
                         "profitMarginPercentage": { "type": "number", "example": 60.6 },
+                        "periodProfitMarginPercentage": { "type": "number" },
                         "cashInTill": { "type": "number", "example": 28200 },
                         "creditOut": { "type": "number", "example": 15250 },
                         "creditCustomerCount": { "type": "integer", "example": 6 },
@@ -455,6 +512,8 @@
                         "lowStockCount": { "type": "integer", "example": 3 }
                       }
                     },
+                    "lastCashCountAt": { "type": "string", "format": "date-time", "nullable": true },
+                    "shiftTypes": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" } } } },
                     "paymentBreakdown": {
                       "type": "object",
                       "additionalProperties": { "type": "object", "properties": { "amount": { "type": "number" }, "transactions": { "type": "integer" } } }
@@ -681,144 +740,40 @@
       "post": {
         "tags": ["Authentication", "Employees"],
         "summary": "Register a user inside the authenticated business",
-        "description": "Creates an active owner, manager, cashier, supervisor, or accountant account. The business is taken from the bearer token; client businessId values are not accepted.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["name", "role"],
-                "properties": {
-                  "name": { "type": "string", "example": "Kamau Mwangi" },
-                  "email": { "type": "string", "format": "email", "example": "kamau@mobiduka.com" },
-                  "username": { "type": "string", "example": "kamau" },
-                  "phone": { "type": "string", "example": "+254700000002" },
-                  "role": { "type": "string", "enum": ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"], "example": "CASHIER" },
-                  "pin": { "type": "string", "pattern": "^[0-9]{4}$", "example": "2542" },
-                  "password": { "type": "string", "format": "password", "example": "ChangeMe123" }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": { "description": "User registered successfully." },
-          "400": { "description": "Invalid user registration data." },
-          "401": { "description": "Authenticated business context is required." },
-          "409": { "description": "Email or username is already registered." }
-        }
+        "description": "Creates an active business user. The business is derived from the bearer token.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "role"], "properties": { "name": { "type": "string" }, "email": { "type": "string", "format": "email" }, "username": { "type": "string" }, "phone": { "type": "string" }, "role": { "type": "string", "enum": ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"] }, "pin": { "type": "string", "pattern": "^[0-9]{4}$" }, "password": { "type": "string", "format": "password" } } } } } },
+        "responses": { "201": { "description": "User registered successfully." }, "400": { "description": "Invalid registration data." }, "401": { "description": "Authenticated business context is required." }, "409": { "description": "Email or username already exists." } }
       }
     },
     "/notifications": {
-      "get": {
-        "tags": ["Business"],
-        "summary": "List active notifications",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": { "200": { "description": "Active notifications ordered newest first, with unread count.", "content": { "application/json": { "example": { "success": true, "unreadCount": 3, "notifications": [{ "id": "76a2e2b3-d046-4976-8fef-e0f7347deb98", "type": "warning", "title": "Low Stock Warning", "body": "Royco 75g is running low (5 units). Consider placing a purchase order.", "createdAt": "2026-09-20T13:55:00.000Z", "read": false, "icon": "⚠️" }] } } } }, "401": { "description": "Authenticated business context is required." } }
-      },
-      "post": {
-        "tags": ["Business"], "summary": "Create a notification",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "title", "message"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "userId": { "type": "string", "format": "uuid", "nullable": true }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string", "enum": ["critical", "warning", "success", "info"] }, "isRead": { "type": "boolean", "default": false } } } } } },
-        "responses": { "201": { "description": "Notification created." }, "400": { "description": "Title and message are required." } }
-      },
-      "patch": {
-        "tags": ["Business"], "summary": "Mark or update notifications",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "markAllRead": { "type": "boolean" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string" }, "isRead": { "type": "boolean" } } } } } },
-        "responses": { "200": { "description": "Notification read state or fields updated." }, "404": { "description": "Notification not found." } }
-      },
-      "delete": {
-        "tags": ["Business"], "summary": "Soft-delete a read notification",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" } } } } } },
-        "responses": { "200": { "description": "Read notification soft-deleted." }, "409": { "description": "Only an existing read notification can be deleted." } }
-      }
+      "get": { "tags": ["Business"], "summary": "List active notifications", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active notifications ordered newest first, with unread count and seeded examples." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Business"], "summary": "Create a notification", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "title", "message"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string", "enum": ["critical", "warning", "success", "info"] }, "isRead": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Notification created." } } },
+      "patch": { "tags": ["Business"], "summary": "Mark or update notifications", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "markAllRead": { "type": "boolean" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string" }, "isRead": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Notification read state or fields updated." }, "404": { "description": "Notification not found." } } },
+      "delete": { "tags": ["Business"], "summary": "Soft-delete a read notification", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" } } } } } }, "responses": { "200": { "description": "Read notification soft-deleted." }, "409": { "description": "Only an existing read notification can be deleted." } } }
     },
     "/shift-types": {
-      "get": {
-        "tags": ["Business"], "summary": "List active business shift types",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": { "200": { "description": "Active shift types ordered by scheduled start time.", "content": { "application/json": { "example": { "shiftTypes": [{ "code": "morning", "name": "Morning", "scheduledStart": "06:00", "scheduledEnd": "14:00", "icon": "🌅", "color": "#F57C00", "active": true }, { "code": "afternoon", "name": "Afternoon", "scheduledStart": "14:00", "scheduledEnd": "22:00", "icon": "☀️", "color": "#0288D1", "active": true }, { "code": "night", "name": "Night", "scheduledStart": "22:00", "scheduledEnd": "06:00", "icon": "🌙", "color": "#5E35B1", "active": true }] } } } }, "401": { "description": "Authenticated business context is required." } }
-      },
-      "post": {
-        "tags": ["Business"], "summary": "Create or update a business shift type",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "code", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" }, "icon": { "type": "string", "nullable": true }, "color": { "type": "string", "nullable": true }, "active": { "type": "boolean" } } } } } },
-        "responses": { "200": { "description": "Shift type updated." }, "201": { "description": "Shift type created." } }
-      }
+      "get": { "tags": ["Business"], "summary": "List active business shift types", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active shift types ordered by scheduled start time. Seeded schedules include Morning 06:00-14:00, Afternoon 14:00-22:00, and Night 22:00-06:00." } } },
+      "post": { "tags": ["Business"], "summary": "Create or update a business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "code", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" }, "icon": { "type": "string", "nullable": true }, "color": { "type": "string", "nullable": true }, "active": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "201": { "description": "Shift type created." } } },
+      "patch": { "tags": ["Business"], "summary": "Edit an active business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "icon": { "type": "string", "description": "Shift icon selected from the shift icon picker." }, "scheduledStart": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, "scheduledEnd": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "400": { "description": "Invalid shift type data." }, "404": { "description": "Shift type not found." } } },
+      "delete": { "tags": ["Business"], "summary": "Remove an active shift type from available shifts", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Shift type soft-deleted; historical shift sessions are preserved." }, "404": { "description": "Shift type not found." } } }
     },
     "/suppliers": {
-      "get": {
-        "tags": ["Business"],
-        "summary": "List suppliers for a business",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": { "200": { "description": "Suppliers returned with product and purchase-order counts." }, "401": { "description": "Authenticated business context is required." } }
-      },
-      "post": {
-        "tags": ["Business"], "summary": "Create a supplier",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "category": { "type": "string" }, "contactPerson": { "type": "string" }, "phone": { "type": "string" }, "email": { "type": "string", "format": "email" }, "location": { "type": "string" }, "notes": { "type": "string" } } } } } },
-        "responses": { "201": { "description": "Supplier created." }, "400": { "description": "Invalid supplier data." }, "409": { "description": "Supplier already exists." } }
-      },
-      "patch": {
-        "tags": ["Business"], "summary": "Update a supplier",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "category": { "type": "string" }, "contactPerson": { "type": "string" }, "phone": { "type": "string" }, "email": { "type": "string" }, "location": { "type": "string" }, "notes": { "type": "string" } } } } } },
-        "responses": { "200": { "description": "Supplier updated." }, "404": { "description": "Supplier not found." }, "409": { "description": "Supplier name already exists." } }
-      },
-      "delete": {
-        "tags": ["Business"], "summary": "Delete an unused supplier",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }],
-        "responses": { "200": { "description": "Supplier deleted." }, "404": { "description": "Supplier not found." }, "409": { "description": "Supplier is referenced by products or purchase orders." } }
-      }
+      "get": { "tags": ["Business"], "summary": "List suppliers for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Suppliers returned with product and purchase-order counts." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Business"], "summary": "Create a supplier", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "category": { "type": "string" }, "contactPerson": { "type": "string" }, "phone": { "type": "string" }, "email": { "type": "string" }, "location": { "type": "string" }, "notes": { "type": "string" } } } } } }, "responses": { "201": { "description": "Supplier created." }, "400": { "description": "Invalid supplier data." }, "409": { "description": "Supplier already exists." } } },
+      "patch": { "tags": ["Business"], "summary": "Update a supplier", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "category": { "type": "string" }, "contactPerson": { "type": "string" }, "phone": { "type": "string" }, "email": { "type": "string" }, "location": { "type": "string" }, "notes": { "type": "string" } } } } } }, "responses": { "200": { "description": "Supplier updated." }, "404": { "description": "Supplier not found." }, "409": { "description": "Supplier name already exists." } } },
+      "delete": { "tags": ["Business"], "summary": "Delete an unused supplier", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Supplier deleted." }, "404": { "description": "Supplier not found." }, "409": { "description": "Supplier is referenced by products or purchase orders." } } }
     },
     "/categories": {
-      "get": {
-        "tags": ["Inventory"],
-        "summary": "List product categories for a business",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": { "200": { "description": "Categories returned with emojis and product counts." }, "401": { "description": "Authenticated business context is required." } }
-      },
-      "post": {
-        "tags": ["Inventory"],
-        "summary": "Create a product category",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "emoji": { "type": "string" }, "parentCategoryId": { "type": "string", "format": "uuid" } } } } } },
-        "responses": { "201": { "description": "Category created." }, "400": { "description": "Invalid category data." }, "401": { "description": "Authenticated business context is required." }, "409": { "description": "Category already exists." } }
-      },
-      "patch": {
-        "tags": ["Inventory"],
-        "summary": "Update a product category",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "emoji": { "type": "string" }, "parentCategoryId": { "type": "string", "format": "uuid" } } } } } },
-        "responses": { "200": { "description": "Category updated." }, "400": { "description": "Invalid category data." }, "404": { "description": "Category not found." }, "409": { "description": "Category name already exists." } }
-      },
-      "delete": {
-        "tags": ["Inventory"],
-        "summary": "Delete an empty product category",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }],
-        "responses": { "200": { "description": "Category deleted." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Category not found." }, "409": { "description": "Category still has products or child categories." } }
-      }
+      "get": { "tags": ["Inventory"], "summary": "List product categories for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Categories returned with emojis and product counts." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Inventory"], "summary": "Create a product category", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "emoji": { "type": "string" }, "parentCategoryId": { "type": "string", "format": "uuid" } } } } } }, "responses": { "201": { "description": "Category created." }, "400": { "description": "Invalid category data." }, "401": { "description": "Authenticated business context is required." }, "409": { "description": "Category already exists." } } },
+      "patch": { "tags": ["Inventory"], "summary": "Update a product category", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "emoji": { "type": "string" }, "parentCategoryId": { "type": "string", "format": "uuid" } } } } } }, "responses": { "200": { "description": "Category updated." }, "400": { "description": "Invalid category data." }, "404": { "description": "Category not found." }, "409": { "description": "Category name already exists." } } },
+      "delete": { "tags": ["Inventory"], "summary": "Delete an empty product category", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Category deleted." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Category not found." }, "409": { "description": "Category still has products or child categories." } } }
     },
     "/products": {
-      "get": {
-        "tags": ["Inventory"],
-        "summary": "List products and inventory for a business",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
-        "responses": { "200": { "description": "Product catalog returned." }, "401": { "description": "Authenticated business context is required." } }
-      },
-      "post": {
-        "tags": ["Inventory"],
-        "summary": "Create a product",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } },
-        "responses": { "201": { "description": "Product created." }, "401": { "description": "Authenticated business context is required." }, "400": { "description": "Product creation failed." } }
-      },
-      "patch": {
-        "tags": ["Inventory"],
-        "summary": "Update a product and optionally set stock",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } },
-        "responses": { "200": { "description": "Product updated." }, "400": { "description": "Invalid product data." }, "404": { "description": "Product not found." } }
-      },
-      "delete": {
-        "tags": ["Inventory"],
-        "summary": "Soft-delete a product or hard-delete an unreferenced product",
-        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "hard", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "description": "Use true only for products with no sales, purchase, stock movement, or scan history." }],
-        "responses": { "200": { "description": "Product deleted." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Product not found." }, "409": { "description": "Product has historical records and can only be soft-deleted." } }
-      }
+      "get": { "tags": ["Inventory"], "summary": "List products and inventory", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "includeDeleted", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "description": "When true, return only soft-deleted products." }], "responses": { "200": { "description": "Product catalog returned with recent 30-day units sold." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Inventory"], "summary": "Create a product", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string", "description": "Product type/name. Combined with brand and packSize for the stored display name." }, "brand": { "type": "string", "nullable": true }, "productType": { "type": "string", "description": "Structured product type; defaults to name." }, "packSize": { "type": "string", "nullable": true }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Product created." }, "401": { "description": "Authenticated business context is required." }, "400": { "description": "Product creation failed." } } },
+      "patch": { "tags": ["Inventory"], "summary": "Update a product and optionally set stock", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "brand": { "type": "string", "nullable": true }, "productType": { "type": "string" }, "packSize": { "type": "string", "nullable": true }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Product updated." }, "400": { "description": "Invalid product data." }, "404": { "description": "Product not found." } } },
+      "delete": { "tags": ["Inventory"], "summary": "Soft-delete a product or hard-delete an unreferenced product", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "hard", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } }], "responses": { "200": { "description": "Product deleted." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Product not found." }, "409": { "description": "Product has historical records and can only be soft-deleted." } } }
     },
     "/expenses": {
       "get": {

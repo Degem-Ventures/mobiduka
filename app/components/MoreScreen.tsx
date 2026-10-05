@@ -139,7 +139,7 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
 
         <div style={{ textAlign: 'center', marginTop: 20, padding: '0 20px 8px' }}>
           <div style={{ fontSize: 12, color: c.faint }}>MobiDuka POS v2.4.1</div>
-          <div style={{ fontSize: 11, color: c.faint, marginTop: 2 }}>© 2026 MobiTech Solutions Ltd · Kenya</div>
+          <div style={{ fontSize: 11, color: c.faint, marginTop: 2 }}>© 2026 Degem Ventures · Kenya</div>
         </div>
       </div>
     </div>

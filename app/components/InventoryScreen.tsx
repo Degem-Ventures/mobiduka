@@ -4,6 +4,7 @@ import { apiFetch, getClientSession } from '../../lib/client-api'
 import { Html5Qrcode } from 'html5-qrcode'
 import { DEFAULT_INVENTORY_EMOJI, INVENTORY_EMOJIS } from '../utils/inventory-emojis'
 import { composeProductDisplayName } from '../../lib/product-display-name'
+import { defaultProductTypes, loadProductTypes, productTypesStorageKey, type ProductTypeOption } from '../utils/product-types'
 
 type ProductItem = { id: string; name: string; brand: string; productType: string; packSize: string; categoryId: string | null; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: 'good' | 'low' | 'critical'; barcode: string | null; deletedAt?: string | null }
 type CategoryItem = { id: string; name: string; emoji: string | null; deletedAt?: string | null }
@@ -23,13 +24,6 @@ type ProductApiRow = {
   inventory: { quantity: number } | null
 }
 type Toast = { message: string; tone: 'success' | 'error' }
-
-const productTypePresets = [
-  { name: 'Soda', categories: ['Beverages', 'Soft Drinks'], emoji: '🥤', sizes: ['250ml', '500ml', '1L', '2L'] },
-  { name: 'Water', categories: ['Beverages', 'Water'], emoji: '💧', sizes: ['250ml', '500ml'] },
-  { name: 'Yoghurt', categories: ['Dairy', 'Yoghurt'], emoji: '🥣', sizes: ['150ml', '250ml', '500ml'] },
-]
-
 const createProductForm = (categoryId = '', barcode = '') => ({
   name: '', brand: '', packSize: '', categoryId, cost: '', price: '', stock: '', reorder: '', barcode,
   emoji: DEFAULT_INVENTORY_EMOJI,
@@ -57,6 +51,12 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [showAddProduct, setShowAddProduct] = useState(false)
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [showManageCategories, setShowManageCategories] = useState(false)
+  const [showManageProductTypes, setShowManageProductTypes] = useState(false)
+  const [productTypes, setProductTypes] = useState<ProductTypeOption[]>([])
+  const [productTypesLoaded, setProductTypesLoaded] = useState(false)
+  const [newProductType, setNewProductType] = useState({ name: '', categoryId: '', sizes: '' })
+  const [newSizesByType, setNewSizesByType] = useState<Record<string, string>>({})
+  const [productIdentityExpanded, setProductIdentityExpanded] = useState(false)
   const [editProduct, setEditProduct] = useState<ProductItem | null>(null)
   const [newCat, setNewCat] = useState({ name: '', emoji: DEFAULT_INVENTORY_EMOJI })
   const [productForm, setProductForm] = useState(() => createProductForm())
@@ -71,12 +71,16 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [toast, setToast] = useState<Toast | null>(null)
   const [showBarcodeCamera, setShowBarcodeCamera] = useState(false)
   const [cameraError, setCameraError] = useState('')
+  const [fabPosition, setFabPosition] = useState<{ x: number; y: number } | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const toastTimeout = useRef<number | null>(null);
 
   const inventoryRequestId = useRef(0)
   const barcodeScannerRef = useRef<Html5Qrcode | null>(null)
+  const inventoryScreenRef = useRef<HTMLDivElement | null>(null)
+  const fabDragStart = useRef<{ pointerId: number; pointerX: number; pointerY: number; x: number; y: number } | null>(null)
+  const fabWasDragged = useRef(false)
   const c = useColors()
   const session = getClientSession()
 
@@ -192,6 +196,33 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }, [session?.user.businessId, showManageCategories])
 
   useEffect(() => {
+    if (!session?.user.businessId || isInventoryLoading) return
+    const businessId = session.user.businessId
+    try {
+      setProductTypes(loadProductTypes(
+        categories,
+        window.localStorage.getItem(productTypesStorageKey(businessId)),
+      ))
+    } catch (reason) {
+      notify(reason instanceof Error ? `Unable to load saved product types: ${reason.message}` : 'Unable to load saved product types.', 'error')
+      setProductTypes(defaultProductTypes(categories))
+    }
+    setProductTypesLoaded(true)
+  }, [categories, isInventoryLoading, session?.user.businessId])
+
+  useEffect(() => {
+    if (!productTypesLoaded || !session?.user.businessId) return
+    try {
+      window.localStorage.setItem(
+        productTypesStorageKey(session.user.businessId),
+        JSON.stringify(productTypes),
+      )
+    } catch (reason) {
+      notify(reason instanceof Error ? `Unable to save product types: ${reason.message}` : 'Unable to save product types.', 'error')
+    }
+  }, [productTypes, productTypesLoaded, session?.user.businessId])
+
+  useEffect(() => {
     if (!initialBarcode) return
     setProductForm(createProductForm(categories[0]?.id ?? '', initialBarcode))
     setEditProduct(null)
@@ -227,6 +258,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     })
     setEditProduct(product)
     setShowBulkCalculator(false)
+    setProductIdentityExpanded(true)
     setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' })
     setSelected(null)
     setShowAddProduct(true)
@@ -385,7 +417,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   if (selected) {
     const margin = Math.round((selected.price - selected.cost) / selected.price * 100)
     return (
-      <div className="screen" style={{ background: c.bg }}>
+        <div ref={inventoryScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
         {toastNode}
         <div
           style={{
@@ -668,7 +700,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     }
   }
 
-  const activeProductTypePreset = productTypePresets.find(
+  const activeProductTypePreset = productTypes.find(
     preset => preset.name.toLowerCase() === productForm.name.trim().toLowerCase(),
   )
   const productDisplayName = composeProductDisplayName(
@@ -677,32 +709,192 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     productForm.packSize,
   )
   const updateProductType = (name: string) => {
-    const preset = productTypePresets.find(
+    const preset = productTypes.find(
       item => item.name.toLowerCase() === name.trim().toLowerCase(),
     )
-    const category = preset
-      ? categories.find(item =>
-          preset.categories.some(candidate => candidate.toLowerCase() === item.name.toLowerCase()),
-        )
-      : null
-    setProductForm(current => ({
-      ...current,
-      name,
-      ...(preset
-        ? {
-            categoryId: category?.id ?? current.categoryId,
-            emoji: preset.emoji,
-            packSize: preset.sizes.includes(current.packSize) ? current.packSize : '',
-          }
-        : {}),
-    }))
+    setProductForm(current => {
+      const productNameChanged = current.name.trim().toLowerCase() !== name.trim().toLowerCase()
+      return {
+        ...current,
+        name,
+        ...(productNameChanged ? { packSize: '' } : {}),
+        ...(preset
+          ? {
+              categoryId: preset.categoryId || current.categoryId,
+              emoji: preset.emoji,
+            }
+          : {}),
+      }
+    })
   }
   const startNewProduct = () => {
     setProductForm(createProductForm(categories[0]?.id ?? ''))
     setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' })
     setShowBulkCalculator(false)
+    setProductIdentityExpanded(false)
     setEditProduct(null)
     setShowAddProduct(true)
+  }
+
+  const addProductType = () => {
+    const name = newProductType.name.trim()
+    const categoryId = newProductType.categoryId
+    const sizes = [...new Set(newProductType.sizes.split(',').map(size => size.trim()).filter(Boolean))]
+    if (!name || !categoryId || sizes.length === 0) {
+      notify('Enter a product type, choose its category, and add at least one pack size.', 'error')
+      return
+    }
+    if (productTypes.some(type => type.name.toLowerCase() === name.toLowerCase())) {
+      notify('That product type already exists. Add sizes to it instead.', 'error')
+      return
+    }
+    const category = categories.find(item => item.id === categoryId)
+    setProductTypes(previous => [...previous, {
+      id: `custom-${Date.now()}`,
+      name,
+      categoryId,
+      emoji: category?.emoji ?? DEFAULT_INVENTORY_EMOJI,
+      sizes,
+    }].sort((left, right) => left.name.localeCompare(right.name)))
+    setNewProductType({ name: '', categoryId: '', sizes: '' })
+    notify('Product type added.')
+  }
+
+  const addSizesToProductType = (type: ProductTypeOption) => {
+    const entered = (newSizesByType[type.id] ?? '').split(',').map(size => size.trim()).filter(Boolean)
+    const additions = entered.filter((size, index) =>
+      entered.findIndex(candidate => candidate.toLowerCase() === size.toLowerCase()) === index,
+    )
+    if (!additions.length) return
+    const duplicates = additions.filter(size => type.sizes.some(existing => existing.toLowerCase() === size.toLowerCase()))
+    const uniqueAdditions = additions.filter(size => !type.sizes.some(existing => existing.toLowerCase() === size.toLowerCase()))
+    if (!uniqueAdditions.length) {
+      notify(duplicates.length ? 'Those pack sizes are already listed.' : 'Enter at least one pack size.', 'error')
+      return
+    }
+    setProductTypes(previous => previous.map(item =>
+      item.id === type.id ? { ...item, sizes: [...item.sizes, ...uniqueAdditions] } : item,
+    ))
+    setNewSizesByType(previous => ({ ...previous, [type.id]: '' }))
+    notify(`Added ${uniqueAdditions.length} pack size${uniqueAdditions.length === 1 ? '' : 's'}${duplicates.length ? '; existing sizes were skipped' : ''}.`)
+  }
+
+  const removeProductTypeSize = (typeId: string, size: string) => {
+    setProductTypes(previous => previous.map(type =>
+      type.id === typeId ? { ...type, sizes: type.sizes.filter(item => item !== size) } : type,
+    ))
+  }
+
+  const updateProductTypeCategory = (typeId: string, categoryId: string) => {
+    const category = categories.find(item => item.id === categoryId)
+    setProductTypes(previous => previous.map(type =>
+      type.id === typeId
+        ? { ...type, categoryId, emoji: category?.emoji ?? type.emoji }
+        : type,
+    ))
+  }
+
+  const startFabDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!inventoryScreenRef.current) return
+    const screenRect = inventoryScreenRef.current.getBoundingClientRect()
+    const buttonRect = event.currentTarget.getBoundingClientRect()
+    const x = fabPosition?.x ?? buttonRect.left - screenRect.left
+    const y = fabPosition?.y ?? buttonRect.top - screenRect.top
+    fabDragStart.current = { pointerId: event.pointerId, pointerX: event.clientX, pointerY: event.clientY, x, y }
+    fabWasDragged.current = false
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const moveFab = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const start = fabDragStart.current
+    const screen = inventoryScreenRef.current
+    if (!start || !screen || start.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - start.pointerX
+    const deltaY = event.clientY - start.pointerY
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 6) fabWasDragged.current = true
+    if (!fabWasDragged.current) return
+    const width = event.currentTarget.offsetWidth
+    const height = event.currentTarget.offsetHeight
+    const maxY = Math.max(132, screen.clientHeight - height - 80)
+    setFabPosition({
+      x: Math.max(12, Math.min(screen.clientWidth - width - 12, start.x + deltaX)),
+      y: Math.max(132, Math.min(maxY, start.y + deltaY)),
+    })
+  }
+
+  const endFabDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (fabDragStart.current?.pointerId !== event.pointerId) return
+    fabDragStart.current = null
+    window.setTimeout(() => { fabWasDragged.current = false }, 0)
+  }
+
+  if (showManageProductTypes) {
+    return (
+      <div ref={inventoryScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
+        {toastNode}
+        <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button className="btn" onClick={() => setShowManageProductTypes(false)} aria-label="Back to inventory" style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+            </button>
+            <div>
+              <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Product Types & Sizes</div>
+              <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 12, marginTop: 2 }}>Reusable variant presets</div>
+            </div>
+          </div>
+        </div>
+        <div className="scroll-area" style={{ padding: 16, paddingBottom: 100 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', margin: '0 0 8px 4px' }}>Saved Types</div>
+          {productTypes.map(type => (
+            <div key={type.id} className="card" style={{ padding: '14px 16px', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <span style={{ width: 36, height: 36, borderRadius: 10, background: c.iconBg, display: 'grid', placeItems: 'center', fontSize: 18 }}>{type.emoji}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{type.name}</div>
+                  <select aria-label={`Category for ${type.name}`} value={type.categoryId} onChange={event => updateProductTypeCategory(type.id, event.target.value)} style={{ maxWidth: '100%', marginTop: 2, padding: 0, border: 'none', background: 'transparent', color: c.muted, fontSize: 11, outline: 'none' }}>
+                    <option value="">Choose category</option>
+                    {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                </div>
+                <div style={{ fontSize: 10, color: c.faint, whiteSpace: 'nowrap' }}>{type.sizes.length} sizes</div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                {type.sizes.length === 0 && <span style={{ fontSize: 11, color: c.faint }}>No pack sizes added</span>}
+                {type.sizes.map(size => (
+                  <button key={size} type="button" className="btn" title={`Remove ${size}`} onClick={() => removeProductTypeSize(type.id, size)} style={{ padding: '5px 9px', borderRadius: 100, border: 'none', background: c.cardAlt, color: c.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    {size}
+                    <span aria-hidden="true"> ×</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 7 }}>
+                <input className="input" aria-label={`Add sizes to ${type.name}`} placeholder="Add size, e.g. 750ml" value={newSizesByType[type.id] ?? ''} onChange={event => setNewSizesByType(previous => ({ ...previous, [type.id]: event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addSizesToProductType(type) } }} style={{ flex: 1, minWidth: 0, padding: '9px 11px', fontSize: 12 }} />
+                <button className="btn" aria-label={`Add sizes to ${type.name}`} onClick={() => addSizesToProductType(type)} style={{ width: 38, borderRadius: 10, border: 'none', background: c.iconBg, color: '#123A8F', fontSize: 18, fontWeight: 700, cursor: 'pointer' }}>+</button>
+              </div>
+            </div>
+          ))}
+          <div className="card" style={{ padding: 16, marginTop: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 12 }}>Add Product Type</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 5 }}>Type name</label>
+                <input className="input" maxLength={120} value={newProductType.name} onChange={event => setNewProductType(current => ({ ...current, name: event.target.value }))} placeholder="e.g. Juice" />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 5 }}>Category</label>
+                <select className="input" value={newProductType.categoryId} onChange={event => setNewProductType(current => ({ ...current, categoryId: event.target.value }))}>
+                  <option value="">Select category</option>
+                  {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 5 }}>Pack sizes</label>
+            <input className="input" maxLength={300} value={newProductType.sizes} onChange={event => setNewProductType(current => ({ ...current, sizes: event.target.value }))} placeholder="250ml, 500ml, 1L" />
+            <button className="btn" onClick={addProductType} disabled={saving} style={{ width: '100%', marginTop: 12, padding: 12, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Add Type</button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (showManageCategories) {
@@ -888,21 +1080,54 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
               <input id="inventory-product-brand" className="input" maxLength={80} placeholder="e.g. Dairy Joy, Kristal, Afia" value={productForm.brand} onChange={e => setProductForm(f => ({ ...f, brand: e.target.value }))} />
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label htmlFor="inventory-product-name" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name / Type *</label>
-              <input id="inventory-product-name" className="input" list="inventory-product-type-suggestions" maxLength={120} placeholder="e.g. Soda, Milk, Petroleum Jelly" value={productForm.name} onChange={e => updateProductType(e.target.value)} />
-              <datalist id="inventory-product-type-suggestions">
-                {productTypePresets.map(preset => <option key={preset.name} value={preset.name} />)}
-              </datalist>
+              <label htmlFor="inventory-product-name" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Product Name *</label>
+              <input id="inventory-product-name" className="input" maxLength={120} placeholder="e.g. Soda, Milk, Petroleum Jelly" value={productForm.name} onChange={event => updateProductType(event.target.value)} />
             </div>
             <div style={{ marginBottom: 14 }}>
-              <label htmlFor="inventory-product-pack-size" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Pack Size <span style={{ fontWeight: 400 }}>(optional)</span></label>
-              {activeProductTypePreset && <div role="group" aria-label={`${activeProductTypePreset.name} pack sizes`} style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 8 }}>
-                {activeProductTypePreset.sizes.map(size => {
-                  const selectedSize = productForm.packSize === size
-                  return <button key={size} type="button" className="btn" aria-pressed={selectedSize} onClick={() => setProductForm(current => ({ ...current, packSize: selectedSize ? '' : size }))} style={{ padding: '7px 11px', borderRadius: 9, border: selectedSize ? '2px solid #123A8F' : `1px solid ${c.border}`, background: selectedSize ? c.infoBg : c.card, color: selectedSize ? '#123A8F' : c.muted, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{size}</button>
-                })}
+              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <select className="input" style={{ flex: 1, appearance: 'none' }} value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
+                  <option value="">Select category</option>
+                  {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.emoji ?? '📦'} {cat.name}</option>)}
+                </select>
+                <button className="btn" onClick={() => setShowAddCategory(true)} style={{ padding: '11px 12px', background: c.iconBg, border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ Cat</button>
+              </div>
+            </div>
+            <div style={{ borderTop: c.divider, paddingTop: 12 }}>
+              <button type="button" className="btn" aria-expanded={productIdentityExpanded} onClick={() => setProductIdentityExpanded(open => !open)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 10, background: activeProductTypePreset ? c.infoBg : c.cardAlt, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                  <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={activeProductTypePreset ? '#123A8F' : c.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 12V8H4v4" /><path d="M12 4v16" /><path d="m8 16 4 4 4-4" />
+                  </svg>
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: c.text }}>Product Type &amp; Pack Size</span>
+                  <span style={{ display: 'block', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, color: c.muted }}>
+                    {activeProductTypePreset ? `${activeProductTypePreset.name}${productForm.packSize ? ` · ${productForm.packSize}` : ' · Select a size'}` : 'Optional product variant'}
+                  </span>
+                </span>
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c.muted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: productIdentityExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              {productIdentityExpanded && <div style={{ paddingTop: 14 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: activeProductTypePreset ? 12 : 10 }}>
+                  {productTypes.map(type => {
+                    const active = activeProductTypePreset?.id === type.id
+                    return <button key={type.id} type="button" className="btn" aria-pressed={active} onClick={() => updateProductType(type.name)} style={{ padding: '8px 12px', borderRadius: 10, border: active ? '2px solid #123A8F' : `1.5px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, background: active ? c.infoBg : c.card, color: active ? (c.isDark ? '#90CAF9' : '#123A8F') : c.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{type.name}</button>
+                  })}
+                </div>
+                {activeProductTypePreset && activeProductTypePreset.sizes.length > 0 && <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: c.muted, marginBottom: 7 }}>Select pack size</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                    {activeProductTypePreset.sizes.map(size => {
+                      const active = productForm.packSize === size
+                      return <button key={size} type="button" className="btn" aria-pressed={active} onClick={() => setProductForm(form => ({ ...form, packSize: active ? '' : size }))} style={{ minWidth: 54, padding: '7px 10px', borderRadius: 20, border: active ? '1.5px solid #D4AF37' : `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, background: active ? c.warningBg : c.card, color: active ? (c.isDark ? '#F0D060' : '#8B6914') : c.muted, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{size}</button>
+                    })}
+                  </div>
+                </div>}
+                <button type="button" className="btn" onClick={() => setShowManageProductTypes(true)} style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: `1px dashed ${c.isDark ? '#31518E' : '#B0BAD3'}`, background: 'none', color: c.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>+ Manage product types and sizes</button>
               </div>}
-              <input id="inventory-product-pack-size" className="input" maxLength={24} placeholder="e.g. 500ml, 2kg, 12s" value={productForm.packSize} onChange={e => setProductForm(current => ({ ...current, packSize: e.target.value }))} />
             </div>
             <div role="status" aria-live="polite" style={{ padding: '10px 12px', borderRadius: 10, background: c.cardAlt, border: `1px solid ${c.divider}`, marginBottom: 14 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: c.muted, textTransform: 'uppercase', marginBottom: 3 }}>Display name</div>
@@ -921,16 +1146,6 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
                 <button type="button" className="btn" onClick={() => void stopBarcodeCamera()} style={{ position: 'absolute', top: 8, right: 8, padding: '6px 10px', borderRadius: 8, border: 'none', background: 'rgba(13,27,61,0.75)', color: 'white', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
                 {cameraError && <div style={{ position: 'absolute', left: 8, right: 8, bottom: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(255,235,238,0.96)', color: '#C62828', fontSize: 11 }}>{cameraError}</div>}
               </div>}
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Category *</label>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <select className="input" style={{ flex: 1, appearance: 'none' }} value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
-                  <option value="">Select category</option>
-                  {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.emoji ?? '📦'} {cat.name}</option>)}
-                </select>
-                <button className="btn" onClick={() => setShowAddCategory(true)} style={{ padding: '11px 12px', background: c.iconBg, border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>+ Cat</button>
-              </div>
             </div>
           </div>
 
@@ -969,7 +1184,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   return (
-      <div className="screen" style={{ background: c.bg }}>
+      <div ref={inventoryScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
         {toastNode}
       {dataError && <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
@@ -1091,13 +1306,23 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
       </div>
 
       {/* FAB */}
-      <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={startNewProduct} style={{
+      <div style={{ position: 'absolute', ...(fabPosition ? { left: fabPosition.x, top: fabPosition.y } : { bottom: 80, right: 16 }) }}>
+        <button
+          className="btn"
+          aria-label="Add product (drag to reposition)"
+          title="Drag to reposition · tap to add product"
+          onPointerDown={startFabDrag}
+          onPointerMove={moveFab}
+          onPointerUp={endFabDrag}
+          onPointerCancel={endFabDrag}
+          onClick={() => { if (!fabWasDragged.current) startNewProduct() }}
+          style={{
           width: 52, height: 52, borderRadius: '50%',
           background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
           border: 'none', fontSize: 24, color: '#0D1B3D',
           boxShadow: '0 4px 16px rgba(212,175,55,0.5)', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          touchAction: 'none', userSelect: 'none',
         }}>+</button>
       </div>
     </div>

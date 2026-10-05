@@ -531,7 +531,7 @@ export default function LoginScreen({ onLogin }: Props) {
       {/* Footer */}
       <div style={{ padding: '0 24px 32px', textAlign: 'center' }}>
         <div style={{ fontSize: 12, color: '#6B7A99' }}>MobiDuka POS v1.1 · SmartScan™ Integrated</div>
-        <div style={{ fontSize: 11, color: '#B0BAD3', marginTop: 4 }}>Powered by MobiTech Solutions Ltd</div>
+        <div style={{ fontSize: 11, color: '#B0BAD3', marginTop: 4 }}>Powered by Degem Ventures</div>
       </div>
     </div>
   )

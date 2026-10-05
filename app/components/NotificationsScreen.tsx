@@ -3,13 +3,20 @@ import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
 type NotificationItem = { id: string; type: string; title: string; body: string; createdAt: string; read: boolean; icon: string }
-type DisplayNotification = NotificationItem & { date: string; time: string }
+type DisplayNotification = NotificationItem & { date: string; time: string; relativeAge: string }
 
 const typeColors: Record<string, { bg: string; border: string; dot: string }> = {
   critical: { bg: '#FFF5F5', border: '#FFCDD2', dot: '#D32F2F' },
   warning: { bg: '#FFF8E1', border: '#FFE082', dot: '#F9A825' },
   success: { bg: '#F1F8E9', border: '#C5E1A5', dot: '#2E7D32' },
   info: { bg: '#E3F2FD', border: '#90CAF9', dot: '#0288D1' },
+}
+
+const typeIcons: Record<string, string> = {
+  critical: '🚨',
+  warning: '⚠️',
+  success: '✅',
+  info: 'ℹ️',
 }
 
 interface Props { onNavigate: (s: string) => void }
@@ -75,7 +82,18 @@ export default function NotificationsScreen({ onNavigate }: Props) {
     const dateKey = date.toLocaleDateString()
     return dateKey === todayKey ? 'Today' : dateKey === new Date(today.getTime() - 86400000).toLocaleDateString() ? 'Yesterday' : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
   }
-  const withDisplayFields: DisplayNotification[] = items.map(item => ({ ...item, date: formatDate(item.createdAt), time: new Date(item.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }))
+  const formatRelativeAge = (createdAt: string) => {
+    const ageInDays = Math.max(1, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86400000))
+    if (ageInDays < 7) return `${ageInDays} ${ageInDays === 1 ? 'day' : 'days'} ago`
+    const ageInWeeks = Math.floor(ageInDays / 7)
+    return `${ageInWeeks} ${ageInWeeks === 1 ? 'week' : 'weeks'} ago`
+  }
+  const withDisplayFields: DisplayNotification[] = items.map(item => ({
+    ...item,
+    date: formatDate(item.createdAt),
+    time: new Date(item.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+    relativeAge: formatRelativeAge(item.createdAt),
+  }))
 
   const today = withDisplayFields.filter(n => n.date === 'Today' && (filter === 'all' || !n.read))
   const yesterday = withDisplayFields.filter(n => n.date === 'Yesterday' && (filter === 'all' || !n.read))
@@ -86,23 +104,25 @@ export default function NotificationsScreen({ onNavigate }: Props) {
       <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</div>
       {data.map(n => (
         <div key={n.id} style={{ position: 'relative', marginBottom: 8 }}>
-        <button className="btn" onClick={() => markRead(n.id)} style={{
+        <button className="btn" onClick={() => { if (!n.read) void markRead(n.id) }} aria-label={n.read ? n.title : `Mark ${n.title} as read`} style={{
           width: '100%', padding: '14px 48px 14px 16px', textAlign: 'left', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-          background: n.read ? c.card : typeColors[n.type].bg,
-          borderRadius: 14, borderLeft: `3px solid ${n.read ? 'transparent' : typeColors[n.type].dot}`,
-          boxShadow: n.read ? '0 1px 4px rgba(0,0,0,0.06)' : `0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px ${typeColors[n.type].border}`
+          background: n.read ? c.card : (typeColors[n.type] ?? typeColors.info).bg,
+          borderRadius: 14, borderLeft: `3px solid ${n.read ? 'transparent' : (typeColors[n.type] ?? typeColors.info).dot}`,
+          boxShadow: n.read ? '0 1px 4px rgba(0,0,0,0.06)' : `0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px ${(typeColors[n.type] ?? typeColors.info).border}`
         }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-            <div style={{ width: 38, height: 38, borderRadius: 10, background: n.read ? c.cardAlt : `${typeColors[n.type].bg}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{n.icon}</div>
+            <div aria-hidden="true" style={{ width: 38, height: 38, borderRadius: 10, background: n.read ? c.cardAlt : (typeColors[n.type] ?? typeColors.info).bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{typeIcons[n.type] ?? n.icon ?? typeIcons.info}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: n.read ? 600 : 700, color: c.text, flex: 1 }}>{n.title}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                  {!n.read && <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColors[n.type].dot, marginTop: 4 }} />}
+                  {!n.read && <div aria-label="Unread" title="Unread" style={{ width: 8, height: 8, borderRadius: '50%', background: (typeColors[n.type] ?? typeColors.info).dot, marginTop: 4 }} />}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: c.muted, marginTop: 3, lineHeight: 1.5 }}>{n.body}</div>
-              <div style={{ fontSize: 11, color: c.faint, marginTop: 4 }}>{n.time}</div>
+              <div style={{ fontSize: 11, color: c.faint, marginTop: 4 }}>
+                {n.time}{n.date !== 'Today' && n.date !== 'Yesterday' && <> · {n.relativeAge}</>}
+              </div>
             </div>
           </div>
         </button>
@@ -114,23 +134,33 @@ export default function NotificationsScreen({ onNavigate }: Props) {
 
   return (
     <div className="screen" style={{ background: c.bg }}>
-      <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '50px 20px 18px', flexShrink: 0 }}>
-        <button className="btn" onClick={() => onNavigate('more')} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, padding: 0, marginBottom: 12 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>Back</span>
+      <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '50px 20px 20px', flexShrink: 0 }}>
+        <button className="btn" aria-label="Back to menu" onClick={() => onNavigate('more')} style={{ width: 38, height: 38, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18, padding: 0, borderRadius: 12, border: '1px solid rgba(255,255,255,0.14)', background: 'rgba(255,255,255,0.1)', color: 'white', cursor: 'pointer' }}>
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <div style={{ color: 'white', fontSize: 22, fontWeight: 800, letterSpacing: -0.3 }}>Notifications</div>
-          {unreadCount > 0 && <div style={{ background: 'rgba(211,47,47,0.92)', borderRadius: 100, padding: '3px 9px', fontSize: 11, fontWeight: 700, color: 'white' }}>{unreadCount} new</div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+              <div style={{ color: 'white', fontSize: 22, fontWeight: 800, letterSpacing: -0.3 }}>Notifications</div>
+              {unreadCount > 0 && <div style={{ background: 'rgba(255,107,107,0.18)', border: '1px solid rgba(255,138,128,0.38)', borderRadius: 100, padding: '4px 9px', fontSize: 11, fontWeight: 700, color: '#FFD0CC' }}>{unreadCount} unread</div>}
+            </div>
+            <div style={{ marginTop: 4, fontSize: 12, color: unreadCount > 0 ? 'rgba(255,255,255,0.74)' : '#A5D6A7' }}>
+              {unreadCount > 0 ? `You have ${unreadCount} new ${unreadCount === 1 ? 'update' : 'updates'}` : 'You’re all caught up'}
+            </div>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 20, marginBottom: 16 }}>
           {unreadCount > 0 && (
-            <button className="btn" onClick={markAllRead} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 100, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.9)', cursor: 'pointer', fontFamily: 'inherit' }}>
-              ✓ Mark all read
+            <button className="btn" onClick={markAllRead} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: 11, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.94)', cursor: 'pointer', fontFamily: 'inherit' }}>
+              <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4L19 6" /><path d="M19 12v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-2" /></svg>
+              Mark all read
             </button>
           )}
-          {items.length > 0 && <button className="btn" onClick={() => confirmClear ? void clearAll() : setConfirmClear(true)} style={{ background: confirmClear ? '#D32F2F' : 'rgba(211,47,47,0.18)', border: '1px solid rgba(255,138,128,0.18)', borderRadius: 100, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: confirmClear ? 'white' : '#FFB4AE', cursor: 'pointer', fontFamily: 'inherit' }}>{confirmClear ? 'Confirm clear' : 'Clear all'}</button>}
-          {confirmClear && <button className="btn" onClick={() => setConfirmClear(false)} style={{ background: 'none', border: 'none', padding: '8px 5px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>}
+          {items.length > 0 && <button className="btn" onClick={() => confirmClear ? void clearAll() : setConfirmClear(true)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38, background: confirmClear ? '#D32F2F' : 'rgba(211,47,47,0.17)', border: '1px solid rgba(255,138,128,0.3)', borderRadius: 11, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2m3 0-.9 14H5.9L5 6m4 4v6m6-6v6" /></svg>
+            {confirmClear ? 'Confirm clear' : 'Clear all'}
+          </button>}
+          {confirmClear && <button className="btn" onClick={() => setConfirmClear(false)} style={{ minHeight: 38, background: 'none', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 11, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.82)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {[['all', 'All'], ['unread', 'Unread']].map(([k, l]) => (
@@ -142,7 +172,10 @@ export default function NotificationsScreen({ onNavigate }: Props) {
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {today.length === 0 && yesterday.length === 0 && older.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: c.faint }}>
-            <div style={{ fontSize: 48, marginBottom: 12 }}>🔔</div>
+            <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={c.faint} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 12 }}>
+              <path d="M3 7.5 12 13l9-5.5" />
+              <path d="M4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11A1.5 1.5 0 0 1 4.5 5Z" />
+            </svg>
             <div style={{ fontSize: 16, fontWeight: 600, color: c.muted }}>No notifications</div>
           </div>
         ) : (

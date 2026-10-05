@@ -1,8 +1,22 @@
-import { useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 
 type ShiftType = { id: string; code: string; name: string; scheduledStart: string; scheduledEnd: string; icon: string | null; color: string | null }
+type ShiftIcon = { value: string; label: string }
+
+const SHIFT_TYPE_ICONS: ShiftIcon[] = [
+  { value: '🌅', label: 'Sunrise' },
+  { value: '☀️', label: 'Sun' },
+  { value: '🌤️', label: 'Partly sunny' },
+  { value: '🌇', label: 'Sunset' },
+  { value: '🌙', label: 'Moon' },
+  { value: '🌃', label: 'Night city' },
+  { value: '🕐', label: 'Clock' },
+  { value: '⏰', label: 'Alarm clock' },
+  { value: '☕', label: 'Coffee' },
+  { value: '📅', label: 'Calendar' },
+]
 
 interface ShiftRecord {
   id: string; cashierId: string | null; cashier: string; initials: string
@@ -15,6 +29,78 @@ interface Props { onNavigate: (s: string) => void; openActiveShift?: boolean }
 const timeToMinutes = (value: string) => {
   const [hours, minutes] = value.split(':').map(Number)
   return hours * 60 + minutes
+}
+
+const shiftDuration = (shiftType: ShiftType) => {
+  const start = timeToMinutes(shiftType.scheduledStart)
+  const end = timeToMinutes(shiftType.scheduledEnd)
+  return (end - start + 1440) % 1440 || 1440
+}
+
+const shiftTimeRanges = (shiftType: ShiftType) => {
+  const start = timeToMinutes(shiftType.scheduledStart)
+  const end = timeToMinutes(shiftType.scheduledEnd)
+  if (start === end) return [[0, 1440]]
+  if (start < end) return [[start, end]]
+  return [[start, 1440], [0, end]]
+}
+
+const shiftTypesOverlap = (left: ShiftType, right: ShiftType) =>
+  shiftTimeRanges(left).some(([leftStart, leftEnd]) =>
+    shiftTimeRanges(right).some(([rightStart, rightEnd]) =>
+      leftStart < rightEnd && rightStart < leftEnd
+    )
+  )
+
+const orderShiftTypes = (shiftTypes: ShiftType[]) => {
+  const standardShiftOrder = new Map([
+    ['morning', 0],
+    ['afternoon', 1],
+    ['night', 2],
+  ])
+  const overlapsAnother = new Map(
+    shiftTypes.map(type => [
+      type.id,
+      shiftTypes.some(other => other.id !== type.id && shiftTypesOverlap(type, other)),
+    ])
+  )
+
+  return [...shiftTypes].sort((left, right) => {
+    const leftStandardOrder = standardShiftOrder.get(left.code)
+    const rightStandardOrder = standardShiftOrder.get(right.code)
+    if (leftStandardOrder !== undefined || rightStandardOrder !== undefined) {
+      if (leftStandardOrder === undefined) return 1
+      if (rightStandardOrder === undefined) return -1
+      return leftStandardOrder - rightStandardOrder
+    }
+
+    const overlapOrder = Number(overlapsAnother.get(left.id)) - Number(overlapsAnother.get(right.id))
+    if (overlapOrder !== 0) return overlapOrder
+    if (overlapsAnother.get(left.id)) {
+      const durationOrder = shiftDuration(left) - shiftDuration(right)
+      if (durationOrder !== 0) return durationOrder
+    }
+    const startDifference = timeToMinutes(left.scheduledStart) - timeToMinutes(right.scheduledStart)
+    if (startDifference !== 0) return startDifference
+    const endDifference = timeToMinutes(left.scheduledEnd) - timeToMinutes(right.scheduledEnd)
+    return endDifference !== 0 ? endDifference : left.name.localeCompare(right.name)
+  })
+}
+
+const formatShiftTime = (value: string) => {
+  const [hours, minutes] = value.split(':').map(Number)
+  return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+const createShiftCode = (name: string, existingCodes: Set<string>) => {
+  const base = name.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'shift'
+  let code = base
+  let suffix = 2
+  while (existingCodes.has(code)) {
+    code = `${base}-${suffix}`
+    suffix += 1
+  }
+  return code
 }
 
 const isShiftTypeAvailableNow = (shiftType: ShiftType, now = new Date()) => {
@@ -33,14 +119,64 @@ const isShiftTypeAvailableNow = (shiftType: ShiftType, now = new Date()) => {
 export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Props) {
   const c = useColors()
   const session = getClientSession()
-  const [view, setView] = useState<'list' | 'start' | 'active'>('list')
+  const [view, setView] = useState<'list' | 'start' | 'active' | 'types'>('list')
   const [shiftTypes, setShiftTypes] = useState<ShiftType[]>([])
   const [selectedShift, setSelectedShift] = useState('')
+  const [newShiftName, setNewShiftName] = useState('')
+  const [newShiftIcon, setNewShiftIcon] = useState('🕐')
+  const [newShiftStart, setNewShiftStart] = useState('08:00')
+  const [newShiftEnd, setNewShiftEnd] = useState('17:00')
+  const [editingShiftTypeId, setEditingShiftTypeId] = useState<string | null>(null)
+  const [shiftTypeDraft, setShiftTypeDraft] = useState({ name: '', icon: '🕐', start: '', end: '' })
+  const [savingShiftType, setSavingShiftType] = useState(false)
+  const [savingShiftTypeEdit, setSavingShiftTypeEdit] = useState(false)
+  const [deletingShiftTypeId, setDeletingShiftTypeId] = useState<string | null>(null)
+  const [shiftTypeMessage, setShiftTypeMessage] = useState('')
   const [staffList, setStaffList] = useState<Array<{ id: string; name: string; role: string; initials: string }>>([])
   const [selectedStaff, setSelectedStaff] = useState('')
   const [pastShifts, setPastShifts] = useState<ShiftRecord[]>([])
   const [activeShift, setActiveShift] = useState<ShiftRecord | null>(null)
   const [dataError, setDataError] = useState('')
+
+  useEffect(() => {
+    if (!shiftTypeMessage) return
+    const timeout = window.setTimeout(() => setShiftTypeMessage(''), 3000)
+    return () => window.clearTimeout(timeout)
+  }, [shiftTypeMessage])
+
+  const renderShiftIconPicker = (value: string, onChange: (icon: string) => void, idPrefix: string) => (
+    <fieldset style={{ border: 0, margin: '0 0 12px', padding: 0 }}>
+      <legend style={{ fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 6 }}>Choose an icon</legend>
+      <div role="group" aria-label="Shift icon" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 7 }}>
+        {SHIFT_TYPE_ICONS.map(icon => {
+          const selected = value === icon.value
+          return (
+            <button
+              key={icon.label}
+              id={`${idPrefix}-${icon.label.toLowerCase().replace(/\s+/g, '-')}`}
+              className="btn"
+              type="button"
+              aria-pressed={selected}
+              aria-label={`Select ${icon.label} icon`}
+              title={icon.label}
+              onClick={() => onChange(icon.value)}
+              style={{
+                height: 40,
+                border: `1px solid ${selected ? '#123A8F' : c.border}`,
+                borderRadius: 10,
+                background: selected ? c.infoBg : c.cardAlt,
+                boxShadow: selected ? '0 0 0 1px #123A8F inset' : 'none',
+                fontSize: 20,
+                cursor: 'pointer',
+              }}
+            >
+              {icon.value}
+            </button>
+          )
+        })}
+      </div>
+    </fieldset>
+  )
 
   const loadShiftData = async () => {
     if (!session) { setDataError('Please sign in to load shifts.'); return }
@@ -50,12 +186,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
         apiFetch<{ sessions: Array<{ id: string; shiftType: string; shift: ShiftType | null; openedAt: string; closedAt: string | null; sales: number; amount: number; cashier: { id: string; fullName: string; role: { name: string } | null } | null }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`),
         apiFetch<{ shiftTypes: ShiftType[] }>(`/api/shift-types?businessId=${encodeURIComponent(session.user.businessId)}`),
       ])
-      const orderedShiftTypes = [...(shiftTypeResponse.shiftTypes ?? [])].sort((left, right) => {
-        const startDifference = timeToMinutes(left.scheduledStart) - timeToMinutes(right.scheduledStart)
-        if (startDifference !== 0) return startDifference
-        const endDifference = timeToMinutes(left.scheduledEnd) - timeToMinutes(right.scheduledEnd)
-        return endDifference !== 0 ? endDifference : left.name.localeCompare(right.name)
-      })
+      const orderedShiftTypes = orderShiftTypes(shiftTypeResponse.shiftTypes ?? [])
       setShiftTypes(orderedShiftTypes)
       const availableShift = orderedShiftTypes.find(shiftType => isShiftTypeAvailableNow(shiftType))
       if (availableShift) setSelectedShift(availableShift.id)
@@ -103,6 +234,112 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   const openStartView = async () => {
     await loadShiftData()
     setView('start')
+  }
+
+  const saveShiftType = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!session) {
+      setDataError('Please sign in to create shift types.')
+      return
+    }
+
+    const name = newShiftName.trim()
+    if (!name || !newShiftStart || !newShiftEnd) {
+      setDataError('Enter a shift name, start time, and end time.')
+      return
+    }
+
+    setSavingShiftType(true)
+    setDataError('')
+    setShiftTypeMessage('')
+    try {
+      const code = createShiftCode(name, new Set(shiftTypes.map(type => type.code)))
+      const response = await apiFetch<{ shiftType: ShiftType }>('/api/shift-types', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessId: session.user.businessId,
+          code,
+          name,
+          scheduledStart: newShiftStart,
+          scheduledEnd: newShiftEnd,
+          icon: newShiftIcon,
+          color: '#123A8F',
+        }),
+      })
+      setShiftTypes(types => orderShiftTypes([...types, response.shiftType]))
+      setNewShiftName('')
+      setNewShiftIcon('🕐')
+      setNewShiftStart('08:00')
+      setNewShiftEnd('17:00')
+      setShiftTypeMessage(`${response.shiftType.name} shift type created and is ready to use.`)
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to create shift type.')
+    } finally {
+      setSavingShiftType(false)
+    }
+  }
+
+  const beginShiftTypeEdit = (shiftType: ShiftType) => {
+    setEditingShiftTypeId(shiftType.id)
+    setShiftTypeDraft({ name: shiftType.name, icon: shiftType.icon ?? '🕐', start: shiftType.scheduledStart, end: shiftType.scheduledEnd })
+    setDataError('')
+    setShiftTypeMessage('')
+  }
+
+  const saveShiftTypeEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!session || !editingShiftTypeId) {
+      setDataError('Select a shift type to edit.')
+      return
+    }
+    const name = shiftTypeDraft.name.trim()
+    if (!name || !shiftTypeDraft.start || !shiftTypeDraft.end) {
+      setDataError('Enter a shift name, start time, and end time.')
+      return
+    }
+
+    setSavingShiftTypeEdit(true)
+    setDataError('')
+    setShiftTypeMessage('')
+    try {
+      const response = await apiFetch<{ shiftType: ShiftType }>('/api/shift-types', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          businessId: session.user.businessId,
+          id: editingShiftTypeId,
+          name,
+          icon: shiftTypeDraft.icon,
+          scheduledStart: shiftTypeDraft.start,
+          scheduledEnd: shiftTypeDraft.end,
+        }),
+      })
+      setShiftTypes(types => orderShiftTypes(types.map(type => type.id === response.shiftType.id ? response.shiftType : type)))
+      setShiftTypeMessage(`${response.shiftType.name} shift type updated.`)
+      setEditingShiftTypeId(null)
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to update shift type.')
+    } finally {
+      setSavingShiftTypeEdit(false)
+    }
+  }
+
+  const deleteShiftType = async (shiftType: ShiftType) => {
+    if (!session || !window.confirm(`Remove "${shiftType.name}" from available shift types? Past shift history will be preserved.`)) return
+
+    setDeletingShiftTypeId(shiftType.id)
+    setDataError('')
+    setShiftTypeMessage('')
+    try {
+      await apiFetch(`/api/shift-types?id=${encodeURIComponent(shiftType.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
+      setShiftTypes(types => types.filter(type => type.id !== shiftType.id))
+      setSelectedShift(selected => selected === shiftType.id ? '' : selected)
+      setShiftTypeMessage(`${shiftType.name} was removed. Past shift history is preserved.`)
+      if (editingShiftTypeId === shiftType.id) setEditingShiftTypeId(null)
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to delete shift type.')
+    } finally {
+      setDeletingShiftTypeId(null)
+    }
   }
 
   const endShift = async () => {
@@ -249,6 +486,128 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
     )
   }
 
+  if (view === 'types') {
+    return (
+      <div className="screen" style={{ background: c.bg }}>
+        <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button className="btn" onClick={() => setView('list')} aria-label="Back to shift management" style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+            </button>
+            <div>
+              <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Shift Types</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>
+                Reusable employee time slots · {shiftTypes.length} available {shiftTypes.length === 1 ? 'shift' : 'shifts'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="scroll-area" style={{ padding: '16px', paddingBottom: 100 }}>
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: c.errorBg, color: '#C62828', fontSize: 12 }}>{dataError}</div>}
+          {shiftTypeMessage && <div role="status" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: c.successBg, color: '#2E7D32', fontSize: 12 }}>{shiftTypeMessage}</div>}
+
+          <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', margin: '0 0 8px 4px' }}>Available Shifts</div>
+          <div className="card" style={{ overflow: 'hidden', marginBottom: 16 }}>
+            {shiftTypes.length === 0 ? (
+              <div style={{ padding: 16, fontSize: 12, color: c.muted }}>No shift types yet. Create your first time slot below.</div>
+            ) : shiftTypes.map((shift, index) => {
+              const isEditing = editingShiftTypeId === shift.id
+              const isDeleting = deletingShiftTypeId === shift.id
+              return (
+                <div key={shift.id} style={{ display: 'flex', alignItems: isEditing ? 'flex-start' : 'center', gap: 12, padding: '13px 12px', borderBottom: index < shiftTypes.length - 1 ? c.divider : 'none' }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 12, background: c.tint(shift.color ?? '#123A8F'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{isEditing ? shiftTypeDraft.icon : shift.icon ?? '🕐'}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {isEditing ? (
+                      <form id={`edit-shift-type-${shift.id}`} onSubmit={saveShiftTypeEdit}>
+                        {renderShiftIconPicker(shiftTypeDraft.icon, icon => setShiftTypeDraft(draft => ({ ...draft, icon })), `edit-icon-${shift.id}`)}
+                        <input
+                          className="input"
+                          aria-label="Shift name"
+                          required
+                          maxLength={60}
+                          value={shiftTypeDraft.name}
+                          onChange={event => setShiftTypeDraft(draft => ({ ...draft, name: event.target.value }))}
+                          style={{ marginBottom: 8 }}
+                        />
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                          <label style={{ fontSize: 10, fontWeight: 600, color: c.muted }}>
+                            Starts
+                            <input className="input" aria-label="Shift start time" type="time" required value={shiftTypeDraft.start} onChange={event => setShiftTypeDraft(draft => ({ ...draft, start: event.target.value }))} style={{ display: 'block', width: '100%', marginTop: 4, boxSizing: 'border-box' }} />
+                          </label>
+                          <label style={{ fontSize: 10, fontWeight: 600, color: c.muted }}>
+                            Ends
+                            <input className="input" aria-label="Shift end time" type="time" required value={shiftTypeDraft.end} onChange={event => setShiftTypeDraft(draft => ({ ...draft, end: event.target.value }))} style={{ display: 'block', width: '100%', marginTop: 4, boxSizing: 'border-box' }} />
+                          </label>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{shift.name}</div>
+                        <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{formatShiftTime(shift.scheduledStart)} – {formatShiftTime(shift.scheduledEnd)}</div>
+                      </>
+                    )}
+                  </div>
+                  {isEditing ? (
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <button className="btn" type="submit" form={`edit-shift-type-${shift.id}`} disabled={savingShiftTypeEdit} aria-label={`Save ${shift.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.successBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                      </button>
+                      <button className="btn" type="button" onClick={() => setEditingShiftTypeId(null)} disabled={savingShiftTypeEdit} aria-label="Cancel editing shift type" style={{ width: 30, height: 30, borderRadius: 8, background: c.cardAlt, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.muted, cursor: 'pointer' }}>
+                        <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="m18 6-12 12M6 6l12 12" /></svg>
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      <div style={{ padding: '4px 8px', borderRadius: 100, background: c.cardAlt, color: c.muted, fontSize: 10, fontWeight: 600 }}>
+                        {shift.scheduledStart}–{shift.scheduledEnd}
+                      </div>
+                      <button className="btn" onClick={() => beginShiftTypeEdit(shift)} aria-label={`Edit ${shift.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                        <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                      </button>
+                      <button className="btn" onClick={() => void deleteShiftType(shift)} disabled={isDeleting || deletingShiftTypeId !== null} aria-label={`Delete ${shift.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isDeleting ? 'wait' : 'pointer' }}>
+                        <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="card" style={{ padding: 18 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: c.text, marginBottom: 4 }}>Create shift type</div>
+            <div style={{ fontSize: 11, color: c.muted, lineHeight: 1.45, marginBottom: 14 }}>Employees will eventually choose from these scheduled time slots.</div>
+            <form onSubmit={saveShiftType}>
+              {renderShiftIconPicker(newShiftIcon, setNewShiftIcon, 'new-shift-icon')}
+              <div style={{ marginBottom: 12 }}>
+                <label htmlFor="shift-type-name" style={{ display: 'block', fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 5 }}>Shift name</label>
+                <input id="shift-type-name" className="input" required maxLength={60} value={newShiftName} onChange={event => setNewShiftName(event.target.value)} placeholder="e.g. Weekend, Split Shift" />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label htmlFor="shift-type-start" style={{ display: 'block', fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 5 }}>Starts</label>
+                  <input id="shift-type-start" className="input" type="time" required value={newShiftStart} onChange={event => setNewShiftStart(event.target.value)} />
+                </div>
+                <div>
+                  <label htmlFor="shift-type-end" style={{ display: 'block', fontSize: 11, fontWeight: 600, color: c.muted, marginBottom: 5 }}>Ends</label>
+                  <input id="shift-type-end" className="input" type="time" required value={newShiftEnd} onChange={event => setNewShiftEnd(event.target.value)} />
+                </div>
+              </div>
+              <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: c.infoBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ fontSize: 11, color: c.muted }}>Time slot preview</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: c.text }}>{newShiftStart && newShiftEnd ? `${formatShiftTime(newShiftStart)} – ${formatShiftTime(newShiftEnd)}` : 'Choose start and end times'}</div>
+              </div>
+              <button className="btn" type="submit" disabled={savingShiftType} style={{ width: '100%', marginTop: 14, padding: 14, background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, color: 'white', fontSize: 14, fontWeight: 700, cursor: savingShiftType ? 'wait' : 'pointer', opacity: savingShiftType ? 0.65 : 1, fontFamily: 'inherit' }}>
+                {savingShiftType ? 'Adding…' : 'Add Shift Type'}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ── Shift List ───────────────────────────────────────────────────────────
   const grouped = pastShifts.reduce<Record<string, ShiftRecord[]>>((acc, s) => {
     acc[s.date] = acc[s.date] ? [...acc[s.date], s] : [s]
@@ -271,6 +630,9 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Shift Management</div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>{pastShifts.length} shifts logged this week</div>
           </div>
+          <button className="btn" aria-label="Manage shift types" onClick={() => { setDataError(''); setShiftTypeMessage(''); setView('types') }} style={{ width: 38, height: 38, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', flexShrink: 0 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.1 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2v-4h.4A1.7 1.7 0 0 0 4.1 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.5 4.1a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2h4v.4A1.7 1.7 0 0 0 15 4.1a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8.5a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.9v4h-.9A1.7 1.7 0 0 0 19.4 15Z" /></svg>
+          </button>
           <button className="btn" onClick={() => void openStartView()} style={{ marginLeft: 'auto', background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit' }}>
             + Start
           </button>

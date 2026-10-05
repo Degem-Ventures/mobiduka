@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../lib/prisma.ts';
-import { POST } from '../app/api/sales/route.ts';
+import { GET, POST } from '../app/api/sales/route.ts';
 
 function makeJwtForBusiness(businessId: string, userId: string) {
   const secret = process.env.JWT_SECRET || 'mobiduka-dev-secret-change-me';
@@ -81,7 +81,9 @@ test('cash sales create a cash payment record', async () => {
           businessId: business.id,
           cashierId: user.id,
           invoiceNo,
-          totalAmount: 100,
+          totalAmount: 90,
+          subtotal: 100,
+          discountAmount: 10,
           paymentMode: 'CASH',
           items: [{ productId: product.id, quantity: 1, unitPrice: 100, total: 100 }],
         }),
@@ -97,11 +99,31 @@ test('cash sales create a cash payment record', async () => {
 
     assert.equal(payments.length, 1, 'cash sale should persist a payment record');
     assert.equal(payments[0].paymentMethod.name, 'CASH', 'cash payment method should be stored');
+    assert.equal(payments[0].amount, 90, 'payment amount should use the discounted total');
+
+    const historyResponse = await GET(
+      new Request(`http://localhost/api/sales?businessId=${business.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
+    assert.equal(historyResponse.status, 200, 'receipt history should load');
+    const history = await historyResponse.json();
+    const receipt = history.receipts.find(
+      (item: { saleNumber: string }) => item.saleNumber === invoiceNo,
+    );
+    assert.ok(receipt, 'completed sale should appear in receipt history');
+    assert.equal(receipt.subtotal, 100, 'history should retain the pre-discount subtotal');
+    assert.equal(receipt.discountAmount, 10, 'history should retain the discount');
+    assert.equal(receipt.total, 90, 'history should show the paid total');
+    assert.equal(receipt.cashier, 'Cashier One');
+    assert.equal(receipt.paymentMethod, 'CASH');
+    assert.equal(receipt.items[0].quantity, 1);
   } finally {
     if (businessId) {
       await prisma.payment.deleteMany({ where: { sale: { businessId: businessId } } });
       await prisma.saleItem.deleteMany({ where: { sale: { businessId: businessId } } });
       await prisma.auditLog.deleteMany({ where: { businessId: businessId } });
+      await prisma.notification.deleteMany({ where: { businessId: businessId } });
       await prisma.syncQueue.deleteMany({ where: { businessId: businessId } });
       await prisma.sale.deleteMany({ where: { businessId: businessId } });
       await prisma.inventory.deleteMany({ where: { businessId: businessId } });

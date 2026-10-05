@@ -130,6 +130,22 @@
       }
     },
     "/sales": {
+      "get": {
+        "tags": ["Sales"],
+        "summary": "List completed receipts with cursor pagination",
+        "description": "Returns the most recent completed sales first. The requested page size defaults to 10 and is capped at 20.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 20, "default": 10 } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Sale ID returned as nextCursor on the preceding page." }
+        ],
+        "responses": {
+          "200": { "description": "Receipt page returned.", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "type": "boolean" }, "business": { "type": "object", "properties": { "name": { "type": "string" }, "branch": { "type": "string", "nullable": true } } }, "nextCursor": { "type": "string", "nullable": true }, "receipts": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "saleNumber": { "type": "string" }, "createdAt": { "type": "string", "format": "date-time" }, "businessName": { "type": "string" }, "businessBranch": { "type": "string", "nullable": true }, "subtotal": { "type": "number" }, "discountAmount": { "type": "number" }, "total": { "type": "number" }, "cashier": { "type": "string" }, "customer": { "type": "string", "nullable": true }, "paymentMethod": { "type": "string" }, "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "price": { "type": "number" }, "quantity": { "type": "number" }, "total": { "type": "number" }, "emoji": { "type": "string" } } } } } } } } } } } },
+          "400": { "description": "Receipt history cursor is invalid." },
+          "401": { "description": "Authenticated business context is required." },
+          "404": { "description": "Business not found." }
+        }
+      },
       "post": {
         "tags": ["Sales"],
         "summary": "Process Sales Order Records",
@@ -144,6 +160,8 @@
                   "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
                   "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID. For another deployment, use the authenticated user id from login." },
                   "invoiceNo": { "type": "string", "example": "INV-1001" },
+                  "subtotal": { "type": "number", "description": "Pre-discount item subtotal. Defaults to the sum of item line prices." },
+                  "discountAmount": { "type": "number", "minimum": 0, "description": "Sale-level discount amount." },
                   "totalAmount": { "type": "number", "example": 100.0 },
                   "paymentMode": { "type": "string", "example": "CASH" },
                   "mpesaRef": { "type": "string", "example": "QX728HJ92K" },
@@ -467,6 +485,7 @@
                       "properties": {
                         "businessId": { "type": "string", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
                         "name": { "type": "string", "example": "MobiDuka Wholesale Eldoret" },
+                        "branch": { "type": "string", "nullable": true },
                         "country": { "type": "string", "example": "Kenya" },
                         "currency": { "type": "string", "example": "KES" },
                         "timezone": { "type": "string", "example": "Africa/Nairobi" },
@@ -477,11 +496,14 @@
                       "type": "object",
                       "properties": {
                         "todayRevenue": { "type": "number", "example": 84250 },
+                        "yesterdayRevenue": { "type": "number" },
                         "todayProfit": { "type": "number", "example": 61210 },
+                        "todayExpenseTotal": { "type": "number" },
                         "todayTransactionCount": { "type": "integer", "example": 18 },
                         "periodRevenue": { "type": "number", "example": 524850 },
                         "periodProfit": { "type": "number", "example": 318172 },
                         "profitMarginPercentage": { "type": "number", "example": 60.6 },
+                        "periodProfitMarginPercentage": { "type": "number" },
                         "cashInTill": { "type": "number", "example": 28200 },
                         "creditOut": { "type": "number", "example": 15250 },
                         "creditCustomerCount": { "type": "integer", "example": 6 },
@@ -490,6 +512,8 @@
                         "lowStockCount": { "type": "integer", "example": 3 }
                       }
                     },
+                    "lastCashCountAt": { "type": "string", "format": "date-time", "nullable": true },
+                    "shiftTypes": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" } } } },
                     "paymentBreakdown": {
                       "type": "object",
                       "additionalProperties": { "type": "object", "properties": { "amount": { "type": "number" }, "transactions": { "type": "integer" } } }
@@ -729,7 +753,9 @@
     },
     "/shift-types": {
       "get": { "tags": ["Business"], "summary": "List active business shift types", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active shift types ordered by scheduled start time. Seeded schedules include Morning 06:00-14:00, Afternoon 14:00-22:00, and Night 22:00-06:00." } } },
-      "post": { "tags": ["Business"], "summary": "Create or update a business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "code", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" }, "icon": { "type": "string", "nullable": true }, "color": { "type": "string", "nullable": true }, "active": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "201": { "description": "Shift type created." } } }
+      "post": { "tags": ["Business"], "summary": "Create or update a business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "code", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" }, "icon": { "type": "string", "nullable": true }, "color": { "type": "string", "nullable": true }, "active": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "201": { "description": "Shift type created." } } },
+      "patch": { "tags": ["Business"], "summary": "Edit an active business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "icon": { "type": "string", "description": "Shift icon selected from the shift icon picker." }, "scheduledStart": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, "scheduledEnd": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "400": { "description": "Invalid shift type data." }, "404": { "description": "Shift type not found." } } },
+      "delete": { "tags": ["Business"], "summary": "Remove an active shift type from available shifts", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Shift type soft-deleted; historical shift sessions are preserved." }, "404": { "description": "Shift type not found." } } }
     },
     "/suppliers": {
       "get": { "tags": ["Business"], "summary": "List suppliers for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Suppliers returned with product and purchase-order counts." }, "401": { "description": "Authenticated business context is required." } } },
@@ -744,9 +770,9 @@
       "delete": { "tags": ["Inventory"], "summary": "Delete an empty product category", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Category deleted." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Category not found." }, "409": { "description": "Category still has products or child categories." } } }
     },
     "/products": {
-      "get": { "tags": ["Inventory"], "summary": "List products and inventory", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Product catalog returned." }, "401": { "description": "Authenticated business context is required." } } },
-      "post": { "tags": ["Inventory"], "summary": "Create a product", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" } } } } } }, "responses": { "201": { "description": "Product created." }, "401": { "description": "Authenticated business context is required." } } },
-      "patch": { "tags": ["Inventory"], "summary": "Update a product and optionally set stock", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" } } } } } }, "responses": { "200": { "description": "Product updated." }, "400": { "description": "Invalid product data." }, "404": { "description": "Product not found." } } },
+      "get": { "tags": ["Inventory"], "summary": "List products and inventory", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "includeDeleted", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "description": "When true, return only soft-deleted products." }], "responses": { "200": { "description": "Product catalog returned with recent 30-day units sold." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Inventory"], "summary": "Create a product", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string", "description": "Product type/name. Combined with brand and packSize for the stored display name." }, "brand": { "type": "string", "nullable": true }, "productType": { "type": "string", "description": "Structured product type; defaults to name." }, "packSize": { "type": "string", "nullable": true }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Product created." }, "401": { "description": "Authenticated business context is required." }, "400": { "description": "Product creation failed." } } },
+      "patch": { "tags": ["Inventory"], "summary": "Update a product and optionally set stock", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "brand": { "type": "string", "nullable": true }, "productType": { "type": "string" }, "packSize": { "type": "string", "nullable": true }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Product updated." }, "400": { "description": "Invalid product data." }, "404": { "description": "Product not found." } } },
       "delete": { "tags": ["Inventory"], "summary": "Soft-delete a product or hard-delete an unreferenced product", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "hard", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } }], "responses": { "200": { "description": "Product deleted." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Product not found." }, "409": { "description": "Product has historical records and can only be soft-deleted." } } }
     },
     "/expenses": {
