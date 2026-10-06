@@ -24,6 +24,9 @@ type ProductApiRow = {
   inventory: { quantity: number } | null
 }
 type Toast = { message: string; tone: 'success' | 'error' }
+type PermanentDeleteTarget =
+  | { kind: 'product'; item: ProductItem }
+  | { kind: 'category'; item: CategoryItem }
 const createProductForm = (categoryId = '', barcode = '') => ({
   name: '', brand: '', packSize: '', categoryId, cost: '', price: '', stock: '', reorder: '', barcode,
   emoji: DEFAULT_INVENTORY_EMOJI,
@@ -31,6 +34,88 @@ const createProductForm = (categoryId = '', barcode = '') => ({
 
 const sortProductsByCategoryThenName = (left: ProductItem, right: ProductItem) =>
   left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
+
+function PermanentDeleteDialog({
+  target,
+  saving,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  target: PermanentDeleteTarget
+  saving: boolean
+  error: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const c = useColors()
+  const itemName = target.item.name
+
+  return (
+    <div
+      role="presentation"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget && !saving) onCancel()
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1200,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+        background: 'rgba(8, 18, 42, 0.62)',
+        backdropFilter: 'blur(4px)',
+      }}
+    >
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="permanent-delete-title"
+        aria-describedby="permanent-delete-description"
+        style={{
+          width: '100%',
+          maxWidth: 380,
+          padding: 22,
+          borderRadius: 20,
+          background: c.card,
+          color: c.text,
+          boxShadow: '0 24px 72px rgba(0,0,0,0.3)',
+        }}
+      >
+        <div style={{ width: 48, height: 48, marginBottom: 16, borderRadius: 15, display: 'grid', placeItems: 'center', color: '#C62828', background: c.errorBg }}>
+          <svg aria-hidden="true" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" />
+            <path d="M8 6V4h8v2" />
+            <path d="m19 6-1 14H6L5 6" />
+            <path d="M10 11v5M14 11v5" />
+          </svg>
+        </div>
+        <h2 id="permanent-delete-title" style={{ margin: '0 0 8px', fontSize: 18, lineHeight: 1.3, fontWeight: 800 }}>
+          Permanently delete {target.kind}?
+        </h2>
+        <p id="permanent-delete-description" style={{ margin: '0 0 14px', color: c.muted, fontSize: 13, lineHeight: 1.55 }}>
+          <strong style={{ color: c.text }}>{itemName}</strong> will be removed permanently and cannot be restored.
+        </p>
+        <div style={{ marginBottom: 18, padding: '10px 12px', borderRadius: 12, background: c.errorBg, color: '#A32323', fontSize: 12, lineHeight: 1.5 }}>
+          {target.kind === 'product'
+            ? 'Products linked to sales, purchases, stock movements, or scan history are protected and cannot be permanently deleted.'
+            : 'Active products or child categories prevent deletion. Archived products stay safe but will become uncategorized.'}
+        </div>
+        {error && <div role="alert" style={{ marginBottom: 14, color: '#B71C1C', fontSize: 12, lineHeight: 1.45 }}>{error}</div>}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button type="button" className="btn" onClick={onCancel} disabled={saving} style={{ flex: 1, minHeight: 44, border: `1px solid ${c.border}`, borderRadius: 12, background: c.card, color: c.text, fontSize: 13, fontWeight: 700, cursor: saving ? 'wait' : 'pointer' }}>
+            Keep {target.kind}
+          </button>
+          <button type="button" className="btn" onClick={onConfirm} disabled={saving} style={{ flex: 1, minHeight: 44, border: 'none', borderRadius: 12, background: saving ? '#A9A9A9' : '#C62828', color: 'white', fontSize: 13, fontWeight: 800, cursor: saving ? 'wait' : 'pointer' }}>
+            {saving ? 'Deleting…' : 'Delete permanently'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
 
 interface Props {
   onNavigate: (s: string, options?: { barcode?: string }) => void
@@ -68,6 +153,8 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [showDeleted, setShowDeleted] = useState(false)
   const [isInventoryLoading, setIsInventoryLoading] = useState(true)
   const [deletedProductCount, setDeletedProductCount] = useState(0)
+  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<PermanentDeleteTarget | null>(null)
+  const [permanentDeleteError, setPermanentDeleteError] = useState('')
   const [toast, setToast] = useState<Toast | null>(null)
   const [showBarcodeCamera, setShowBarcodeCamera] = useState(false)
   const [cameraError, setCameraError] = useState('')
@@ -129,7 +216,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }, [showBarcodeCamera])
 
   const toastNode = toast && (
-    <div role="status" aria-live="polite" style={{ position: 'fixed', top: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, maxWidth: 'calc(100vw - 32px)', padding: '12px 16px', borderRadius: 12, background: toast.tone === 'success' ? '#2E7D32' : '#B71C1C', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>
+    <div role="status" aria-live="polite" style={{ position: 'fixed', top: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 2000, maxWidth: 'calc(100vw - 32px)', padding: '12px 16px', borderRadius: 12, background: toast.tone === 'success' ? '#2E7D32' : '#B71C1C', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>
       {toast.message}
     </div>
   )
@@ -303,6 +390,33 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     }
   }
 
+  const permanentlyDeleteItem = async () => {
+    if (!session || !permanentDeleteTarget) return
+    setSaving(true)
+    setPermanentDeleteError('')
+    try {
+      const { kind, item } = permanentDeleteTarget
+      const endpoint = kind === 'product' ? '/api/products' : '/api/categories'
+      await apiFetch(
+        `${endpoint}?id=${encodeURIComponent(item.id)}&businessId=${encodeURIComponent(session.user.businessId)}&hard=true`,
+        { method: 'DELETE' },
+      )
+      if (kind === 'product') {
+        setDeletedProducts(previous => previous.filter(product => product.id !== item.id))
+        setDeletedProductCount(previous => Math.max(0, previous - 1))
+      } else {
+        setDeletedCategories(previous => previous.filter(category => category.id !== item.id))
+      }
+      setPermanentDeleteTarget(null)
+      notify(`${kind === 'product' ? 'Product' : 'Category'} permanently deleted.`)
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Unable to permanently delete this item.'
+      setPermanentDeleteError(message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const saveCategoryName = async (category: CategoryItem) => {
     if (!session) return
     const name = editingCategoryName.trim()
@@ -360,7 +474,6 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
       notify('Category deleted.')
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Unable to delete category.'
-      setDataError(message)
       notify(message, 'error')
     } finally {
       setSaving(false)
@@ -901,6 +1014,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     return (
       <div className="screen" style={{ background: c.bg }}>
         {toastNode}
+        {permanentDeleteTarget && <PermanentDeleteDialog target={permanentDeleteTarget} saving={saving} error={permanentDeleteError} onCancel={() => setPermanentDeleteTarget(null)} onConfirm={() => void permanentlyDeleteItem()} />}
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => { setShowManageCategories(false); setEditingCategoryId(null) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} aria-label="Back to inventory">
@@ -949,11 +1063,23 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
               )
             })}
           </div>
-          {deletedCategories.length > 0 && <div className="card" style={{ padding: '16px', marginBottom: 14, opacity: 0.8 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Deleted Categories</div>
-            {deletedCategories.map((category, index) => <div key={category.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 0', borderBottom: index < deletedCategories.length - 1 ? c.divider : 'none' }}>
-              <div style={{ flex: 1, fontSize: 13, color: c.muted, textDecoration: 'line-through' }}>{category.emoji ?? '📦'} {category.name}</div>
-              <button className="btn" onClick={() => void restoreCategory(category)} disabled={saving} style={{ padding: '7px 10px', borderRadius: 8, background: c.successBg, border: 'none', color: '#2E7D32', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>Restore</button>
+          {deletedCategories.length > 0 && <div className="card" style={{ padding: '16px', marginBottom: 14, border: `1px solid ${c.border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Deleted Categories</div>
+              <div style={{ fontSize: 11, color: c.faint }}>{deletedCategories.length} archived</div>
+            </div>
+            {deletedCategories.map((category, index) => <div key={category.id} className="deleted-item-row" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '10px', margin: '0 -10px', border: '1px solid transparent', borderBottom: index < deletedCategories.length - 1 ? c.divider : '1px solid transparent', borderRadius: 12 }}>
+              <div style={{ flex: '1 1 120px', minWidth: 0, fontSize: 13, color: c.muted }}>
+                <span aria-hidden="true" style={{ marginRight: 7 }}>{category.emoji ?? '📦'}</span>{category.name}
+                <div style={{ margin: '3px 0 0 25px', fontSize: 10, color: c.faint }}>Archived category</div>
+              </div>
+              <button className="btn" onClick={() => void restoreCategory(category)} disabled={saving} style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, background: c.successBg, border: 'none', color: '#2E7D32', cursor: saving ? 'wait' : 'pointer', fontWeight: 700, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" /><path d="M3 3v5h5" /></svg>
+                Restore
+              </button>
+              <button className="btn deleted-item-permanent-action" onClick={() => { setPermanentDeleteError(''); setPermanentDeleteTarget({ kind: 'category', item: category }) }} disabled={saving} aria-label={`Permanently delete category ${category.name}`} title="Delete permanently" style={{ width: 36, height: 36, padding: 0, borderRadius: 10, background: c.errorBg, border: 'none', color: '#B71C1C', cursor: saving ? 'wait' : 'pointer', display: 'grid', placeItems: 'center' }}>
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>
+              </button>
             </div>)}
           </div>}
           <div className="card" style={{ padding: '16px' }}>
@@ -1186,6 +1312,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   return (
       <div ref={inventoryScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
         {toastNode}
+        {permanentDeleteTarget && <PermanentDeleteDialog target={permanentDeleteTarget} saving={saving} error={permanentDeleteError} onCancel={() => setPermanentDeleteTarget(null)} onConfirm={() => void permanentlyDeleteItem()} />}
       {dataError && <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -1293,10 +1420,18 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase' }}>Deleted Products</div>
             <div style={{ fontSize: 11, color: c.muted }}>{deletedProducts.length} item{deletedProducts.length === 1 ? '' : 's'}</div>
           </div>
-          {deletedProducts.length === 0 ? <div className="card" style={{ padding: '14px', fontSize: 12, color: c.muted, textAlign: 'center' }}>No deleted products.</div> : deletedProducts.map(product => <div key={product.id} className="card" style={{ marginBottom: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, opacity: 0.7 }}>
+          {deletedProducts.length === 0 ? <div style={{ padding: '12px 0', fontSize: 12, color: c.muted, textAlign: 'center' }}>Your deleted products will appear here.</div> : deletedProducts.map(product => <div key={product.id} className="card deleted-item-row" style={{ marginBottom: 8, padding: '12px 14px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, border: '1px solid transparent' }}>
             <div style={{ width: 42, height: 42, borderRadius: 12, background: c.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 21 }}>{product.emoji}</div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: c.muted, textDecoration: 'line-through' }}>{product.name}</div><div style={{ fontSize: 11, color: c.faint }}>{product.category} · KSh {product.price}</div></div>
-            <button className="btn" onClick={() => void restoreProduct(product)} disabled={saving} style={{ padding: '7px 10px', borderRadius: 8, background: c.successBg, border: 'none', color: '#2E7D32', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>Restore</button>
+            <div style={{ flex: '1 1 130px', minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{product.name}</div><div style={{ fontSize: 11, color: c.faint }}>{product.category} · KSh {product.price}</div></div>
+            <div style={{ display: 'flex', gap: 7, marginLeft: 'auto' }}>
+              <button className="btn" onClick={() => void restoreProduct(product)} disabled={saving} style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, background: c.successBg, border: 'none', color: '#2E7D32', cursor: saving ? 'wait' : 'pointer', fontWeight: 700, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" /><path d="M3 3v5h5" /></svg>
+                Restore
+              </button>
+              <button className="btn deleted-item-permanent-action" onClick={() => { setPermanentDeleteError(''); setPermanentDeleteTarget({ kind: 'product', item: product }) }} disabled={saving} aria-label={`Permanently delete product ${product.name}`} title="Delete permanently" style={{ width: 36, height: 36, padding: 0, borderRadius: 10, background: c.errorBg, border: 'none', color: '#B71C1C', cursor: saving ? 'wait' : 'pointer', display: 'grid', placeItems: 'center' }}>
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>
+              </button>
+            </div>
           </div>)}
         </div>}
         <button className="btn" onClick={() => setShowManageCategories(true)} style={{ width: '100%', marginTop: 10, padding: '12px', background: c.cardAlt, border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>

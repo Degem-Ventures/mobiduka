@@ -21,6 +21,8 @@ test('cash sales create a cash payment record', async () => {
   const roleName = `CASHIER`;
   const email = `cashier-${suffix}@example.com`;
   const username = `cashier-${suffix}`;
+  const operatorEmail = `operator-${suffix}@example.com`;
+  const operatorUsername = `operator-${suffix}`;
   const productSku = `TEST-PRODUCT-${suffix}`;
 
   let businessId = '';
@@ -52,6 +54,16 @@ test('cash sales create a cash payment record', async () => {
         status: 'ACTIVE',
       },
     });
+    const operator = await prisma.user.create({
+      data: {
+        businessId: business.id,
+        roleId: role.id,
+        fullName: 'Cashier Two',
+        username: operatorUsername,
+        email: operatorEmail,
+        status: 'ACTIVE',
+      },
+    });
     const product = await prisma.product.create({
       data: {
         businessId: business.id,
@@ -79,7 +91,7 @@ test('cash sales create a cash payment record', async () => {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           businessId: business.id,
-          cashierId: user.id,
+          cashierId: operator.id,
           invoiceNo,
           totalAmount: 90,
           subtotal: 100,
@@ -115,7 +127,7 @@ test('cash sales create a cash payment record', async () => {
     assert.equal(receipt.subtotal, 100, 'history should retain the pre-discount subtotal');
     assert.equal(receipt.discountAmount, 10, 'history should retain the discount');
     assert.equal(receipt.total, 90, 'history should show the paid total');
-    assert.equal(receipt.cashier, 'Cashier One');
+    assert.equal(receipt.cashier, 'Cashier Two');
     assert.equal(receipt.paymentMethod, 'CASH');
     assert.equal(receipt.items[0].quantity, 1);
   } finally {

@@ -121,6 +121,37 @@ body {
   background: rgba(18, 58, 143, 0.08);
 }
 
+.deleted-item-row {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.deleted-item-row:hover,
+.deleted-item-row:focus-within {
+  border-color: rgba(18, 58, 143, 0.2);
+  box-shadow: 0 6px 18px rgba(13, 27, 61, 0.08);
+  transform: translateY(-1px);
+}
+
+.deleted-item-permanent-action {
+  opacity: 0;
+  transform: scale(0.88);
+  transition: opacity 0.16s ease, transform 0.16s ease, background 0.16s ease;
+}
+
+.deleted-item-row:hover .deleted-item-permanent-action,
+.deleted-item-row:focus-within .deleted-item-permanent-action,
+.deleted-item-permanent-action:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@media (hover: none) {
+  .deleted-item-permanent-action {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (max-width: 600px) {
   html,
   body {

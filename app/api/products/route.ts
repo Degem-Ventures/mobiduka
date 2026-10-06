@@ -236,7 +236,14 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Authenticated business context and product id are required." }, { status: 400 });
     }
 
-    const product = await prisma.product.findFirst({ where: { id: productId, businessId, deletedAt: null }, select: { id: true } });
+    const product = await prisma.product.findFirst({
+      where: {
+        id: productId,
+        businessId,
+        deletedAt: hardDelete ? { not: null } : null,
+      },
+      select: { id: true },
+    });
     if (!product) return NextResponse.json({ error: "Product was not found." }, { status: 404 });
 
     if (!hardDelete) {
@@ -244,18 +251,33 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ success: true, deleted: "soft" });
     }
 
-    const references = await prisma.product.findUnique({
-      where: { id: productId },
-      select: { saleItems: { select: { id: true }, take: 1 }, purchaseItems: { select: { id: true }, take: 1 }, stockMoves: { select: { id: true }, take: 1 }, scanEvents: { select: { id: true }, take: 1 } },
-    });
-    if (references?.saleItems.length || references?.purchaseItems.length || references?.stockMoves.length || references?.scanEvents.length) {
-      return NextResponse.json({ error: "Product has historical records and can only be soft-deleted." }, { status: 409 });
-    }
+    const blocked = await prisma.$transaction(async (tx) => {
+      const references = await tx.product.findUnique({
+        where: { id: productId },
+        select: {
+          saleItems: { select: { id: true }, take: 1 },
+          purchaseItems: { select: { id: true }, take: 1 },
+          stockMoves: { select: { id: true }, take: 1 },
+          scanEvents: { select: { id: true }, take: 1 },
+        },
+      });
+      if (
+        references?.saleItems.length ||
+        references?.purchaseItems.length ||
+        references?.stockMoves.length ||
+        references?.scanEvents.length
+      ) return true;
 
-    await prisma.$transaction([
-      prisma.inventory.deleteMany({ where: { productId } }),
-      prisma.product.delete({ where: { id: productId } }),
-    ]);
+      await tx.inventory.deleteMany({ where: { productId } });
+      await tx.product.delete({ where: { id: productId } });
+      return false;
+    });
+    if (blocked) {
+      return NextResponse.json(
+        { error: "This product has sales, purchase, stock, or scan history and cannot be permanently deleted. It will remain in deleted products." },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ success: true, deleted: "hard" });
   } catch (error) {
     console.error("Failed to delete product:", error);

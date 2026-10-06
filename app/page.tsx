@@ -165,7 +165,7 @@ function AppInner() {
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
   const [openActiveShift, setOpenActiveShift] = useState(false);
-  const [shiftBannerPosition, setShiftBannerPosition] = useState({ x: 12, y: 0 });
+  const [shiftBannerPosition, setShiftBannerPosition] = useState({ y: 0 });
   const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null);
   const shiftBannerWasDragged = useRef(false);
   const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>();
@@ -536,11 +536,9 @@ function AppInner() {
             onPointerMove={(event) => {
               const start = shiftBannerDrag.current;
               if (!start) return;
-              const deltaX = event.clientX - start.x;
               const deltaY = event.clientY - start.y;
-              if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) shiftBannerWasDragged.current = true;
+              if (Math.abs(deltaY) > 3) shiftBannerWasDragged.current = true;
               setShiftBannerPosition((position) => ({
-                x: Math.max(0, Math.min(32, position.x + deltaX)),
                 y: Math.max(0, Math.min(720, position.y + deltaY)),
               }));
               shiftBannerDrag.current = { x: event.clientX, y: event.clientY };
@@ -558,9 +556,11 @@ function AppInner() {
             style={{
               position: "absolute",
               top: shiftBannerPosition.y,
-              left: shiftBannerPosition.x,
+              left: "50%",
+              transform: "translateX(-50%)",
               zIndex: 1000,
-              width: 349,
+              width: "calc(100% - 32px)",
+              maxWidth: 349,
               border: "none",
               borderRadius: 10,
               background: "#0F6634",
