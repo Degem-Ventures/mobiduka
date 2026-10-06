@@ -306,7 +306,7 @@ export async function POST(request: Request) {
       });
 
       return sale;
-    });
+    }, { maxWait: 10_000, timeout: 30_000 });
 
     await createSystemNotification({
       businessId: resolvedBusinessId,

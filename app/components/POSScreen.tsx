@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react"
+import { QRCodeSVG } from "qrcode.react"
+import { createPortal } from "react-dom"
 import { useColors } from "../utils/theme"
 import { apiFetch, getClientSession, takeCreditorSaleIntent } from "../../lib/client-api"
 
@@ -60,6 +62,13 @@ type PaymentSettingsResponse = {
     paymentConfig: { methods: Record<string, boolean> } | null
   }
 }
+type MpesaQrDetails = {
+  payload: string
+  accountType: "TILL" | "PAYBILL"
+  environment: "sandbox" | "production"
+  shortcode: string
+  accountReference: string | null
+}
 type PosDraft = {
   cart: CartItem[]
   view: "pos" | "cart" | "payment"
@@ -107,6 +116,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     })
   const [mpesaPhone, setMpesaPhone] = useState("254")
   const [mpesaStatus, setMpesaStatus] = useState("")
+  const [showMpesaQr, setShowMpesaQr] = useState(false)
+  const [mpesaQrDetails, setMpesaQrDetails] = useState<MpesaQrDetails | null>(null)
+  const [mpesaQrLoading, setMpesaQrLoading] = useState(false)
+  const [mpesaQrError, setMpesaQrError] = useState("")
   const [discount, setDiscount] = useState(0)
   // Credit customer picker state
   const [selectedCreditor, setSelectedCreditor] = useState<{
@@ -140,7 +153,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const session = getClientSession()
   const currentBusinessId = session?.user.businessId ?? ""
   const currentUserId = session?.user.id ?? ""
-  const categories = [{ name: "All", emoji: null }, ...categoryRows]
+  const populatedCategories = categoryRows.filter((row) =>
+    products.some((product) => product.category === row.name && product.stock > 0),
+  )
+  const categories = [{ name: "All", emoji: null }, ...populatedCategories]
 
   useEffect(() => {
     if (!currentBusinessId) return
@@ -507,19 +523,110 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const total = subtotal - discountAmt
   const cartCount = cart.reduce((s, x) => s + x.qty, 0)
 
-  const completeSale = async () => {
+  const openMpesaQr = async () => {
+    if (!currentBusinessId || total <= 0 || !Number.isInteger(total)) {
+      setMpesaQrError(
+        "M-PESA QR checkout requires a cart total of at least KSh 1 with no cents. Use the STK prompt for fractional totals.",
+      )
+      setMpesaQrDetails(null)
+      setShowMpesaQr(true)
+      return
+    }
+    setMpesaQrLoading(true)
+    setMpesaQrError("")
+    setMpesaQrDetails(null)
+    setShowMpesaQr(true)
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000)
+    try {
+      const [configuration, businessResponse] = await Promise.all([
+        apiFetch<{
+          integration: {
+            configured: boolean
+            environment?: "sandbox" | "production"
+            accountType?: "TILL" | "PAYBILL"
+            shortcode?: string
+            accountReference?: string | null
+          }
+        }>(
+          `/api/payments/mpesa-integration?businessId=${encodeURIComponent(currentBusinessId)}`,
+          { signal: controller.signal, cache: "no-store" },
+        ),
+        apiFetch<{ business: { name: string } }>(
+          `/api/business?businessId=${encodeURIComponent(currentBusinessId)}`,
+          { signal: controller.signal, cache: "no-store" },
+        ),
+      ])
+      const integration = configuration.integration
+      if (!integration.configured || !integration.accountType || !integration.shortcode)
+        throw new Error("Configure an M-PESA Till or Paybill in Settings first.")
+      if (
+        integration.accountType === "PAYBILL" &&
+        !integration.accountReference?.trim()
+      )
+        throw new Error("Add an account reference to the Paybill configuration first.")
+
+      const accountReference = integration.accountReference?.trim() ?? ""
+      const businessName = businessResponse.business.name
+        .replace(/[\s|]/g, "")
+        .slice(0, 20)
+      if (!businessName)
+        throw new Error("Set a business name before creating an M-PESA QR.")
+      const amount = String(total)
+      const payload =
+        integration.accountType === "TILL"
+          ? ["BG", integration.shortcode, amount, businessName].join("|")
+          : [
+              "PB",
+              integration.shortcode,
+              accountReference.replace(/\s+/g, ""),
+              amount,
+              businessName,
+            ].join("|")
+      setMpesaQrDetails({
+        payload,
+        accountType: integration.accountType,
+        environment: integration.environment ?? "sandbox",
+        shortcode: integration.shortcode,
+        accountReference: integration.accountReference ?? null,
+      })
+    } catch (reason) {
+      setMpesaQrError(
+        controller.signal.aborted
+          ? "Loading M-PESA payment details timed out. Check your connection and try again."
+          : reason instanceof Error
+          ? reason.message
+          : "Unable to load the saved M-PESA payment details.",
+      )
+    } finally {
+      window.clearTimeout(timeoutId)
+      setMpesaQrLoading(false)
+    }
+  }
+
+  const closeMpesaQr = () => {
+    if (isCompletingSale) return
+    setShowMpesaQr(false)
+    setMpesaQrDetails(null)
+    setMpesaQrError("")
+  }
+
+  const completeSale = async (confirmMpesaQr = false) => {
     if (
       !session ||
       !selectedOperatorId ||
       cart.length === 0 ||
-      isCompletingSale
+      isCompletingSale ||
+      (confirmMpesaQr && paymentMethod !== "mpesa")
     )
       return
     setIsCompletingSale(true)
     setMpesaStatus("")
     try {
       let mpesaReceipt: string | undefined
-      if (paymentMethod === "mpesa") {
+      if (paymentMethod === "mpesa" && confirmMpesaQr) {
+        setMpesaStatus("Cashier confirmed M-PESA QR payment. Completing sale…")
+      } else if (paymentMethod === "mpesa") {
         const enteredPhone = mpesaPhone.replace(/\s+/g, "").replace(/^\+/, "")
         const normalizedPhone = enteredPhone.startsWith("0")
           ? `254${enteredPhone.slice(1)}`
@@ -624,11 +731,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       })
       setViewingPastReceipt(false)
       setHistoricalReceipt(null)
+      setShowMpesaQr(false)
+      setMpesaQrDetails(null)
       setView("receipt")
     } catch (reason) {
       const message =
         reason instanceof Error ? reason.message : "Unable to complete sale."
       setDataError(message)
+      if (confirmMpesaQr) setMpesaQrError(message)
       setMpesaStatus("")
       window.setTimeout(
         () => setDataError((current) => (current === message ? "" : current)),
@@ -1455,7 +1565,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <button
               className="btn"
-              onClick={() => setView("cart")}
+              onClick={() => {
+                closeMpesaQr()
+                setView("cart")
+              }}
               style={{
                 background: "rgba(255,255,255,0.12)",
                 border: "none",
@@ -1981,6 +2094,32 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 The customer will receive an STK prompt and must enter their
                 PIN.
               </div>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => void openMpesaQr()}
+                disabled={mpesaQrLoading}
+                style={{
+                  width: "100%",
+                  marginTop: 12,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #2E7D32",
+                  background: "rgba(46,125,50,0.08)",
+                  color: "#2E7D32",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  cursor: mpesaQrLoading ? "wait" : "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {mpesaQrLoading ? "Loading saved payment details…" : "Show M-PESA QR instead"}
+              </button>
+              {(!Number.isInteger(total) || total < 1) && (
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 6 }}>
+                  QR checkout requires a whole-shilling total of at least KSh 1.
+                </div>
+              )}
             </div>
           )}
 
@@ -1996,6 +2135,346 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               }}
             >
               Discount
+              {showMpesaQr && createPortal(
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="mpesa-qr-title"
+                  onClick={(event) => {
+                    if (event.target === event.currentTarget && !isCompletingSale)
+                      closeMpesaQr()
+                  }}
+                  style={{
+                    position: "fixed",
+                    inset: 0,
+                    zIndex: 2000,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: 16,
+                    background: "rgba(8,18,40,0.68)",
+                    backdropFilter: "blur(5px)",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "min(100%, 390px)",
+                      maxHeight: "90vh",
+                      overflowY: "auto",
+                      padding: 22,
+                      borderRadius: 22,
+                      background: c.card,
+                      color: c.text,
+                      boxShadow: "0 24px 80px rgba(0,0,0,0.3)",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        margin: "-22px -22px 18px",
+                        padding: "18px 20px",
+                        borderRadius: "22px 22px 0 0",
+                        background: "linear-gradient(135deg, #2E7D32, #1B5E20)",
+                        color: "#FFFFFF",
+                        textAlign: "left",
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div
+                          id="mpesa-qr-title"
+                          style={{ fontSize: 18, fontWeight: 850, lineHeight: 1.2 }}
+                        >
+                          Pay with M-PESA
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 5,
+                            fontSize: 12,
+                            color: "rgba(255,255,255,0.84)",
+                          }}
+                        >
+                          Scan to pay the exact cart total
+                        </div>
+                      </div>
+                      {mpesaQrDetails && (
+                        <span
+                          style={{
+                            padding: "5px 9px",
+                            borderRadius: 999,
+                            background: "rgba(255,255,255,0.18)",
+                            color: "#FFFFFF",
+                            fontSize: 11,
+                            fontWeight: 800,
+                            textTransform: "lowercase",
+                          }}
+                        >
+                          {mpesaQrDetails.environment}
+                        </span>
+                      )}
+                      <button
+                        className="btn"
+                        type="button"
+                        aria-label="Close M-PESA QR"
+                        disabled={isCompletingSale}
+                        onClick={closeMpesaQr}
+                        style={{
+                          width: 34,
+                          height: 34,
+                          flexShrink: 0,
+                          border: "1px solid rgba(255,255,255,0.35)",
+                          borderRadius: 10,
+                          background: "rgba(255,255,255,0.14)",
+                          color: "#FFFFFF",
+                          fontSize: 19,
+                          cursor: isCompletingSale ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    <div
+                      style={{
+                        margin: "18px 0",
+                        padding: 16,
+                        borderRadius: 18,
+                        background: "white",
+                        display: "inline-flex",
+                      }}
+                    >
+                      {mpesaQrLoading ? (
+                        <div
+                          style={{
+                            width: 220,
+                            height: 220,
+                            display: "grid",
+                            placeItems: "center",
+                            color: "#687386",
+                            fontSize: 13,
+                          }}
+                        >
+                          Loading payment details…
+                        </div>
+                      ) : mpesaQrDetails ? (
+                        <QRCodeSVG
+                          value={mpesaQrDetails.payload}
+                          size={220}
+                          level="H"
+                          includeMargin
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 220,
+                            minHeight: 130,
+                            display: "grid",
+                            placeItems: "center",
+                            color: "#B71C1C",
+                            fontSize: 13,
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {mpesaQrError || "Unable to create the payment QR."}
+                        </div>
+                      )}
+                    </div>
+
+                    {mpesaQrDetails && (
+                      <div
+                        style={{
+                          width: "100%",
+                          marginTop: 2,
+                          padding: "14px 16px",
+                          border: `1px solid ${c.divider}`,
+                          borderRadius: 14,
+                          background: c.cardAlt,
+                          textAlign: "left",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 16,
+                            fontSize: 12,
+                            color: c.muted,
+                          }}
+                        >
+                          <span>
+                            {mpesaQrDetails.accountType === "TILL"
+                              ? "Till Number"
+                              : "Paybill Number"}
+                          </span>
+                          <strong style={{ color: c.text }}>
+                            {mpesaQrDetails.shortcode}
+                          </strong>
+                        </div>
+                        {mpesaQrDetails.accountType === "PAYBILL" &&
+                          mpesaQrDetails.accountReference && (
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 16,
+                                marginTop: 9,
+                                fontSize: 12,
+                                color: c.muted,
+                              }}
+                            >
+                              <span>Reference</span>
+                              <strong style={{ color: c.text }}>
+                                {mpesaQrDetails.accountReference}
+                              </strong>
+                            </div>
+                          )}
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 16,
+                            marginTop: 9,
+                            fontSize: 12,
+                            color: c.muted,
+                          }}
+                        >
+                          <span>Amount</span>
+                          <strong style={{ color: "#2E7D32" }}>
+                            KSh {total.toLocaleString()}
+                          </strong>
+                        </div>
+                      </div>
+                    )}
+                    {mpesaQrDetails && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 6,
+                          marginTop: 9,
+                          color: c.muted,
+                          fontSize: 11,
+                          lineHeight: 1.4,
+                          textAlign: "center",
+                        }}
+                      >
+                        <svg
+                          aria-hidden="true"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{ flexShrink: 0 }}
+                        >
+                          <rect x="4" y="11" width="16" height="10" rx="2" />
+                          <path d="M8 11V7a4 4 0 1 1 8 0v4" />
+                        </svg>
+                        <span>Amount is synced automatically from the cart</span>
+                      </div>
+                    )}
+
+                    {mpesaQrError && mpesaQrDetails && (
+                      <div
+                        role="alert"
+                        style={{
+                          marginTop: 12,
+                          color: "#B71C1C",
+                          fontSize: 12,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {mpesaQrError}
+                      </div>
+                    )}
+
+                    {mpesaQrDetails && (
+                      <div
+                        style={{
+                          marginTop: 14,
+                          padding: "10px 12px",
+                          borderRadius: 11,
+                          background: c.cardAlt,
+                          color: c.muted,
+                          fontSize: 11,
+                          lineHeight: 1.5,
+                          textAlign: "left",
+                        }}
+                      >
+                        Confirm the payment in your M-PESA account before completing
+                        the sale. Scanning the QR alone does not verify payment.
+                      </div>
+                    )}
+
+                    {mpesaQrDetails ? (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => void completeSale(true)}
+                        disabled={!selectedOperatorId || isCompletingSale}
+                        style={{
+                          width: "100%",
+                          marginTop: 16,
+                          padding: 14,
+                          border: "none",
+                          borderRadius: 13,
+                          background:
+                            selectedOperatorId && !isCompletingSale
+                              ? "#2E7D32"
+                              : c.cardAlt,
+                          color:
+                            selectedOperatorId && !isCompletingSale
+                              ? "white"
+                              : c.muted,
+                          fontSize: 14,
+                          fontWeight: 800,
+                          cursor:
+                            selectedOperatorId && !isCompletingSale
+                              ? "pointer"
+                              : "not-allowed",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        {isCompletingSale
+                          ? mpesaStatus || "Completing sale…"
+                          : selectedOperatorId
+                            ? "Payment received · Complete sale"
+                            : "Select an active operator first"}
+                      </button>
+                    ) : mpesaQrError &&
+                      !mpesaQrLoading &&
+                      Number.isInteger(total) &&
+                      total >= 1 ? (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => void openMpesaQr()}
+                        style={{
+                          width: "100%",
+                          marginTop: 12,
+                          padding: 12,
+                          border: `1px solid ${c.divider}`,
+                          borderRadius: 12,
+                          background: c.card,
+                          color: c.text,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        Try again
+                      </button>
+                    ) : null}
+                  </div>
+                </div>,
+                document.body,
+              )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               {[0, 5, 10, 15, 20].map((d) => (
@@ -2668,7 +3147,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           }}
         >
           {[
-            { label: "Items", value: String(cartCount), color: "white" },
+            { label: "Cart items", value: String(cartCount), color: "white" },
             {
               label: "Subtotal",
               value: `KSh ${subtotal.toLocaleString()}`,
@@ -2707,8 +3186,28 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                   marginTop: 3,
                   color: "rgba(255,255,255,0.68)",
                   fontSize: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
                 }}
               >
+                {metric.label === "Cart items" && (
+                  <svg
+                    aria-hidden="true"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 3h2l2.4 11.2a2 2 0 0 0 2 1.6h7.9a2 2 0 0 0 1.9-1.4L21 7H6" />
+                    <circle cx="10" cy="20" r="1" />
+                    <circle cx="18" cy="20" r="1" />
+                  </svg>
+                )}
                 {metric.label}
               </div>
             </div>

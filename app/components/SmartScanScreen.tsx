@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useId } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { Haptics } from '@capacitor/haptics'
 import { Html5Qrcode } from 'html5-qrcode'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
@@ -167,6 +169,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       decodedText => {
         if (disposed || handledCameraScanRef.current) return
         handledCameraScanRef.current = true
+        if (Capacitor.isNativePlatform()) {
+          void Haptics.vibrate({ duration: 100 }).catch(reason => {
+            console.warn('Unable to trigger scan haptics:', reason)
+          })
+        }
         void stopCamera().finally(() => startScan(decodedText))
       },
       () => undefined,

@@ -147,14 +147,12 @@ function mergedCredentials(
 export async function GET(request: Request) {
   try {
     const businessId = new URL(request.url).searchParams.get("businessId")
-    const access = await requireBusinessPermission(
-      request,
-      businessId,
-      "payments",
-    )
+    const access =
+      (await requireBusinessPermission(request, businessId, "payments")) ??
+      (await requireBusinessPermission(request, businessId, "pos"))
     if (!access) {
       return NextResponse.json(
-        { error: "Payment configuration permission is required." },
+        { error: "POS or payment configuration permission is required." },
         { status: 403 },
       )
     }

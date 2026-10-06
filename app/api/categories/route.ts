@@ -119,12 +119,49 @@ export async function DELETE(request: Request) {
     const url = new URL(request.url);
     const categoryId = url.searchParams.get("id")?.trim();
     const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
+    const hardDelete = url.searchParams.get("hard") === "true";
     if (!businessId || !categoryId) return NextResponse.json({ error: "Authenticated business context and category id are required." }, { status: 400 });
 
-    const category = await prisma.category.findFirst({ where: { id: categoryId, businessId, deletedAt: null }, select: { id: true, _count: { select: { products: true, childCategories: true } } } });
+    if (hardDelete) {
+      const result = await prisma.$transaction(async (tx) => {
+        const category = await tx.category.findFirst({
+          where: { id: categoryId, businessId, deletedAt: { not: null } },
+          select: { id: true },
+        });
+        if (!category) return "NOT_FOUND" as const;
+
+        const [activeProductCount, childCategoryCount] = await Promise.all([
+          tx.product.count({ where: { categoryId, businessId, deletedAt: null } }),
+          tx.category.count({ where: { parentCategoryId: categoryId, businessId } }),
+        ]);
+        if (activeProductCount || childCategoryCount) return "IN_USE" as const;
+
+        await tx.product.updateMany({
+          where: { categoryId, businessId, deletedAt: { not: null } },
+          data: { categoryId: null },
+        });
+        await tx.category.delete({ where: { id: categoryId } });
+        return "DELETED" as const;
+      });
+      if (result === "NOT_FOUND") {
+        return NextResponse.json({ error: "Deleted category was not found." }, { status: 404 });
+      }
+      if (result === "IN_USE") {
+        return NextResponse.json(
+          { error: "This category still has active products or child categories. Remove or move them before permanently deleting the category." },
+          { status: 409 },
+        );
+      }
+      return NextResponse.json({ success: true, deleted: "hard" });
+    }
+
+    const category = await prisma.category.findFirst({ where: { id: categoryId, businessId, deletedAt: null }, select: { id: true } });
     if (!category) return NextResponse.json({ error: "Category was not found." }, { status: 404 });
-    const activeProductCount = await prisma.product.count({ where: { categoryId, businessId, deletedAt: null } });
-    if (activeProductCount || category._count.childCategories) {
+    const [productCount, childCategoryCount] = await Promise.all([
+      prisma.product.count({ where: { categoryId, businessId, deletedAt: null } }),
+      prisma.category.count({ where: { parentCategoryId: categoryId, businessId } }),
+    ]);
+    if (productCount || childCategoryCount) {
       return NextResponse.json({ error: "Category cannot be deleted while it has products or child categories." }, { status: 409 });
     }
 
