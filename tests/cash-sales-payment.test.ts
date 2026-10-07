@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../lib/prisma.ts';
 import { GET, POST } from '../app/api/sales/route.ts';
+import { GET as getCashSessions } from '../app/api/cash/session/route.ts';
 
 function makeJwtForBusiness(businessId: string, userId: string) {
-  const secret = process.env.JWT_SECRET || 'mobiduka-dev-secret-change-me';
+  const secret = process.env.JWT_SECRET || 'mobiduka-local-dev-secret-change-me';
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(
     JSON.stringify({ businessId, sub: userId, exp: Math.floor(Date.now() / 1000) + 3600 }),
@@ -26,6 +27,7 @@ test('cash sales create a cash payment record', async () => {
   const productSku = `TEST-PRODUCT-${suffix}`;
 
   let businessId = '';
+  let cashSessionId = '';
 
   try {
     const business = await prisma.business.create({
@@ -64,6 +66,15 @@ test('cash sales create a cash payment record', async () => {
         status: 'ACTIVE',
       },
     });
+    const cashSession = await prisma.cashSession.create({
+      data: {
+        businessId: business.id,
+        cashierId: operator.id,
+        shiftType: 'morning',
+        openingBalance: 0,
+      },
+    });
+    cashSessionId = cashSession.id;
     const product = await prisma.product.create({
       data: {
         businessId: business.id,
@@ -92,6 +103,7 @@ test('cash sales create a cash payment record', async () => {
         body: JSON.stringify({
           businessId: business.id,
           cashierId: operator.id,
+          cashSessionId,
           invoiceNo,
           totalAmount: 90,
           subtotal: 100,
@@ -103,6 +115,11 @@ test('cash sales create a cash payment record', async () => {
     );
 
     assert.equal(response.status, 201, 'sale should be created');
+    const savedSale = await prisma.sale.findUnique({
+      where: { saleNumber: invoiceNo },
+      select: { cashSessionId: true },
+    });
+    assert.equal(savedSale?.cashSessionId, cashSessionId, 'sale should link directly to its cash session');
 
     const payments = await prisma.payment.findMany({
       where: { sale: { businessId: business.id } },
@@ -130,6 +147,18 @@ test('cash sales create a cash payment record', async () => {
     assert.equal(receipt.cashier, 'Cashier Two');
     assert.equal(receipt.paymentMethod, 'CASH');
     assert.equal(receipt.items[0].quantity, 1);
+    const sessionsResponse = await getCashSessions(
+      new Request(`http://localhost/api/cash/session?businessId=${business.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
+    assert.equal(sessionsResponse.status, 200, 'cash session totals should load');
+    const sessionList = await sessionsResponse.json();
+    const savedSession = sessionList.sessions.find(
+      (item: { id: string }) => item.id === cashSessionId,
+    );
+    assert.equal(savedSession.sales, 1, 'session sales should use the direct sale link');
+    assert.equal(savedSession.amount, 90, 'session amount should use linked sales');
   } finally {
     if (businessId) {
       await prisma.payment.deleteMany({ where: { sale: { businessId: businessId } } });
@@ -138,6 +167,8 @@ test('cash sales create a cash payment record', async () => {
       await prisma.notification.deleteMany({ where: { businessId: businessId } });
       await prisma.syncQueue.deleteMany({ where: { businessId: businessId } });
       await prisma.sale.deleteMany({ where: { businessId: businessId } });
+      await prisma.cashSession.deleteMany({ where: { businessId: businessId } });
+      await prisma.device.deleteMany({ where: { businessId: businessId } });
       await prisma.inventory.deleteMany({ where: { businessId: businessId } });
       await prisma.product.deleteMany({ where: { businessId: businessId } });
       await prisma.user.deleteMany({ where: { businessId: businessId } });

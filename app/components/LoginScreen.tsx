@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getPinLoginContext, saveClientSession, savePinLoginContext } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
   onLogin: () => void
@@ -12,7 +13,7 @@ export default function LoginScreen({ onLogin }: Props) {
   const [password, setPassword] = useState('OwnerPass123')
   const [pinIdentifier, setPinIdentifier] = useState(() => getPinLoginContext()?.identifier ?? 'cashier1')
   const [showPassword, setShowPassword] = useState(false)
-  const [loginError, setLoginError] = useState('')
+  const [loginError, setLoginError] = useAutoDismissMessage()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const taglines = [
     'Smart retail management for modern businesses',
@@ -46,7 +47,7 @@ export default function LoginScreen({ onLogin }: Props) {
   const [fpOtp, setFpOtp] = useState('')
   const [fpNew, setFpNew] = useState('')
   const [fpConfirm, setFpConfirm] = useState('')
-  const [fpError, setFpError] = useState('')
+  const [fpError, setFpError] = useAutoDismissMessage()
 
   const handlePinPress = (digit: string) => {
     if (pin.length < 4) {

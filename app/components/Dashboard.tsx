@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -128,7 +129,7 @@ export default function Dashboard({ onNavigate }: Props) {
   const session = getClientSession()
   const [scanPulse, setScanPulse] = useState(false)
   const [data, setData] = useState<DashboardData | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useAutoDismissMessage()
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [lowStockDisplay, setLowStockDisplay] = useState<'preview' | 'expanded' | 'all'>('preview')
   const [clockNow, setClockNow] = useState(() => new Date())

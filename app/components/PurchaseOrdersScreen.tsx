@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type OrderItem = { name: string; qty: number; unit: string; cost: number; total: number; productId: string }
 type PurchaseOrder = { id: string; orderNo: string; supplierId: string | null; supplier: string; date: string; items: number; total: number; status: 'pending' | 'delivered' | 'partial' | 'cancelled'; dueDate: string; itemRows: OrderItem[] }
@@ -29,7 +30,7 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
   const [orders, setOrders] = useState<PurchaseOrder[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [filter, setFilter] = useState<'all' | 'pending' | 'delivered'>('all')
   const [selected, setSelected] = useState<PurchaseOrder | null>(null)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Perm = { id: string; label: string; section: string }
 
@@ -48,7 +49,7 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
   const [newRoleName, setNewRoleName] = useState('')
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [error, setError] = useAutoDismissMessage()
 
   const loadRoles = async () => {
     const session = getClientSession()

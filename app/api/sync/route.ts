@@ -256,12 +256,32 @@ export async function POST(request: Request) {
               })
 
               if (!existingSale) {
+                const cashSessionId = dataPayload.cashSessionId
+                  ? String(dataPayload.cashSessionId)
+                  : null
+                if (cashSessionId) {
+                  const cashSession = await tx.cashSession.findFirst({
+                    where: {
+                      id: cashSessionId,
+                      businessId: resolvedBusinessId,
+                      cashierId:
+                        dataPayload.cashierId ?? dataPayload.userId ?? null,
+                    },
+                    select: { id: true },
+                  })
+                  if (!cashSession) {
+                    throw new Error(
+                      "Offline sale references a cash shift that does not match its cashier or business.",
+                    )
+                  }
+                }
                 const createdSale = await tx.sale.create({
                   data: {
                     id: saleId,
                     businessId: resolvedBusinessId,
                     cashierId:
                       dataPayload.cashierId ?? dataPayload.userId ?? null,
+                    cashSessionId,
                     customerId: dataPayload.customerId ?? null,
                     saleNumber: dataPayload.saleNumber ?? null,
                     subtotal: Number(dataPayload.subtotal ?? 0),
@@ -639,6 +659,10 @@ export async function POST(request: Request) {
               })
               if (result.count !== 1)
                 throw new Error("Offline cash session was not found.")
+              await tx.device.updateMany({
+                where: { currentCashSessionId: sessionId },
+                data: { currentCashSessionId: null },
+              })
             }
             break
           }

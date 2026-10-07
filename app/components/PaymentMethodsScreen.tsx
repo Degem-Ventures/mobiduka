@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { useColors } from "../utils/theme"
 import { apiFetch, getClientSession } from "../../lib/client-api"
+import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
 
 
 interface Method {
@@ -147,7 +148,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const [showCreditConfig, setShowCreditConfig] = useState(false)
 
   const [saved, setSaved] = useState(false)
-  const [saveError, setSaveError] = useState("")
+  const [saveError, setSaveError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const activeMpesaCredentials = mpesaCredentialDrafts[mpesaForm.environment]
   const hasStoredCredentialsForSelectedEnvironment =

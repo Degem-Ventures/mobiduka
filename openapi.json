@@ -159,6 +159,7 @@
                 "properties": {
                   "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
                   "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID. For another deployment, use the authenticated user id from login." },
+                  "cashSessionId": { "type": "string", "format": "uuid", "description": "Open cash shift currently assigned to the POS device. When supplied, the sale is linked directly to that shift." },
                   "invoiceNo": { "type": "string", "example": "INV-1001" },
                   "subtotal": { "type": "number", "description": "Pre-discount item subtotal. Defaults to the sum of item line prices." },
                   "discountAmount": { "type": "number", "minimum": 0, "description": "Sale-level discount amount." },
@@ -184,6 +185,47 @@
         },
         "responses": {
           "201": { "description": "Sale created and stock adjustments complete." }
+        }
+      }
+    },
+    "/cash/session/device": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Get the registered POS device's current cash shift",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "deviceUuid", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Returns the device's persisted currentShiftId, or null if no shift is assigned." },
+          "403": { "description": "POS permission is required." },
+          "409": { "description": "The device is inactive or registered to another business." }
+        }
+      },
+      "put": {
+        "tags": ["Business"],
+        "summary": "Assign or clear the registered POS device's current cash shift",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "deviceUuid", "cashSessionId"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "deviceUuid": { "type": "string", "format": "uuid" },
+                  "cashSessionId": { "type": "string", "format": "uuid", "nullable": true, "description": "Set to null to clear the current shift." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Device current shift assignment was saved." },
+          "400": { "description": "The selected shift is invalid, closed, or inactive." },
+          "403": { "description": "POS permission is required." },
+          "409": { "description": "The device is inactive or registered to another business." }
         }
       }
     },

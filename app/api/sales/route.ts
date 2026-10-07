@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
 
+class InvalidCashSessionError extends Error {}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -119,6 +121,7 @@ export async function POST(request: Request) {
     const {
       businessId,
       cashierId,
+      cashSessionId,
       userId,
       customerId,
       invoiceNo,
@@ -131,6 +134,7 @@ export async function POST(request: Request) {
     } = body as {
       businessId?: string;
       cashierId?: string;
+      cashSessionId?: string | null;
       userId?: string;
       customerId?: string | null;
       invoiceNo?: string;
@@ -187,6 +191,24 @@ export async function POST(request: Request) {
       );
     }
 
+    if (cashSessionId) {
+      const cashSession = await prisma.cashSession.findFirst({
+        where: {
+          id: cashSessionId,
+          businessId: resolvedBusinessId,
+          cashierId: resolvedCashierId,
+          closedAt: null,
+        },
+        select: { id: true },
+      })
+      if (!cashSession) {
+        return NextResponse.json(
+          { error: "The selected cash shift is closed or does not match this cashier." },
+          { status: 400 },
+        )
+      }
+    }
+
     const existingSale = await prisma.sale.findUnique({
       where: { saleNumber: String(invoiceNo).trim() },
       select: { id: true, businessId: true },
@@ -223,10 +245,27 @@ export async function POST(request: Request) {
     const saleTotal = Number(totalAmount ?? computedTotal);
 
     const completedSale = await prisma.$transaction(async (tx) => {
+      if (cashSessionId) {
+        const activeSession = await tx.cashSession.findFirst({
+          where: {
+            id: cashSessionId,
+            businessId: resolvedBusinessId,
+            cashierId: resolvedCashierId,
+            closedAt: null,
+          },
+          select: { id: true },
+        })
+        if (!activeSession) {
+          throw new InvalidCashSessionError(
+            "The selected cash shift is no longer active. Select an open shift and retry.",
+          )
+        }
+      }
       const sale = await tx.sale.create({
         data: {
           businessId: resolvedBusinessId,
           cashierId: resolvedCashierId,
+          cashSessionId: cashSessionId ?? null,
           customerId: customerId ?? null,
           saleNumber: String(invoiceNo).trim(),
           subtotal,
@@ -365,6 +404,9 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error: any) {
+    if (error instanceof InvalidCashSessionError) {
+      return NextResponse.json({ error: error.message }, { status: 409 })
+    }
     return NextResponse.json(
       {
         error: "Processing sales record layout failed.",

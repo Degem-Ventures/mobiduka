@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type NotificationItem = { id: string; type: string; title: string; body: string; createdAt: string; read: boolean; icon: string }
 type DisplayNotification = NotificationItem & { date: string; time: string; relativeAge: string }
@@ -25,7 +26,7 @@ export default function NotificationsScreen({ onNavigate }: Props) {
   const c = useColors()
   const [items, setItems] = useState<NotificationItem[]>([])
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [confirmClear, setConfirmClear] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 

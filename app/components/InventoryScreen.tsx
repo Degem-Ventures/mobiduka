@@ -5,6 +5,7 @@ import { Html5Qrcode } from 'html5-qrcode'
 import { DEFAULT_INVENTORY_EMOJI, INVENTORY_EMOJIS } from '../utils/inventory-emojis'
 import { composeProductDisplayName } from '../../lib/product-display-name'
 import { defaultProductTypes, loadProductTypes, productTypesStorageKey, type ProductTypeOption } from '../utils/product-types'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type ProductItem = { id: string; name: string; brand: string; productType: string; packSize: string; categoryId: string | null; category: string; cost: number; price: number; stock: number; reorder: number; emoji: string; status: 'good' | 'low' | 'critical'; barcode: string | null; deletedAt?: string | null }
 type CategoryItem = { id: string; name: string; emoji: string | null; deletedAt?: string | null }
@@ -128,7 +129,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [deletedProducts, setDeletedProducts] = useState<ProductItem[]>([])
   const [categories, setCategories] = useState<CategoryItem[]>([])
   const [deletedCategories, setDeletedCategories] = useState<CategoryItem[]>([])
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'low' | 'critical'>('all')
@@ -154,10 +155,10 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [isInventoryLoading, setIsInventoryLoading] = useState(true)
   const [deletedProductCount, setDeletedProductCount] = useState(0)
   const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<PermanentDeleteTarget | null>(null)
-  const [permanentDeleteError, setPermanentDeleteError] = useState('')
+  const [permanentDeleteError, setPermanentDeleteError] = useAutoDismissMessage()
   const [toast, setToast] = useState<Toast | null>(null)
   const [showBarcodeCamera, setShowBarcodeCamera] = useState(false)
-  const [cameraError, setCameraError] = useState('')
+  const [cameraError, setCameraError] = useAutoDismissMessage()
   const [fabPosition, setFabPosition] = useState<{ x: number; y: number } | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof window.setTimeout> | null>(null);

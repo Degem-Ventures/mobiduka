@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession, startCreditorSale } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Customer = { id: string; name: string; phone: string | null; creditLimit: number; credit: number; purchases: number; lastVisit: string; initials: string; color: string }
 type Transaction = { id: string; date: string; type: string; amount: number; method: string; items: number }
@@ -26,7 +27,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null)
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
 
   const mapCustomer = (customer: { id: string; name: string; phone: string | null; creditLimit?: number | null; creditAccount?: { balance: number } | null; _count?: { sales: number }; sales?: Array<{ createdAt: string }> }): Customer => ({

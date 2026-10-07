@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Supplier = { id: string; name: string; category: string | null; contactPerson: string | null; phone: string | null; email: string | null; location: string | null; notes: string | null; paymentTerms: string; rating: number; outstandingBalance: number; _count: { purchaseOrders: number; products: number } }
+type ProductCategory = { id: string; name: string; emoji: string | null }
 type SupplierForm = { name: string; category: string; contact: string; phone: string; email: string; location: string; notes: string; paymentTerms: string; rating: string; outstandingBalance: string }
+type SupplierToast = { message: string; tone: 'success' | 'error' }
 
 const emptySupplierForm: SupplierForm = { name: '', category: '', contact: '', phone: '', email: '', location: '', notes: '', paymentTerms: 'Net 30', rating: '5', outstandingBalance: '0' }
 const supplierColors = ['#123A8F', '#2E7D32', '#0288D1', '#D32F2F', '#00796B', '#F57C00']
@@ -13,28 +16,87 @@ interface Props { onNavigate: (s: string) => void }
 export default function SuppliersScreen({ onNavigate }: Props) {
   const c = useColors()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [productCategories, setProductCategories] = useState<ProductCategory[]>([])
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Supplier | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState<SupplierForm>(emptySupplierForm)
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null)
+  const [toast, setToast] = useState<SupplierToast | null>(null)
+  const toastTimeout = useRef<number | null>(null)
   const session = getClientSession()
+
+  const notify = (message: string, tone: SupplierToast['tone']) => {
+    if (toastTimeout.current !== null) window.clearTimeout(toastTimeout.current)
+    setToast({ message, tone })
+    toastTimeout.current = window.setTimeout(() => {
+      setToast(null)
+      toastTimeout.current = null
+    }, 4000)
+  }
+
+  useEffect(() => () => {
+    if (toastTimeout.current !== null) window.clearTimeout(toastTimeout.current)
+  }, [])
+
+  const toastNode = toast && (
+    <div
+      role={toast.tone === 'error' ? 'alert' : 'status'}
+      aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}
+      style={{
+        position: 'fixed',
+        top: 'max(16px, env(safe-area-inset-top))',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 10000,
+        width: 'max-content',
+        maxWidth: 'calc(100vw - 32px)',
+        padding: '12px 16px',
+        borderRadius: 12,
+        background: toast.tone === 'success' ? '#2E7D32' : '#B71C1C',
+        color: 'white',
+        fontSize: 13,
+        fontWeight: 700,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.24)',
+        textAlign: 'center',
+      }}
+    >
+      {toast.message}
+    </div>
+  )
 
   useEffect(() => {
     if (!session) { setDataError('Please sign in to load suppliers.'); return }
     apiFetch<Supplier[]>(`/api/suppliers?businessId=${encodeURIComponent(session.user.businessId)}`)
       .then(setSuppliers)
       .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load suppliers.'))
+    apiFetch<ProductCategory[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`)
+      .then(categories => setProductCategories(categories.sort((left, right) => left.name.localeCompare(right.name))))
+      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load product categories.'))
   }, [session?.user.businessId])
 
   const filtered = suppliers.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || (s.category ?? '').toLowerCase().includes(search.toLowerCase()))
   const totalOutstanding = suppliers.reduce((total, supplier) => total + supplier.outstandingBalance, 0)
   const supplierInitials = (supplier: Supplier) => supplier.name.split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase()
   const formatCompactAmount = (amount: number) => amount >= 1000 ? `KSh ${(amount / 1000).toFixed(0)}K` : `KSh ${amount.toLocaleString()}`
+  const selectedCategories = form.category.split(',').map(category => category.trim()).filter(Boolean)
+  const categoryOptions = [
+    ...productCategories,
+    ...selectedCategories
+      .filter(selectedCategory => !productCategories.some(category => category.name.toLowerCase() === selectedCategory.toLowerCase()))
+      .map(name => ({ id: `saved:${name}`, name, emoji: null })),
+  ]
+  const toggleCategory = (name: string) => {
+    const selected = new Map(selectedCategories.map(category => [category.toLowerCase(), category]))
+    const normalizedName = name.toLowerCase()
+    if (selected.has(normalizedName)) selected.delete(normalizedName)
+    else selected.set(normalizedName, name)
+    setForm(previous => ({ ...previous, category: [...selected.values()].join(', ') }))
+  }
   const openAdd = () => { setForm(emptySupplierForm); setEditingSupplier(null); setShowAdd(true) }
 
   const startEdit = (supplier: Supplier) => {
@@ -52,13 +114,19 @@ export default function SuppliersScreen({ onNavigate }: Props) {
       await apiFetch(`/api/suppliers?id=${encodeURIComponent(target.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
       setSuppliers(previous => previous.filter(supplier => supplier.id !== target.id))
       setSelected(null)
-    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to delete supplier.') }
+      notify(`${target.name} deleted.`, 'success')
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Unable to delete supplier.'
+      setDataError(message)
+      notify(message, 'error')
+    }
     finally { setSaving(false); setConfirmDelete(false); setSupplierToDelete(null) }
   }
 
   if (showAdd) {
     return (
       <div className="screen" style={{ background: c.bg }}>
+        {toastNode}
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => setShowAdd(false)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -68,10 +136,10 @@ export default function SuppliersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ paddingTop: '20px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 100 }}>
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
             {[
               { label: 'Business Name *', key: 'name', placeholder: 'e.g. Unga Limited' },
-              { label: 'Category *', key: 'category', placeholder: 'e.g. Flour & Grains' },
               { label: 'Contact Person', key: 'contact', placeholder: 'Full name' },
               { label: 'Phone Number', key: 'phone', placeholder: '+254 ...' },
               { label: 'Email Address', key: 'email', placeholder: 'supplier@email.com' },
@@ -83,13 +151,71 @@ export default function SuppliersScreen({ onNavigate }: Props) {
               </div>
             ))}
             <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: c.muted, marginBottom: 8 }}>Product Categories</div>
+              {categoryOptions.length > 0 ? (
+                <div role="group" aria-label="Supplier product categories" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {categoryOptions.map(category => {
+                    const active = selectedCategories.some(selectedCategory => selectedCategory.toLowerCase() === category.name.toLowerCase())
+                    return (
+                      <button
+                        key={category.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => toggleCategory(category.name)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          border: `1px solid ${active ? '#123A8F' : c.border}`,
+                          borderRadius: 999,
+                          padding: '7px 11px',
+                          background: active ? (c.isDark ? 'rgba(18,58,143,0.3)' : 'rgba(18,58,143,0.08)') : c.card,
+                          color: active ? '#123A8F' : c.text,
+                          fontSize: 12,
+                          fontWeight: active ? 700 : 500,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {category.emoji && <span aria-hidden="true">{category.emoji}</span>}
+                        {category.name}
+                        {active && <span aria-hidden="true">✓</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: c.muted }}>No product categories available yet.</div>
+              )}
+              {selectedCategories.length > 0 && (
+                <div style={{ marginTop: 7, fontSize: 11, color: c.muted }}>Saved as: {selectedCategories.join(', ')}</div>
+              )}
+            </div>
+            <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Payment Terms</label>
               <select className="input" value={form.paymentTerms} onChange={event => setForm(previous => ({ ...previous, paymentTerms: event.target.value }))}>
                 {['COD', 'Prepaid', 'Net 7', 'Net 14', 'Net 21', 'Net 30', 'Net 60'].map(term => <option key={term} value={term}>{term}</option>)}
               </select>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-              <div><label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Rating</label><select className="input" value={form.rating} onChange={event => setForm(previous => ({ ...previous, rating: event.target.value }))}>{[5, 4, 3, 2, 1].map(rating => <option key={rating} value={rating}>{rating} stars</option>)}</select></div>
+              <div>
+                <label id="supplier-rating-label" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Rating</label>
+                <div role="radiogroup" aria-labelledby="supplier-rating-label" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {[1, 2, 3, 4, 5].map(rating => (
+                    <button
+                      key={rating}
+                      type="button"
+                      role="radio"
+                      aria-checked={Number(form.rating) === rating}
+                      aria-label={`${rating} ${rating === 1 ? 'star' : 'stars'}`}
+                      onClick={() => setForm(previous => ({ ...previous, rating: String(rating) }))}
+                      style={{ border: 0, background: 'transparent', padding: '2px 3px', fontSize: 24, lineHeight: 1, color: rating <= Number(form.rating) ? '#D4AF37' : c.faint, cursor: 'pointer' }}
+                    >
+                      ★
+                    </button>
+                  ))}
+                  <span aria-live="polite" style={{ marginLeft: 6, fontSize: 11, color: c.muted }}>{form.rating}/5</span>
+                </div>
+              </div>
               <div><label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Outstanding (KSh)</label><input className="input" type="number" min="0" value={form.outstandingBalance} onChange={event => setForm(previous => ({ ...previous, outstandingBalance: event.target.value }))} /></div>
             </div>
             <div>
@@ -103,9 +229,14 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             try {
               const supplier = await apiFetch<Supplier>('/api/suppliers', { method: editingSupplier ? 'PATCH' : 'POST', body: JSON.stringify({ businessId: session.user.businessId, ...(editingSupplier ? { id: editingSupplier.id } : {}), name: form.name, category: form.category, contactPerson: form.contact, phone: form.phone, email: form.email, location: form.location, notes: form.notes, paymentTerms: form.paymentTerms, rating: Number(form.rating), outstandingBalance: Number(form.outstandingBalance) }) })
               setSuppliers(previous => editingSupplier ? previous.map(item => item.id === supplier.id ? supplier : item) : [...previous, supplier])
+              notify(editingSupplier ? `${supplier.name} updated.` : `${supplier.name} added.`, 'success')
               setForm(emptySupplierForm)
               setShowAdd(false); setEditingSupplier(null)
-            } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save supplier.') }
+            } catch (reason) {
+              const message = reason instanceof Error ? reason.message : 'Unable to save supplier.'
+              setDataError(message)
+              notify(message, 'error')
+            }
             finally { setSaving(false) }
           }} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
             {saving ? 'Saving...' : editingSupplier ? 'Save Changes' : 'Save Supplier'}
@@ -118,6 +249,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
   if (selected) {
     return (
       <div className="screen" style={{ background: c.bg }}>
+        {toastNode}
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
             <button className="btn" onClick={() => setSelected(null)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -169,6 +301,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
 
   return (
     <div className="screen" style={{ background: c.bg }}>
+      {toastNode}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { formatPhoneForDisplay } from '../utils/format-phone'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props { onNavigate: (s: string) => void }
 type Profile = { id: string; name: string; phone: string | null; email: string | null; role: string; memberSince: string; pinConfigured: boolean; business: { name: string; branch: string | null; country: string | null } }
@@ -13,10 +14,10 @@ export default function UserProfileScreen({ onNavigate }: Props) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [form, setForm] = useState({ name: '', phone: '', email: '', store: '', branch: '' })
   const [pinForm, setPinForm] = useState({ current: '', newPin: '', confirm: '' })
-  const [pinError, setPinError] = useState('')
+  const [pinError, setPinError] = useAutoDismissMessage()
   const [pinDone, setPinDone] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const initials = (profile?.name ?? 'User').split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase()
 
   useEffect(() => {

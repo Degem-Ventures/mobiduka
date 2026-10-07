@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Role = { id: string; name: string; icon: string; permissions: string[] }
 type RolesResponse = { roles: Role[] }
@@ -25,7 +26,7 @@ export default function AdminRegisterScreen({ onNavigate, employee, onComplete }
   const [pin, setPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
   const [currentPin, setCurrentPin] = useState('')
-  const [pinError, setPinError] = useState('')
+  const [pinError, setPinError] = useAutoDismissMessage()
   const [showWorkDetails, setShowWorkDetails] = useState(false)
   const [showPinSetup, setShowPinSetup] = useState(false)
   const [workShift, setWorkShift] = useState(employee?.shift ?? 'Morning')
@@ -36,7 +37,7 @@ export default function AdminRegisterScreen({ onNavigate, employee, onComplete }
     onNavigate('employees')
   }
   const [roles, setRoles] = useState<Role[]>([])
-  const [rolesError, setRolesError] = useState('')
+  const [rolesError, setRolesError] = useAutoDismissMessage()
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
