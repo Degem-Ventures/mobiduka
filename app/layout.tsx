@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Analytics } from "@vercel/analytics/next";
 import "./global.css";
 import WebPushRegistration from "./components/WebPushRegistration";
 
@@ -18,6 +19,7 @@ export default function RootLayout({
       <body className="antialiased" suppressHydrationWarning>
         <WebPushRegistration />
         {children}
+        <Analytics />
       </body>
     </html>
   );
