@@ -13,6 +13,7 @@ const supplierColors = ['#123A8F', '#2E7D32', '#0288D1', '#D32F2F', '#00796B', '
 
 interface Props { onNavigate: (s: string) => void }
 
+
 export default function SuppliersScreen({ onNavigate }: Props) {
   const c = useColors()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
