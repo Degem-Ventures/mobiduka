@@ -1,9 +1,8 @@
 "use client";
 
-import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useState } from 'react'
+import { createContext, useContext, useMemo, useState, type FormEvent, type ReactNode, type Dispatch, type SetStateAction } from 'react'
 import {
   Area,
   AreaChart,
@@ -14,14 +13,13 @@ import {
   YAxis,
 } from 'recharts'
 
-
 type IconName =
   | 'overview' | 'tenants' | 'identity' | 'licenses' | 'activity' | 'search'
   | 'bell' | 'chevron' | 'store' | 'revenue' | 'pulse' | 'churn'
   | 'shield' | 'settings' | 'external' | 'close' | 'check' | 'warning'
 
 function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, React.ReactNode> = {
+  const paths: Record<IconName, ReactNode> = {
     overview: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
     tenants: <><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-5h6v5"/><path d="M9 9h.01M15 9h.01M9 12h.01M15 12h.01"/></>,
     identity: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/></>,
@@ -55,6 +53,123 @@ const navigation = [
   { to: '/admin/licenses', label: 'Licenses', icon: 'licenses' as IconName },
 ]
 
+type UserRecord = {
+  initials: string; display: string; legal: string; id: string; email: string
+  role: string; tenant: string; sessions: number; lastSeen: string; status: string
+}
+
+type AdminModalType = 'tenant' | 'user' | 'license' | null
+
+type AdminContext = {
+  tenants: Tenant[]
+  setTenants: Dispatch<SetStateAction<Tenant[]>>
+  users: UserRecord[]
+  setUsers: Dispatch<SetStateAction<UserRecord[]>>
+  licenses: LicenseRecord[]
+  setLicenses: Dispatch<SetStateAction<LicenseRecord[]>>
+  period: '30 Days' | 'Quarter' | 'Year'
+  setPeriod: Dispatch<SetStateAction<'30 Days' | 'Quarter' | 'Year'>>
+  monitorOpen: boolean
+  setMonitorOpen: Dispatch<SetStateAction<boolean>>
+  openCreate: (type: Exclude<AdminModalType, null>) => void
+}
+
+const AdminDataContext = createContext<AdminContext | null>(null)
+
+const useAdminData = () => {
+  const context = useContext(AdminDataContext)
+  if (!context) throw new Error('Admin pages must be rendered inside the admin layout.')
+  return context
+}
+
+function downloadCsv(filename: string, rows: Record<string, string | number | boolean>[]) {
+  if (!rows.length) return
+  const headers = Object.keys(rows[0])
+  const escape = (value: string | number | boolean) => `"${String(value).replace(/"/g, '""')}"`
+  const csv = [headers.map(escape).join(','), ...rows.map(row => headers.map(header => escape(row[header])).join(','))].join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function AdminCrudModal({ type, onClose, onCreate }: {
+  type: Exclude<AdminModalType, null>
+  onClose: () => void
+  onCreate: (payload: Record<string, string>) => void
+}) {
+  const [form, setForm] = useState<Record<string, string>>(
+    type === 'tenant'
+      ? { business: '', location: '', owner: '', email: '', plan: 'Basic', accountType: 'Till', shortcode: '', reference: '' }
+      : type === 'user'
+        ? { legal: '', email: '', role: 'STORE_OWNER', tenant: 'Platform' }
+        : { tenant: '', plan: 'Basic', expires: '2026-12-31', amount: '2500' },
+  )
+  const titles = {
+    tenant: ['Add tenant', 'Provision a new business workspace and payment node.'],
+    user: ['Invite platform user', 'Create an identity and assign its initial tenant scope.'],
+    license: ['Issue license', 'Provision a commercial tier and enforcement timeline.'],
+  }
+  const update = (key: string, value: string) => setForm(current => ({ ...current, [key]: value }))
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    onCreate(form)
+  }
+
+  return (
+    <div className="admin-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="admin-modal" onSubmit={submit}>
+        <div className="admin-modal-head">
+          <div><span>CREATE RECORD</span><h2>{titles[type][0]}</h2><p>{titles[type][1]}</p></div>
+          <button type="button" className="admin-icon-button" onClick={onClose} aria-label="Close"><AdminIcon name="close"/></button>
+        </div>
+        <div className="admin-modal-body">
+          {type === 'tenant' && <>
+            <div className="admin-form-grid two">
+              <label><span>Business name *</span><input required value={form.business} onChange={event => update('business', event.target.value)} placeholder="e.g. MobiDuka Westlands"/></label>
+              <label><span>Location *</span><input required value={form.location} onChange={event => update('location', event.target.value)} placeholder="Town, County"/></label>
+            </div>
+            <div className="admin-form-grid two">
+              <label><span>Owner legal name *</span><input required value={form.owner} onChange={event => update('owner', event.target.value)} placeholder="Full name"/></label>
+              <label><span>Owner email *</span><input required type="email" value={form.email} onChange={event => update('email', event.target.value)} placeholder="owner@business.co.ke"/></label>
+            </div>
+            <div className="admin-form-grid two">
+              <label><span>License tier</span><select value={form.plan} onChange={event => update('plan', event.target.value)}><option>Basic</option><option>Growth</option><option>Enterprise</option></select></label>
+              <label><span>M-PESA account type</span><select value={form.accountType} onChange={event => update('accountType', event.target.value)}><option>Till</option><option>Paybill</option></select></label>
+            </div>
+            <div className="admin-form-grid two">
+              <label><span>Business shortcode *</span><input required value={form.shortcode} onChange={event => update('shortcode', event.target.value.replace(/\D/g, ''))} placeholder="1787049"/></label>
+              <label><span>Account reference</span><input value={form.reference} onChange={event => update('reference', event.target.value)} placeholder="WESTLANDS01"/></label>
+            </div>
+          </>}
+          {type === 'user' && <>
+            <label className="admin-field"><span>Verified legal name *</span><input required value={form.legal} onChange={event => update('legal', event.target.value)} placeholder="Daniel Kamar"/></label>
+            <label className="admin-field"><span>Email ID *</span><input required type="email" value={form.email} onChange={event => update('email', event.target.value)} placeholder="name@mobiduka.co.ke"/></label>
+            <div className="admin-form-grid two">
+              <label><span>Role badge token</span><select value={form.role} onChange={event => update('role', event.target.value)}><option>SUPER_ADMIN</option><option>STORE_OWNER</option><option>ACCOUNTANT</option><option>CASHIER</option></select></label>
+              <label><span>Tenant scope</span><input value={form.tenant} onChange={event => update('tenant', event.target.value)} placeholder="Platform or tenant name"/></label>
+            </div>
+          </>}
+          {type === 'license' && <>
+            <label className="admin-field"><span>Tenant identifier *</span><input required value={form.tenant} onChange={event => update('tenant', event.target.value)} placeholder="Business or tenant ID"/></label>
+            <div className="admin-form-grid two">
+              <label><span>Strategic tier</span><select value={form.plan} onChange={event => { update('plan', event.target.value); update('amount', event.target.value === 'Basic' ? '2500' : event.target.value === 'Growth' ? '5500' : '12500') }}><option>Basic</option><option>Growth</option><option>Enterprise</option></select></label>
+              <label><span>Monthly value (KSh)</span><input required type="number" value={form.amount} onChange={event => update('amount', event.target.value)}/></label>
+            </div>
+            <label className="admin-field"><span>Contract expiration *</span><input required type="date" value={form.expires} onChange={event => update('expires', event.target.value)}/></label>
+          </>}
+        </div>
+        <div className="admin-modal-footer">
+          <button type="button" className="admin-secondary-button" onClick={onClose}>Cancel</button>
+          <button className="admin-primary-button">{type === 'tenant' ? 'Create tenant' : type === 'user' ? 'Send invitation' : 'Provision license'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 const pageMeta: Record<string, { eyebrow: string; title: string; description: string }> = {
   '/admin': { eyebrow: 'Platform pulse', title: 'Global Overview', description: 'Live operating health across every MobiDuka tenant.' },
   '/admin/tenants': { eyebrow: 'Business registry', title: 'Tenants & Businesses', description: 'Manage storefronts, owners, gateways, and platform access.' },
@@ -65,8 +180,57 @@ const pageMeta: Record<string, { eyebrow: string; title: string; description: st
 export function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const meta = pageMeta[pathname] ?? pageMeta['/admin']
+  const [tenants, setTenants] = useState<Tenant[]>(tenantData)
+  const [users, setUsers] = useState<UserRecord[]>(initialUsers)
+  const [licenses, setLicenses] = useState<LicenseRecord[]>(initialLicenses)
+  const [period, setPeriod] = useState<'30 Days' | 'Quarter' | 'Year'>('30 Days')
+  const [monitorOpen, setMonitorOpen] = useState(false)
+  const [createModal, setCreateModal] = useState<AdminModalType>(null)
+  const [quickOpen, setQuickOpen] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+
+  const openCreate = (type: Exclude<AdminModalType, null>) => {
+    setCreateModal(type)
+    setQuickOpen(false)
+  }
+
+  const createRecord = (payload: Record<string, string>) => {
+    if (createModal === 'tenant') {
+      setTenants(current => [{
+        id: `TEN-KE-${String(1900 + current.length).padStart(5, '0')}`,
+        business: payload.business, location: payload.location, owner: payload.owner, email: payload.email,
+        plan: payload.plan, status: 'trial', cache: '0 MB', mpesa: payload.shortcode,
+        type: payload.accountType as 'Till' | 'Paybill', reference: payload.reference || 'MOBIDUKA', lastSync: 'Not synced',
+      }, ...current])
+    }
+    if (createModal === 'user') {
+      const names = payload.legal.trim().split(/\s+/)
+      setUsers(current => [{
+        initials: names.map(name => name[0]).join('').slice(0, 2).toUpperCase(),
+        display: `${names[0]} ${names[1]?.[0] ? `${names[1][0]}.` : ''}`.trim(),
+        legal: payload.legal, email: payload.email, id: `UID-${3001035 + current.length}`,
+        role: payload.role, tenant: payload.tenant, sessions: 0, lastSeen: 'Invitation pending', status: 'invited',
+      }, ...current])
+    }
+    if (createModal === 'license') {
+      const expiry = new Date(payload.expires)
+      const days = Math.max(0, Math.ceil((expiry.getTime() - Date.now()) / 86400000))
+      setLicenses(current => [{
+        id: `LIC-${88202 + current.length}`, tenant: payload.tenant, plan: payload.plan,
+        expires: expiry.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+        days, renewal: true, amount: Number(payload.amount), status: 'active',
+      }, ...current])
+    }
+    setCreateModal(null)
+  }
+
+  const context: AdminContext = {
+    tenants, setTenants, users, setUsers, licenses, setLicenses,
+    period, setPeriod, monitorOpen, setMonitorOpen, openCreate,
+  }
 
   return (
+    <AdminDataContext.Provider value={context}>
     <div className="admin-shell">
       <aside className="admin-sidebar">
         <div className="admin-brand">
@@ -126,15 +290,36 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               <input aria-label="Search platform" placeholder="Search tenants, users, IDs…" />
               <kbd>⌘ K</kbd>
             </div>
-            <button className="admin-icon-button has-alert" aria-label="Notifications"><AdminIcon name="bell" /></button>
-            <button className="admin-primary-button"><span>+</span> Quick create</button>
+            <div className="admin-popover-anchor">
+              <button type="button" className="admin-icon-button has-alert" onClick={() => setNotificationsOpen(value => !value)} aria-label="Notifications" aria-expanded={notificationsOpen}><AdminIcon name="bell" size={16}/></button>
+              {notificationsOpen && (
+                <div className="admin-notifications-popover">
+                  <div className="admin-popover-head"><div><span>INFRASTRUCTURE LOGS</span><strong>Notifications</strong></div><button className="admin-icon-button" onClick={() => setNotificationsOpen(false)}><AdminIcon name="close" size={14}/></button></div>
+                  <div className="admin-notification warning"><AdminIcon name="warning" size={16}/><div><strong>Webhook delivery failed</strong><span>Shortcode 1786003 · Tenant T-002</span><small>2 minutes ago</small></div></div>
+                  <div className="admin-notification success"><AdminIcon name="check" size={16}/><div><strong>Cryptographic handshake rotation completed</strong><span>Till 1787049 · AES keyring healthy</span><small>11 minutes ago</small></div></div>
+                  <button className="admin-text-button">Open infrastructure log</button>
+                </div>
+              )}
+            </div>
+            <div className="admin-popover-anchor">
+              <button className="admin-primary-button" onClick={() => setQuickOpen(value => !value)}><span>+</span> Quick create</button>
+              {quickOpen && (
+                <div className="admin-quick-menu">
+                  <button onClick={() => openCreate('tenant')}><AdminIcon name="tenants" size={16}/><div><strong>Tenant workspace</strong><span>Business, owner and M-PESA node</span></div></button>
+                  <button onClick={() => openCreate('user')}><AdminIcon name="identity" size={16}/><div><strong>User identity</strong><span>Invite and assign RBAC scope</span></div></button>
+                  <button onClick={() => openCreate('license')}><AdminIcon name="licenses" size={16}/><div><strong>Strategic license</strong><span>Provision tier and contract</span></div></button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
         <div className="admin-content">
           {children}
         </div>
       </main>
+      {createModal && <AdminCrudModal type={createModal} onClose={() => setCreateModal(null)} onCreate={createRecord}/>}
     </div>
+    </AdminDataContext.Provider>
   )
 }
 
@@ -154,6 +339,13 @@ const liveTransactions = [
 ]
 
 export function AdminOverview() {
+  const { period, setPeriod, monitorOpen, setMonitorOpen } = useAdminData()
+  const chartData = useMemo(() => trendData.map((point, index) => ({
+    ...point,
+    volume: Math.round(point.volume * (period === 'Quarter' ? 1.85 : period === 'Year' ? 4.6 : 1)),
+    tenants: Math.round(point.tenants * (period === 'Quarter' ? 1.18 : period === 'Year' ? 1.62 : 1)),
+    day: period === '30 Days' ? point.day : period === 'Quarter' ? `W${index + 1}` : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'][index],
+  })), [period])
   const metrics = [
     { label: 'Annual recurring revenue', value: 'KSh 48.6M', delta: '+18.4%', note: 'vs last quarter', icon: 'revenue' as IconName, tone: 'gold' },
     { label: 'Active tenants', value: '1,284', delta: '+47', note: 'this month', icon: 'store' as IconName, tone: 'blue' },
@@ -164,7 +356,15 @@ export function AdminOverview() {
     <div className="admin-page-stack">
       <div className="admin-section-head">
         <div className="admin-date-filter"><span className="admin-live-dot" /> Live platform data</div>
-        <div className="admin-period-control"><button className="active">30 days</button><button>Quarter</button><button>Year</button></div>
+        <div className="admin-overview-controls">
+          <div className="admin-period-control">
+            {(['30 Days', 'Quarter', 'Year'] as const).map(value => <button key={value} className={period === value ? 'active' : ''} onClick={() => setPeriod(value)}>{value}</button>)}
+          </div>
+          <label className="admin-monitor-toggle">
+            <button className={`admin-toggle ${monitorOpen ? 'on' : ''}`} onClick={() => setMonitorOpen(value => !value)} aria-pressed={monitorOpen}><span/></button>
+            Open Transaction Telemetry Monitor
+          </label>
+        </div>
       </div>
       <section className="admin-metric-grid">
         {metrics.map(metric => (
@@ -185,7 +385,7 @@ export function AdminOverview() {
           </div>
           <div className="admin-chart-wrap">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trendData} margin={{ top: 10, right: 8, left: -22, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -22, bottom: 0 }}>
                 <defs>
                   <linearGradient id="volumeGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2E7D32" stopOpacity={0.4}/><stop offset="100%" stopColor="#2E7D32" stopOpacity={0}/></linearGradient>
                   <linearGradient id="tenantGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#4E7FE8" stopOpacity={0.3}/><stop offset="100%" stopColor="#4E7FE8" stopOpacity={0}/></linearGradient>
@@ -221,15 +421,15 @@ export function AdminOverview() {
               </div>
             ))}
           </div>
-          <button className="admin-text-button">Open transaction monitor <AdminIcon name="chevron" size={14}/></button>
+          <button className="admin-text-button" onClick={() => setMonitorOpen(true)}>Open transaction monitor <AdminIcon name="chevron" size={14}/></button>
         </article>
       </section>
 
       <section className="admin-health-grid">
         {[
-          { name: 'Daraja gateway', value: '99.98%', detail: '182ms median response', tone: 'green' },
-          { name: 'Sync queue', value: '42', detail: 'events processing', tone: 'blue' },
-          { name: 'License service', value: '100%', detail: '0 enforcement errors', tone: 'gold' },
+          { name: 'Daraja gateway', value: 'Operational', detail: '182ms median response', tone: 'green' },
+          { name: 'Synchronization queue', value: 'Active · 0ms', detail: '42 events processing', tone: 'blue' },
+          { name: 'License service', value: 'Healthy', detail: '0 enforcement errors', tone: 'gold' },
           { name: 'Active terminals', value: '3,842', detail: 'across 1,284 tenants', tone: 'violet' },
         ].map(item => (
           <article className="admin-health-card" key={item.name}>
@@ -238,6 +438,28 @@ export function AdminOverview() {
           </article>
         ))}
       </section>
+      {monitorOpen && (
+        <div className="admin-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setMonitorOpen(false) }}>
+          <div className="admin-monitor-modal">
+            <div className="admin-modal-head"><div><span>LIVE PROCESSING FABRIC</span><h2>Transaction Telemetry Monitor</h2><p>Real-time M-PESA checkout nodes and webhook delivery state.</p></div><button className="admin-icon-button" onClick={() => setMonitorOpen(false)}><AdminIcon name="close"/></button></div>
+            <div className="admin-monitor-stats">
+              <div><span>Active STK pushes</span><strong>18</strong><small>Across 11 tenants</small></div>
+              <div><span>Median authorization</span><strong>4.2s</strong><small>−0.8s this hour</small></div>
+              <div><span>Completion rate</span><strong>98.7%</strong><small>Last 500 requests</small></div>
+            </div>
+            <div className="admin-monitor-list">
+              {liveTransactions.map(transaction => (
+                <div className="admin-monitor-row" key={transaction.id}>
+                  <span className={`admin-runtime-icon ${transaction.status}`}>{transaction.status === 'failed' ? '×' : transaction.status === 'complete' ? '✓' : ''}</span>
+                  <div><strong>{transaction.store}</strong><span>{transaction.id} · Callback /api/mpesa/result</span></div>
+                  <strong>{transaction.amount}</strong>
+                  <span className={`admin-runtime-label ${transaction.status}`}>{transaction.status === 'pending' ? `PENDING · ${transaction.time}` : transaction.status.toUpperCase()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -257,11 +479,12 @@ const tenantData: Tenant[] = [
 ]
 
 export function AdminTenants() {
+  const { tenants, setTenants, openCreate } = useAdminData()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [selected, setSelected] = useState<Tenant | null>(null)
   const [auditState, setAuditState] = useState<'idle' | 'checking' | 'passed'>('idle')
-  const filtered = tenantData.filter(tenant =>
+  const filtered = tenants.filter(tenant =>
     (status === 'all' || tenant.status === status) &&
     `${tenant.business} ${tenant.owner} ${tenant.id}`.toLowerCase().includes(query.toLowerCase()),
   )
@@ -270,14 +493,28 @@ export function AdminTenants() {
     setAuditState('checking')
     window.setTimeout(() => setAuditState('passed'), 900)
   }
+  const updateSelected = <K extends keyof Tenant>(key: K, value: Tenant[K]) => setSelected(current => current ? { ...current, [key]: value } : current)
+  const saveTenant = () => {
+    if (!selected) return
+    setTenants(current => current.map(tenant => tenant.id === selected.id ? selected : tenant))
+    setSelected(null)
+  }
+  const deleteTenant = () => {
+    if (!selected) return
+    setTenants(current => current.filter(tenant => tenant.id !== selected.id))
+    setSelected(null)
+  }
 
   return (
     <div className="admin-page-stack">
       <div className="admin-toolbar">
         <div className="admin-search-field"><AdminIcon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search businesses, owners, tenant IDs…"/></div>
         <select value={status} onChange={event => setStatus(event.target.value)}><option value="all">All statuses</option><option value="active">Active</option><option value="trial">Trial</option><option value="suspended">Suspended</option></select>
-        <button className="admin-secondary-button">Export registry</button>
-        <button className="admin-primary-button"><span>+</span> Add tenant</button>
+        <button className="admin-secondary-button" onClick={() => downloadCsv('mobiduka-tenant-registry.csv', filtered.map(tenant => ({
+          TenantID: tenant.id, Business: tenant.business, Owner: tenant.owner, Email: tenant.email,
+          License: tenant.plan, Status: tenant.status, MpesaNode: tenant.mpesa, AccountType: tenant.type,
+        })))}>Export Registry (CSV)</button>
+        <button className="admin-primary-button" onClick={() => openCreate('tenant')}><span>+</span> Add tenant</button>
       </div>
 
       <div className="admin-table-panel">
@@ -317,28 +554,28 @@ export function AdminTenants() {
             <div className="admin-drawer-body">
               <div className="admin-drawer-section-title"><AdminIcon name="shield" size={16}/><div><strong>Secure gateway configuration</strong><span>AES-256 encrypted connection layer</span></div><span className="admin-encrypted-badge">Encrypted</span></div>
               <div className="admin-form-grid two">
-                <label><span>Account type</span><select defaultValue={selected.type}><option>Till</option><option>Paybill</option></select></label>
-                <label><span>Business shortcode</span><input defaultValue={selected.mpesa}/></label>
+                <label><span>Account type</span><select value={selected.type} onChange={event => updateSelected('type', event.target.value as Tenant['type'])}><option>Till</option><option>Paybill</option></select></label>
+                <label><span>Business shortcode</span><input value={selected.mpesa} onChange={event => updateSelected('mpesa', event.target.value.replace(/\D/g, ''))}/></label>
               </div>
-              <label className="admin-field"><span>Account reference</span><input defaultValue={selected.reference}/></label>
+              <label className="admin-field"><span>Account reference</span><input value={selected.reference} onChange={event => updateSelected('reference', event.target.value)}/></label>
               <label className="admin-field"><span>Daraja consumer key</span><div className="admin-secret-input"><input type="password" defaultValue="ck_live_4e8a713b29f"/><span>AES</span></div></label>
               <label className="admin-field"><span>Daraja consumer secret</span><div className="admin-secret-input"><input type="password" defaultValue="cs_live_92fb7a401de"/><span>AES</span></div></label>
               <label className="admin-field"><span>Lipa na M-PESA passkey</span><div className="admin-secret-input"><input type="password" defaultValue="bfb279f9aa9bdbc"/><span>AES</span></div></label>
 
               <div className={`admin-audit-result ${auditState}`}>
                 <div><span className="admin-live-dot"/><div><strong>{auditState === 'passed' ? 'Webhook reachable' : auditState === 'checking' ? 'Auditing callback route…' : 'Webhook health audit'}</strong><span>{auditState === 'passed' ? 'HTTPS 200 · 182ms · Signature valid' : 'Verify callback reachability and signing.'}</span></div></div>
-                <button onClick={auditWebhook} disabled={auditState === 'checking'}>{auditState === 'checking' ? 'Checking…' : 'Audit Webhook Status'}</button>
+                <button onClick={auditWebhook} disabled={auditState === 'checking'}>{auditState === 'checking' ? 'Checking…' : 'Audit Secure Webhook Routing Link'}</button>
               </div>
 
               <div className="admin-drawer-section-title"><AdminIcon name="store" size={16}/><div><strong>Tenant controls</strong><span>Operational access and ownership</span></div></div>
               <div className="admin-detail-list">
                 <div><span>Primary owner</span><strong>{selected.owner}</strong></div>
-                <div><span>License tier</span><strong>{selected.plan}</strong></div>
+                <div><span>License tier</span><select className="admin-inline-select" value={selected.plan} onChange={event => updateSelected('plan', event.target.value)}><option>Basic</option><option>Growth</option><option>Enterprise</option></select></div>
                 <div><span>Last data sync</span><strong>{selected.lastSync}</strong></div>
-                <div><span>Operational status</span><span className={`admin-status-badge ${selected.status}`}><i/>{selected.status}</span></div>
+                <div><span>Operational status</span><select className="admin-inline-select" value={selected.status} onChange={event => updateSelected('status', event.target.value as Tenant['status'])}><option value="active">Active</option><option value="trial">Trial</option><option value="suspended">Suspended</option></select></div>
               </div>
             </div>
-            <div className="admin-drawer-footer"><button className="admin-secondary-button" onClick={() => setSelected(null)}>Cancel</button><button className="admin-primary-button">Save secure configuration</button></div>
+            <div className="admin-drawer-footer"><button className="admin-danger-button" onClick={deleteTenant}>Delete tenant</button><span/><button className="admin-secondary-button" onClick={() => setSelected(null)}>Cancel</button><button className="admin-primary-button" onClick={saveTenant}>Save secure configuration</button></div>
           </aside>
         </div>
       )}
@@ -346,8 +583,8 @@ export function AdminTenants() {
   )
 }
 
-const users = [
-  { initials: 'DK', display: 'Dan Kip', legal: 'Daniel Kamar', id: 'USR-00182', email: 'daniel@mobiduka.co.ke', role: 'SUPER_ADMIN', tenant: 'Platform', sessions: 3, lastSeen: 'Now', status: 'active' },
+const initialUsers: UserRecord[] = [
+  { initials: 'DK', display: 'Dan Kip', legal: 'Daniel Kamar', id: 'UID-3001034', email: 'kamarster@gmail.com', role: 'SUPER_ADMIN', tenant: 'Platform', sessions: 3, lastSeen: 'Now', status: 'active' },
   { initials: 'DO', display: 'Diana O.', legal: 'Diana Kiplagat', id: 'USR-01842', email: 'diana@mobiduka.co.ke', role: 'STORE_OWNER', tenant: 'MobiDuka Eldoret', sessions: 2, lastSeen: '4 min ago', status: 'active' },
   { initials: 'BK', display: 'Brian K.', legal: 'Brian Kiptoo', id: 'USR-01839', email: 'brian@barngetuny.co.ke', role: 'STORE_OWNER', tenant: 'Barngetuny Plaza', sessions: 1, lastSeen: '18 min ago', status: 'active' },
   { initials: 'GW', display: 'Grace W.', legal: 'Grace Wanjiku', id: 'USR-08411', email: 'grace@barngetuny.co.ke', role: 'CASHIER', tenant: 'Barngetuny Plaza', sessions: 1, lastSeen: 'Now', status: 'active' },
@@ -355,8 +592,10 @@ const users = [
 ]
 
 export function AdminIdentity() {
+  const { users, setUsers, openCreate } = useAdminData()
   const [query, setQuery] = useState('')
   const [role, setRole] = useState('all')
+  const [showAudit, setShowAudit] = useState(false)
   const filtered = users.filter(user => (role === 'all' || user.role === role) && `${user.display} ${user.legal} ${user.email} ${user.id}`.toLowerCase().includes(query.toLowerCase()))
   const roleCards = [
     { role: 'SUPER_ADMIN', users: 4, description: 'Master SaaS controls and cross-tenant overrides.', permissions: 48, tone: 'gold' },
@@ -378,29 +617,52 @@ export function AdminIdentity() {
       <div className="admin-toolbar">
         <div className="admin-search-field"><AdminIcon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search users, emails, system IDs…"/></div>
         <select value={role} onChange={event => setRole(event.target.value)}><option value="all">All roles</option><option>SUPER_ADMIN</option><option>STORE_OWNER</option><option>ACCOUNTANT</option><option>CASHIER</option></select>
-        <button className="admin-secondary-button">Access audit</button>
-        <button className="admin-primary-button"><span>+</span> Invite user</button>
+        <button className="admin-secondary-button" onClick={() => downloadCsv('mobiduka-identity-ledger.csv', filtered.map(user => ({
+          SystemID: user.id, LegalName: user.legal, Email: user.email, Role: user.role,
+          Tenant: user.tenant, ActiveSessions: user.sessions, Status: user.status,
+        })))}>Export Identity Ledger (CSV)</button>
+        <button className="admin-secondary-button" onClick={() => setShowAudit(true)}>Access audit</button>
+        <button className="admin-primary-button" onClick={() => openCreate('user')}><span>+</span> Invite user</button>
       </div>
       <div className="admin-table-panel">
         <div className="admin-table-summary"><div><strong>{filtered.length}</strong><span>identity records</span></div><div className="admin-summary-chips"><span><i className="active"/> 4,929 active sessions</span><span><i className="trial"/> 18 pending invites</span></div></div>
         <div className="admin-table-scroll">
           <table className="admin-table">
-            <thead><tr><th>User identity</th><th>Verified legal name</th><th>Tenant scope</th><th>Clearance</th><th>Sessions</th><th>Last seen</th><th /></tr></thead>
+            <thead><tr><th>User identity</th><th>Verified legal name</th><th>Tenant scope</th><th>Clearance</th><th>Sessions</th><th>Last seen</th><th>Access control</th></tr></thead>
             <tbody>{filtered.map(user => (
               <tr key={user.id}>
                 <td><div className="admin-business-cell"><div className="admin-user-avatar">{user.initials}</div><div><strong>{user.display}</strong><span>{user.id} · {user.email}</span></div></div></td>
                 <td><div className="admin-verified-name"><AdminIcon name="check" size={13}/><strong>{user.legal}</strong></div></td>
                 <td><strong>{user.tenant}</strong></td>
-                <td><span className={`admin-role-badge ${user.role.toLowerCase()}`}>{user.role}</span></td>
-                <td><div className="admin-session-count"><span>{user.sessions}</span><small>{user.sessions === 1 ? 'device' : 'devices'}</small></div></td>
+                <td><select className={`admin-role-select ${user.role.toLowerCase()}`} value={user.role} onChange={event => setUsers(current => current.map(record => record.id === user.id ? { ...record, role: event.target.value } : record))}><option>SUPER_ADMIN</option><option>STORE_OWNER</option><option>ACCOUNTANT</option><option>CASHIER</option></select></td>
+                <td><div className="admin-session-count"><span>{user.sessions}</span><small>{user.sessions === 1 ? 'Active Device' : 'Active Devices'}</small></div></td>
                 <td><strong>{user.lastSeen}</strong><span className={`admin-cell-sub ${user.status}`}>{user.status}</span></td>
-                <td><button className="admin-row-button"><AdminIcon name="chevron" size={15}/></button></td>
+                <td><div className="admin-row-actions"><button className="admin-danger-button" disabled={user.sessions === 0} onClick={() => setUsers(current => current.map(record => record.id === user.id ? { ...record, sessions: 0, status: 'locked', lastSeen: 'Terminated now' } : record))}>Terminate Access Node</button><button className="admin-row-button" aria-label={`Remove ${user.legal}`} onClick={() => setUsers(current => current.filter(record => record.id !== user.id))}><AdminIcon name="close" size={13}/></button></div></td>
               </tr>
             ))}</tbody>
           </table>
         </div>
         <div className="admin-table-footer"><span>Showing {filtered.length} of 5,527 platform users</span><div><button disabled>Previous</button><button className="active">1</button><button>2</button><button>Next</button></div></div>
       </div>
+      {showAudit && (
+        <div className="admin-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setShowAudit(false) }}>
+          <div className="admin-audit-modal">
+            <div className="admin-modal-head"><div><span>IAM EVENT STREAM</span><h2>Access Audit Ledger</h2><p>Privileged role changes, session destruction, and authentication events.</p></div><button className="admin-icon-button" onClick={() => setShowAudit(false)}><AdminIcon name="close"/></button></div>
+            <div className="admin-audit-log">
+              {[
+                ['AUTH-8F21A', 'Daniel Kamar', 'SUPER_ADMIN login challenge passed', '102.68.14.22', 'Just now', 'success'],
+                ['IAM-19CC4', 'Diana Kiplagat', 'STORE_OWNER role scope updated', '41.90.72.18', '14 min ago', 'success'],
+                ['SES-71BA0', 'Faith Otieno', 'Concurrent terminal access terminated', '197.248.10.6', '2 hours ago', 'warning'],
+                ['AUTH-40DD2', 'Unknown identity', 'Invalid refresh token rejected', '105.163.4.91', '3 hours ago', 'danger'],
+              ].map(event => <div className="admin-audit-row" key={event[0]}><span className={`admin-runtime-icon ${event[5]}`}>{event[5] === 'success' ? '✓' : event[5] === 'danger' ? '×' : '!'}</span><div><strong>{event[2]}</strong><span>{event[0]} · {event[1]} · {event[3]}</span></div><time>{event[4]}</time></div>)}
+            </div>
+            <div className="admin-modal-footer"><button className="admin-secondary-button" onClick={() => downloadCsv('mobiduka-access-audit.csv', [
+              { EventID: 'AUTH-8F21A', Identity: 'Daniel Kamar', Action: 'SUPER_ADMIN login challenge passed', Timestamp: 'Just now' },
+              { EventID: 'IAM-19CC4', Identity: 'Diana Kiplagat', Action: 'STORE_OWNER role scope updated', Timestamp: '14 min ago' },
+            ])}>Export audit CSV</button><button className="admin-primary-button" onClick={() => setShowAudit(false)}>Done</button></div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -419,8 +681,9 @@ const initialLicenses: LicenseRecord[] = [
 ]
 
 export function AdminLicenses() {
+  const { licenses, setLicenses, openCreate } = useAdminData()
   const [rules, setRules] = useState<Record<string, boolean>>({ Basic: true, Growth: true, Enterprise: false })
-  const [licenses, setLicenses] = useState(initialLicenses)
+  const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null)
   const plans = [
     { name: 'Basic', subtitle: 'Standard Duka', price: '2,500', tenants: 734, color: 'blue', features: ['1 store · 3 users', 'Core POS & inventory', 'Standard support'] },
     { name: 'Growth', subtitle: 'Multi-store operator', price: '5,500', tenants: 421, color: 'green', features: ['3 stores · 15 users', 'Reports & staff controls', 'Priority support'] },
@@ -428,8 +691,8 @@ export function AdminLicenses() {
   ]
   const toggleRenewal = (id: string) => setLicenses(current => current.map(license => license.id === id ? { ...license, renewal: !license.renewal } : license))
   const revoke = (id: string) => {
-    if (!window.confirm('Revoke operational access for this tenant?')) return
     setLicenses(current => current.map(license => license.id === id ? { ...license, status: 'revoked', renewal: false } : license))
+    setConfirmRevoke(null)
   }
 
   return (
@@ -456,7 +719,10 @@ export function AdminLicenses() {
       </section>
 
       <div className="admin-table-panel">
-        <div className="admin-table-title-row"><div><span>License ledger</span><h2>Contracts & enforcement</h2></div><div><button className="admin-secondary-button">Export ledger</button><button className="admin-primary-button">Issue license</button></div></div>
+        <div className="admin-table-title-row"><div><span>License ledger</span><h2>Contracts & enforcement</h2></div><div><button className="admin-secondary-button" onClick={() => downloadCsv('mobiduka-contract-matrix.csv', licenses.map(license => ({
+          LicenseID: license.id, Tenant: license.tenant, Tier: license.plan, Expiration: license.expires,
+          AutomaticRenewal: license.renewal, MonthlyValueKSh: license.amount, Status: license.status,
+        })))}>Export Contract Matrix Ledger</button><button className="admin-primary-button" onClick={() => openCreate('license')}>Provision Strategic Tier Extension</button></div></div>
         <div className="admin-table-scroll">
           <table className="admin-table license-table">
             <thead><tr><th>Tenant identifier</th><th>License tier</th><th>Contract expiration</th><th>Auto renewal</th><th>Monthly value</th><th>Enforcement</th></tr></thead>
@@ -467,7 +733,7 @@ export function AdminLicenses() {
                 <td><strong>{license.expires}</strong><span className={`admin-countdown ${license.days <= 7 ? 'urgent' : license.days <= 30 ? 'warning' : ''}`}>{license.days > 0 ? `${license.days} days remaining` : `${Math.abs(license.days)} days overdue`}</span></td>
                 <td><div className="admin-renewal-cell"><button className={`admin-toggle ${license.renewal ? 'on' : ''}`} onClick={() => toggleRenewal(license.id)} disabled={license.status === 'revoked'} aria-pressed={license.renewal}><span/></button><small>{license.renewal ? 'Enabled' : 'Disabled'}</small></div></td>
                 <td><strong className="admin-mono">KSh {license.amount.toLocaleString()}</strong></td>
-                <td>{license.status === 'revoked' ? <span className="admin-status-badge suspended"><i/>Revoked</span> : <button className="admin-danger-button" onClick={() => revoke(license.id)}>Revoke access</button>}</td>
+                <td>{license.status === 'revoked' ? <div className="admin-row-actions"><span className="admin-status-badge suspended"><i/>Revoked</span><button className="admin-row-button" aria-label="Delete license" onClick={() => setLicenses(current => current.filter(record => record.id !== license.id))}><AdminIcon name="close" size={13}/></button></div> : <div className="admin-confirm-anchor"><button className="admin-danger-button" onClick={() => setConfirmRevoke(license.id)}>Revoke Operational Access Node</button>{confirmRevoke === license.id && <div className="admin-confirm-popover"><AdminIcon name="warning" size={17}/><div><strong>Revoke tenant access?</strong><span>POS terminals will be blocked immediately.</span><div><button onClick={() => setConfirmRevoke(null)}>Cancel</button><button onClick={() => revoke(license.id)}>Confirm revoke</button></div></div></div>}</div>}</td>
               </tr>
             ))}</tbody>
           </table>
