@@ -25,6 +25,7 @@ export async function GET(request: Request) {
           select: {
             id: true,
             fullName: true,
+            status: true,
             role: { select: { name: true } },
           },
         },
@@ -38,11 +39,17 @@ export async function GET(request: Request) {
         const sales = await prisma.sale.aggregate({
           where: {
             businessId: resolvedBusinessId,
-            cashierId: session.cashierId,
-            createdAt: {
-              gte: session.openedAt,
-              ...(session.closedAt ? { lte: session.closedAt } : {}),
-            },
+            OR: [
+              { cashSessionId: session.id },
+              {
+                cashSessionId: null,
+                cashierId: session.cashierId,
+                createdAt: {
+                  gte: session.openedAt,
+                  ...(session.closedAt ? { lte: session.closedAt } : {}),
+                },
+              },
+            ],
           },
           _count: { id: true },
           _sum: { total: true },
@@ -198,8 +205,14 @@ export async function POST(request: Request) {
       const sales = await prisma.sale.findMany({
         where: {
           businessId: resolvedBusinessId,
-          cashierId: sessionCashierId,
-          createdAt: { gte: activeSession.openedAt },
+          OR: [
+            { cashSessionId: activeSession.id },
+            {
+              cashSessionId: null,
+              cashierId: sessionCashierId,
+              createdAt: { gte: activeSession.openedAt },
+            },
+          ],
           payments: {
             some: {
               paymentMethod: {
@@ -234,6 +247,10 @@ export async function POST(request: Request) {
           closedAt: new Date(),
         },
       });
+      await prisma.device.updateMany({
+        where: { currentCashSessionId: closedSession.id },
+        data: { currentCashSessionId: null },
+      })
 
       await prisma.auditLog.create({
         data: {

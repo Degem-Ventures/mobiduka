@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTheme, ThemeMode } from '../context/ThemeContext'
 import { formatPhoneForDisplay } from '../utils/format-phone'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
   onNavigate: (s: string) => void
@@ -38,7 +39,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
   const [taxPinDraft, setTaxPinDraft] = useState('')
   const [businessInfo, setBusinessInfo] = useState({ name: 'Business', branch: '', country: '', phone: '' })
   const [currencyOptions] = useState(CURRENCIES)
-  const [settingsError, setSettingsError] = useState('')
+  const [settingsError, setSettingsError] = useAutoDismissMessage()
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false)
 
   const applyPreferences = (response: SettingsResponse) => {

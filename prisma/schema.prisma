@@ -47,48 +47,48 @@ model Business {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  users             User[]
-  licenses          License[]
-  devices           Device[]
-  categories        Category[]
-  suppliers         Supplier[]
-  products          Product[]
-  inventory         Inventory[]
-  customers         Customer[]
-  sales             Sale[]
-  expenses          Expense[]
-  cashSessions      CashSession[]
-  purchaseOrders    PurchaseOrder[]
-  creditEntries     CreditLedgerEntry[]
-  mpesaIntegration  MpesaIntegration?
-  mpesaTransactions MpesaTransaction[]
-  mpesaSmsReceipts  MpesaSmsReceipt[]
-  auditLogs         AuditLog[]
-  syncQueues        SyncQueue[]
-  syncReceipts      SyncReceipt[]
-  notifications     Notification[]
+  users                     User[]
+  licenses                  License[]
+  devices                   Device[]
+  categories                Category[]
+  suppliers                 Supplier[]
+  products                  Product[]
+  inventory                 Inventory[]
+  customers                 Customer[]
+  sales                     Sale[]
+  expenses                  Expense[]
+  cashSessions              CashSession[]
+  purchaseOrders            PurchaseOrder[]
+  creditEntries             CreditLedgerEntry[]
+  mpesaIntegration          MpesaIntegration?
+  mpesaTransactions         MpesaTransaction[]
+  mpesaSmsReceipts          MpesaSmsReceipt[]
+  auditLogs                 AuditLog[]
+  syncQueues                SyncQueue[]
+  syncReceipts              SyncReceipt[]
+  notifications             Notification[]
   notificationSubscriptions NotificationSubscription[]
-  scanEvents        ScanEvent[]
-  shiftTypes        ShiftType[]
-  roles             Role[]
-  settings          BusinessSettings?
+  scanEvents                ScanEvent[]
+  shiftTypes                ShiftType[]
+  roles                     Role[]
+  settings                  BusinessSettings?
 }
 
 model BusinessSettings {
-  id             String   @id @default(uuid())
-  businessId     String   @unique
-  receiptPrint   Boolean  @default(true)
-  lowStockAlerts Boolean  @default(true)
-  salesNotifications Boolean @default(true)
-  dailyReport    Boolean  @default(false)
-  autoBackup     Boolean  @default(true)
-  mpesaEnabled   Boolean  @default(true)
-  themeMode      String   @default("light")
-  paymentConfig  Json?
-  receiptConfig  Json?
-  taxConfig      Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  businessId         String   @unique
+  receiptPrint       Boolean  @default(true)
+  lowStockAlerts     Boolean  @default(true)
+  salesNotifications Boolean  @default(true)
+  dailyReport        Boolean  @default(false)
+  autoBackup         Boolean  @default(true)
+  mpesaEnabled       Boolean  @default(true)
+  themeMode          String   @default("light")
+  paymentConfig      Json?
+  receiptConfig      Json?
+  taxConfig          Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 }
@@ -116,7 +116,7 @@ model Role {
   color       String   @default("#6B7A99")
   createdAt   DateTime @default(now())
 
-  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
   users       User[]
   permissions RolePermission[]
 
@@ -153,32 +153,32 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  business      Business        @relation(fields: [businessId], references: [id])
-  role          Role?           @relation(fields: [roleId], references: [id])
-  devices       Device[]
-  stockMoves    StockMovement[]
-  sales         Sale[]          @relation("CashierSales")
-  cashSessions  CashSession[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
+  business                  Business                   @relation(fields: [businessId], references: [id])
+  role                      Role?                      @relation(fields: [roleId], references: [id])
+  devices                   Device[]
+  stockMoves                StockMovement[]
+  sales                     Sale[]                     @relation("CashierSales")
+  cashSessions              CashSession[]
+  auditLogs                 AuditLog[]
+  notifications             Notification[]
   notificationSubscriptions NotificationSubscription[]
 }
 
 model ShiftType {
-  id              String        @id @default(uuid())
-  businessId      String
-  code            String
-  name            String
-  scheduledStart  String
-  scheduledEnd    String
-  icon            String?
-  color           String?
-  active          Boolean       @default(true)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id             String   @id @default(uuid())
+  businessId     String
+  code           String
+  name           String
+  scheduledStart String
+  scheduledEnd   String
+  icon           String?
+  color          String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  sessions  CashSession[]
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sessions CashSession[]
 
   @@unique([businessId, code])
 }
@@ -195,23 +195,27 @@ model Device {
   status      String    @default("ACTIVE")
   createdAt   DateTime  @default(now())
 
-  business   Business    @relation(fields: [businessId], references: [id])
-  user       User?       @relation(fields: [userId], references: [id])
-  syncQueues SyncQueue[]
+  business             Business     @relation(fields: [businessId], references: [id])
+  user                 User?        @relation(fields: [userId], references: [id])
+  syncQueues           SyncQueue[]
+  currentCashSessionId String?
+  currentCashSession   CashSession? @relation("DeviceCurrentCashSession", fields: [currentCashSessionId], references: [id], onDelete: SetNull)
+
+  @@index([currentCashSessionId])
 }
 
 model Category {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   businessId       String
   name             String
   reportGroup      String    @default("Care & Wellness")
   icon             String?
   emoji            String?
   parentCategoryId String?
-  status           String   @default("ACTIVE")
+  status           String    @default("ACTIVE")
   deletedAt        DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   business        Business   @relation(fields: [businessId], references: [id])
   parentCategory  Category?  @relation("CategoryTree", fields: [parentCategoryId], references: [id])
@@ -220,20 +224,20 @@ model Category {
 }
 
 model Supplier {
-  id            String   @id @default(uuid())
-  businessId    String
-  name          String
-  category      String?
-  phone         String?
-  email         String?
-  location      String?
-  contactPerson String?
-  notes         String?
-  paymentTerms  String   @default("Net 30")
-  rating        Int      @default(5)
-  outstandingBalance Float @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  businessId         String
+  name               String
+  category           String?
+  phone              String?
+  email              String?
+  location           String?
+  contactPerson      String?
+  notes              String?
+  paymentTerms       String   @default("Net 30")
+  rating             Int      @default(5)
+  outstandingBalance Float    @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   business       Business        @relation(fields: [businessId], references: [id])
   products       Product[]
@@ -293,15 +297,15 @@ model ScanEvent {
 }
 
 model PurchaseOrder {
-  id         String   @id @default(uuid())
+  id         String    @id @default(uuid())
   businessId String
   supplierId String?
   orderNo    String?
-  status     String   @default("REQUESTED")
-  totalCost  Float    @default(0)
+  status     String    @default("REQUESTED")
+  totalCost  Float     @default(0)
   dueDate    DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   business Business       @relation(fields: [businessId], references: [id])
   supplier Supplier?      @relation(fields: [supplierId], references: [id])
@@ -377,15 +381,15 @@ model CreditAccount {
 }
 
 model CreditLedgerEntry {
-  id         String    @id @default(uuid())
-  businessId String
-  customerId String
-  type       String
-  amount     Float
+  id            String    @id @default(uuid())
+  businessId    String
+  customerId    String
+  type          String
+  amount        Float
   paymentMethod String?
-  dueDate    DateTime?
-  status     String    @default("PENDING")
-  createdAt  DateTime  @default(now())
+  dueDate       DateTime?
+  status        String    @default("PENDING")
+  createdAt     DateTime  @default(now())
 
   business Business @relation(fields: [businessId], references: [id])
   customer Customer @relation(fields: [customerId], references: [id])
@@ -407,20 +411,20 @@ model MpesaIntegration {
 }
 
 model MpesaTransaction {
-  id                String   @id @default(uuid())
-  businessId        String
+  id                 String   @id @default(uuid())
+  businessId         String
   mpesaIntegrationId String?
-  phoneNumber       String
-  amount            Float
-  accountReference  String
-  merchantRequestId String?
-  checkoutRequestId String   @unique
-  status            String   @default("INITIATED")
-  resultCode        Int?
-  resultDescription String?
-  receiptNumber     String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  phoneNumber        String
+  amount             Float
+  accountReference   String
+  merchantRequestId  String?
+  checkoutRequestId  String   @unique
+  status             String   @default("INITIATED")
+  resultCode         Int?
+  resultDescription  String?
+  receiptNumber      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   business         Business          @relation(fields: [businessId], references: [id])
   mpesaIntegration MpesaIntegration? @relation(fields: [mpesaIntegrationId], references: [id], onDelete: SetNull)
@@ -450,6 +454,7 @@ model Sale {
   id            String   @id @default(uuid())
   businessId    String
   cashierId     String?
+  cashSessionId String?
   customerId    String?
   saleNumber    String?  @unique
   subtotal      Float    @default(0)
@@ -460,11 +465,14 @@ model Sale {
   saleStatus    String   @default("OPEN")
   createdAt     DateTime @default(now())
 
-  business Business   @relation(fields: [businessId], references: [id])
-  cashier  User?      @relation("CashierSales", fields: [cashierId], references: [id])
-  customer Customer?  @relation(fields: [customerId], references: [id])
-  items    SaleItem[]
-  payments Payment[]
+  business    Business     @relation(fields: [businessId], references: [id])
+  cashier     User?        @relation("CashierSales", fields: [cashierId], references: [id])
+  cashSession CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  customer    Customer?    @relation(fields: [customerId], references: [id])
+  items       SaleItem[]
+  payments    Payment[]
+
+  @@index([cashSessionId])
 }
 
 model SaleItem {
@@ -502,17 +510,17 @@ model Payment {
 }
 
 model Expense {
-  id          String   @id @default(uuid())
-  businessId  String
-  category    String?
-  description String
-  amount      Float
+  id            String   @id @default(uuid())
+  businessId    String
+  category      String?
+  description   String
+  amount        Float
   paymentMethod String?
-  icon        String?
-  recurring   Boolean  @default(false)
-  paidTo      String?
-  recordedBy  String?
-  createdAt   DateTime @default(now())
+  icon          String?
+  recurring     Boolean  @default(false)
+  paidTo        String?
+  recordedBy    String?
+  createdAt     DateTime @default(now())
 
   business Business @relation(fields: [businessId], references: [id])
 }
@@ -522,9 +530,9 @@ model CashSession {
   businessId      String
   cashierId       String?
   shiftTypeId     String?
-  shiftType       String      @default("morning")
-  salesCount      Int         @default(0)
-  salesAmount     Float       @default(0)
+  shiftType       String    @default("morning")
+  salesCount      Int       @default(0)
+  salesAmount     Float     @default(0)
   openingBalance  Float     @default(0)
   closingBalance  Float?
   expectedBalance Float?
@@ -532,9 +540,11 @@ model CashSession {
   openedAt        DateTime  @default(now())
   closedAt        DateTime?
 
-  business Business @relation(fields: [businessId], references: [id])
-  cashier  User?    @relation(fields: [cashierId], references: [id])
-  shift    ShiftType? @relation(fields: [shiftTypeId], references: [id])
+  business        Business   @relation(fields: [businessId], references: [id])
+  cashier         User?      @relation(fields: [cashierId], references: [id])
+  shift           ShiftType? @relation(fields: [shiftTypeId], references: [id])
+  sales           Sale[]
+  assignedDevices Device[]   @relation("DeviceCurrentCashSession")
 }
 
 model AuditLog {
@@ -567,22 +577,22 @@ model SyncQueue {
 }
 
 model Notification {
-  id         String   @id @default(uuid())
+  id         String    @id @default(uuid())
   businessId String
   userId     String?
   title      String
   message    String
   type       String?
-  isRead     Boolean  @default(false)
+  isRead     Boolean   @default(false)
   eventKey   String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
   deletedAt  DateTime?
 
   business Business @relation(fields: [businessId], references: [id])
   user     User?    @relation(fields: [userId], references: [id])
 
-  @@index([businessId, isRead, createdAt(sort: Desc)])
   @@unique([businessId, eventKey])
+  @@index([businessId, isRead, createdAt(sort: Desc)])
 }
 
 model NotificationSubscription {

@@ -6,6 +6,7 @@ import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 import { composeProductDisplayName } from '../../lib/product-display-name'
 import { loadProductTypes, productTypesStorageKey, type ProductTypeOption } from '../utils/product-types'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type ScannedProduct = { name: string; barcode: string; category: string | null; price: number; stock: number; supplier: { name: string } | null; emoji: string; status: string; id: string }
 type ScanLog = { name: string; barcode: string; action: string; time: string; emoji: string }
@@ -35,18 +36,18 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   const [product, setProduct] = useState<ScannedProduct | null>(null)
   const [scanProgress, setScanProgress] = useState(0)
   const [manualInput, setManualInput]   = useState('')
-  const [cameraError, setCameraError]   = useState('')
+  const [cameraError, setCameraError]   = useAutoDismissMessage()
   const [flash, setFlash]               = useState(false)
   const [addedToCart, setAddedToCart]   = useState(false)
   const [scanLog, setScanLog]           = useState<ScanLog[]>([])
   const [scanCounts, setScanCounts]     = useState<Record<string, number>>({})
-  const [error, setError]               = useState('')
+  const [error, setError]               = useAutoDismissMessage()
   const [categories, setCategories]     = useState<CategoryItem[]>([])
   const [addProductForm, setAddProductForm] = useState({ brand: '', name: '', packSize: '', cost: '', price: '', stock: '', reorder: '10', categoryId: '', emoji: '📦' })
   const [productTypes, setProductTypes] = useState<ProductTypeOption[]>([])
   const [productIdentityExpanded, setProductIdentityExpanded] = useState(false)
   const [savingProduct, setSavingProduct] = useState(false)
-  const [addProductError, setAddProductError] = useState('')
+  const [addProductError, setAddProductError] = useAutoDismissMessage()
   const [productAdded, setProductAdded] = useState<string | null>(null)
   const [showAddProductForm, setShowAddProductForm] = useState(false)
   const [showBulkCalculator, setShowBulkCalculator] = useState(false)

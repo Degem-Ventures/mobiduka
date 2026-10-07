@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react"
 import { createPortal } from "react-dom"
 import { useColors } from "../utils/theme"
 import { apiFetch, getClientSession, takeCreditorSaleIntent } from "../../lib/client-api"
+import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
 
 type ProductItem = {
   id: string
@@ -23,7 +24,13 @@ type CreditCustomer = {
 type CartItem = Pick<ProductItem, "id" | "name" | "price" | "emoji"> & {
   qty: number
 }
-type ActiveOperator = { id: string; name: string; shift: string }
+type ActiveOperator = {
+  id: string
+  sessionId: string
+  name: string
+  shift: string
+  openedAt: string
+}
 type ReceiptInfo = {
   saleNumber: string
   createdAt: string
@@ -82,6 +89,10 @@ type PosDraft = {
 const cartDraftKey = (businessId: string, userId: string) =>
   `mobiduka.pos_draft.v1:${businessId}:${userId}`
 const receiptPageSize = 10
+const deviceUuidStorageKey = (businessId: string) =>
+  `mobiduka.registered_device.v1:${businessId}`
+const deviceShiftStorageKey = (businessId: string) =>
+  `mobiduka.current_shift.v1:${businessId}`
 const normalizePaymentMethod = (value: string) =>
   value.toLowerCase().replace(/[^a-z]/g, "")
 
@@ -98,7 +109,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     emoji: string | null
   }>>([])
   const [creditCustomers, setCreditCustomers] = useState<CreditCustomer[]>([])
-  const [dataError, setDataError] = useState("")
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState("All")
   const [cart, setCart] = useState<CartItem[]>([])
@@ -119,7 +130,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [showMpesaQr, setShowMpesaQr] = useState(false)
   const [mpesaQrDetails, setMpesaQrDetails] = useState<MpesaQrDetails | null>(null)
   const [mpesaQrLoading, setMpesaQrLoading] = useState(false)
-  const [mpesaQrError, setMpesaQrError] = useState("")
+  const [mpesaQrError, setMpesaQrError] = useAutoDismissMessage()
   const [discount, setDiscount] = useState(0)
   // Credit customer picker state
   const [selectedCreditor, setSelectedCreditor] = useState<{
@@ -133,13 +144,16 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [quickPhone, setQuickPhone] = useState("")
   const [activeOperators, setActiveOperators] = useState<ActiveOperator[]>([])
   const [selectedOperatorId, setSelectedOperatorId] = useState("")
+  const [deviceUuid, setDeviceUuid] = useState("")
+  const [currentDeviceShiftId, setCurrentDeviceShiftId] = useState("")
+  const [isAssigningShift, setIsAssigningShift] = useState(false)
   const [isCompletingSale, setIsCompletingSale] = useState(false)
   const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
   const [receiptHistory, setReceiptHistory] = useState<HistoricalReceipt[]>([])
   const [receiptHistoryCursor, setReceiptHistoryCursor] = useState<string | null>(null)
   const [receiptHistoryLoading, setReceiptHistoryLoading] = useState(false)
   const [receiptHistoryLoadingMore, setReceiptHistoryLoadingMore] = useState(false)
-  const [receiptHistoryError, setReceiptHistoryError] = useState("")
+  const [receiptHistoryError, setReceiptHistoryError] = useAutoDismissMessage()
   const [receiptHistoryRefresh, setReceiptHistoryRefresh] = useState(0)
   const [historicalReceipt, setHistoricalReceipt] = useState<HistoricalReceipt | null>(null)
   const [viewingPastReceipt, setViewingPastReceipt] = useState(false)
@@ -396,50 +410,165 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   }, [initialCartItem])
 
   useEffect(() => {
-    if (!session) return
-    apiFetch<{
-      sessions: Array<{
-        closedAt: string | null
-        cashier: {
-          id: string
-          fullName: string
-          role: { name: string } | null
-        } | null
-        shift: { name: string } | null
-        shiftType: string
-      }>
-    }>(
-      `/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`,
-    )
-      .then((response) => {
-        const operators = response.sessions
+    if (!session || !currentBusinessId) return
+    let cancelled = false
+    let loading = false
+
+    const loadActiveShifts = async () => {
+      if (loading) return
+      loading = true
+      try {
+        const uuidKey = deviceUuidStorageKey(currentBusinessId)
+        let registeredDeviceUuid = window.localStorage.getItem(uuidKey)
+        if (!registeredDeviceUuid) {
+          registeredDeviceUuid = window.crypto.randomUUID()
+          window.localStorage.setItem(uuidKey, registeredDeviceUuid)
+        }
+        if (cancelled) return
+        setDeviceUuid(registeredDeviceUuid)
+
+        const [shiftResponse, deviceResponse] = await Promise.all([
+          apiFetch<{
+            sessions: Array<{
+              id: string
+              closedAt: string | null
+              openedAt: string
+              cashier: {
+                id: string
+                fullName: string
+                status?: string
+                role: { name: string } | null
+              } | null
+              shift: { name: string } | null
+              shiftType: string
+            }>
+          }>(
+            `/api/cash/session?businessId=${encodeURIComponent(currentBusinessId)}`,
+            { cache: "no-store" },
+          ),
+          apiFetch<{ currentShiftId: string | null }>(
+            `/api/cash/session/device?businessId=${encodeURIComponent(currentBusinessId)}&deviceUuid=${encodeURIComponent(registeredDeviceUuid)}`,
+            { cache: "no-store" },
+          ),
+        ])
+        if (cancelled) return
+
+        const operators = shiftResponse.sessions
           .filter(
             (item) =>
               !item.closedAt &&
               item.cashier &&
+              item.cashier.status !== "INACTIVE" &&
               ["CASHIER", "SUPERVISOR"].includes(
                 item.cashier.role?.name?.toUpperCase() ?? "",
               ),
           )
           .map((item) => ({
             id: item.cashier!.id,
+            sessionId: item.id,
             name: item.cashier!.fullName,
             shift: item.shift?.name ?? item.shiftType,
+            openedAt: item.openedAt,
           }))
-          .filter(
-            (operator, index, rows) =>
-              rows.findIndex((candidate) => candidate.id === operator.id) ===
-              index,
-          )
         setActiveOperators(operators)
-        if (operators.length === 1) setSelectedOperatorId(operators[0].id)
-        else if (
-          !operators.some((operator) => operator.id === selectedOperatorId)
+
+        const locallySelectedShiftId = window.localStorage.getItem(
+          deviceShiftStorageKey(currentBusinessId),
         )
-          setSelectedOperatorId("")
+        const availableSessionIds = new Set(
+          operators.map((operator) => operator.sessionId),
+        )
+        const shiftIdToUse =
+          (deviceResponse.currentShiftId &&
+          availableSessionIds.has(deviceResponse.currentShiftId)
+            ? deviceResponse.currentShiftId
+            : null) ??
+          (locallySelectedShiftId &&
+          availableSessionIds.has(locallySelectedShiftId)
+            ? locallySelectedShiftId
+            : null) ??
+          (operators.length === 1 ? operators[0].sessionId : null)
+
+        if (
+          shiftIdToUse &&
+          shiftIdToUse !== deviceResponse.currentShiftId
+        ) {
+          await apiFetch("/api/cash/session/device", {
+            method: "PUT",
+            body: JSON.stringify({
+              businessId: currentBusinessId,
+              deviceUuid: registeredDeviceUuid,
+              cashSessionId: shiftIdToUse,
+            }),
+          })
+        }
+        if (cancelled) return
+        setCurrentDeviceShiftId(shiftIdToUse ?? "")
+        const selectedOperator = operators.find(
+          (operator) => operator.sessionId === shiftIdToUse,
+        )
+        setSelectedOperatorId(selectedOperator?.id ?? "")
+        if (shiftIdToUse) {
+          window.localStorage.setItem(
+            deviceShiftStorageKey(currentBusinessId),
+            shiftIdToUse,
+          )
+        } else {
+          window.localStorage.removeItem(deviceShiftStorageKey(currentBusinessId))
+        }
+        setDataError("")
+      } catch (reason) {
+        if (!cancelled) {
+          setDataError(
+            reason instanceof Error
+              ? reason.message
+              : "Unable to load active shifts for this device.",
+          )
+        }
+      } finally {
+        loading = false
+      }
+    }
+
+    void loadActiveShifts()
+    const refreshTimer = window.setInterval(() => void loadActiveShifts(), 30_000)
+    window.addEventListener("mobiduka:shift-changed", loadActiveShifts)
+    return () => {
+      cancelled = true
+      window.clearInterval(refreshTimer)
+      window.removeEventListener("mobiduka:shift-changed", loadActiveShifts)
+    }
+  }, [currentBusinessId])
+
+  const selectDeviceShift = async (operator: ActiveOperator) => {
+    if (!deviceUuid || isAssigningShift) return
+    setIsAssigningShift(true)
+    setDataError("")
+    try {
+      await apiFetch("/api/cash/session/device", {
+        method: "PUT",
+        body: JSON.stringify({
+          businessId: currentBusinessId,
+          deviceUuid,
+          cashSessionId: operator.sessionId,
+        }),
       })
-      .catch(() => setActiveOperators([]))
-  }, [session?.user.businessId])
+      setCurrentDeviceShiftId(operator.sessionId)
+      setSelectedOperatorId(operator.id)
+      window.localStorage.setItem(
+        deviceShiftStorageKey(currentBusinessId),
+        operator.sessionId,
+      )
+    } catch (reason) {
+      setDataError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to set the current shift for this device.",
+      )
+    } finally {
+      setIsAssigningShift(false)
+    }
+  }
 
   const normalizedSearch = search.trim().toLowerCase()
   const filtered = products.filter((p) => {
@@ -615,6 +744,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     if (
       !session ||
       !selectedOperatorId ||
+      !currentDeviceShiftId ||
       cart.length === 0 ||
       isCompletingSale ||
       (confirmMpesaQr && paymentMethod !== "mpesa")
@@ -701,6 +831,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         body: JSON.stringify({
           businessId: currentBusinessId,
           cashierId: selectedOperatorId,
+          cashSessionId: currentDeviceShiftId,
           invoiceNo: `POS-${Date.now()}`,
           totalAmount: total,
           subtotal,
@@ -2513,13 +2644,20 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                   letterSpacing: 0.5,
                 }}
               >
-                Sale Attributed To
+                Current Shift for This Device
+              </div>
+              <div style={{ fontSize: 11, color: c.muted, marginBottom: 10 }}>
+                {activeOperators.length > 1
+                  ? "Choose which open shift this register will use. Your choice is saved to this device."
+                  : "Sales on this register will be linked directly to the selected shift."}
               </div>
               {activeOperators.map((operator) => (
                 <button
-                  key={operator.id}
+                  key={operator.sessionId}
                   className="btn"
-                  onClick={() => setSelectedOperatorId(operator.id)}
+                  type="button"
+                  onClick={() => void selectDeviceShift(operator)}
+                  disabled={isAssigningShift}
                   style={{
                     width: "100%",
                     display: "flex",
@@ -2529,14 +2667,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     marginBottom: 8,
                     borderRadius: 12,
                     background:
-                      selectedOperatorId === operator.id
+                      currentDeviceShiftId === operator.sessionId
                         ? "rgba(18,58,143,0.08)"
                         : c.card,
                     border:
-                      selectedOperatorId === operator.id
+                      currentDeviceShiftId === operator.sessionId
                         ? "2px solid #123A8F"
                         : `1px solid ${c.divider}`,
-                    cursor: "pointer",
+                    cursor: isAssigningShift ? "wait" : "pointer",
                     fontFamily: "inherit",
                     textAlign: "left",
                   }}
@@ -2548,20 +2686,43 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                       {operator.name}
                     </div>
                     <div style={{ fontSize: 11, color: c.muted }}>
-                      {operator.shift} · Active
+                      {operator.shift} · Started{" "}
+                      {new Date(operator.openedAt).toLocaleTimeString(
+                        "en-GB",
+                        { hour: "2-digit", minute: "2-digit" },
+                      )}
                     </div>
                   </div>
-                  {selectedOperatorId === operator.id && (
-                    <span style={{ color: "#123A8F", fontWeight: 800 }}>✓</span>
+                  {currentDeviceShiftId === operator.sessionId && (
+                    <span style={{ color: "#123A8F", fontSize: 11, fontWeight: 800 }}>
+                      Current on this device ✓
+                    </span>
                   )}
                 </button>
               ))}
+            </div>
+          )}
+          {activeOperators.length === 0 && (
+            <div
+              role="alert"
+              style={{
+                marginTop: 20,
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: c.warningBg,
+                color: c.muted,
+                fontSize: 12,
+              }}
+            >
+              No active cashier shifts are available for this device. Start a
+              shift before completing a sale.
             </div>
           )}
 
           {(() => {
             const canComplete =
               !!selectedOperatorId &&
+              !!currentDeviceShiftId &&
               (paymentMethod !== "credit" || !!selectedCreditor) &&
               (paymentMethod !== "mpesa" ||
                 mpesaPhone.replace(/\s+/g, "").length >= 10)
@@ -2594,7 +2755,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 }}
               >
                 {!selectedOperatorId
-                  ? "Select an active shift operator"
+                  ? "Select a current shift for this device"
                   : paymentMethod === "credit" && !selectedCreditor
                     ? "Select a customer to proceed"
                     : isCompletingSale

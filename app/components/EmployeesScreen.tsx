@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 import AdminRegisterScreen from './AdminRegisterScreen'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Role = 'Store Manager' | 'Cashier' | 'Stock Keeper' | 'Supervisor' | 'Accountant'
 
@@ -50,7 +51,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Employee | null>(null)
   const [form, setForm] = useState({ name: '', role: 'Cashier' as Role, phone: '', email: '', pin: '', shift: 'Morning', salary: '' })
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
 
   const loadEmployees = async () => {

@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Expense = { id: string; description: string; category: string | null; amount: number; createdAt: string; paymentMethod: string | null; icon: string | null; recurring: boolean }
+type ExpenseToast = { message: string; tone: 'success' | 'error' }
 
 const categoryColors: Record<string, string> = {
   Utilities: '#0288D1', Payroll: '#5E35B1', Rent: '#2E7D32', Supplies: '#F57C00', Logistics: '#D32F2F'
@@ -49,17 +51,114 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   const [cat, setCat] = useState('All')
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [toast, setToast] = useState<ExpenseToast | null>(null)
+  const [fabPosition, setFabPosition] = useState<{ x: number; y: number } | null>(null)
+  const expenseScreenRef = useRef<HTMLDivElement | null>(null)
+  const toastTimeout = useRef<number | null>(null)
+  const fabDragStart = useRef<{ pointerId: number; pointerX: number; pointerY: number; x: number; y: number } | null>(null)
+  const fabWasDragged = useRef(false)
+  const fabClickReset = useRef<number | null>(null)
   const emptyExpenseForm = () => ({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
+
+  const notify = (message: string, tone: ExpenseToast['tone']) => {
+    if (toastTimeout.current !== null) window.clearTimeout(toastTimeout.current)
+    setToast({ message, tone })
+    toastTimeout.current = window.setTimeout(() => {
+      setToast(null)
+      toastTimeout.current = null
+    }, 4000)
+  }
+
+  useEffect(() => () => {
+    if (toastTimeout.current !== null) window.clearTimeout(toastTimeout.current)
+  }, [])
+
+  const toastNode = toast && (
+    <div
+      role={toast.tone === 'error' ? 'alert' : 'status'}
+      aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}
+      style={{
+        position: 'fixed',
+        top: 18,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 2000,
+        maxWidth: 'calc(100vw - 32px)',
+        padding: '12px 16px',
+        borderRadius: 12,
+        background: toast.tone === 'success' ? '#2E7D32' : '#B71C1C',
+        color: 'white',
+        fontSize: 13,
+        fontWeight: 700,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+      }}
+    >
+      {toast.message}
+    </div>
+  )
 
   const openAdd = () => {
     setForm(emptyExpenseForm())
     setEditingExpense(null)
     setConfirmDeleteId(null)
     setShowAdd(true)
+  }
+
+  const startFabDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!expenseScreenRef.current) return
+    if (fabClickReset.current !== null) {
+      window.clearTimeout(fabClickReset.current)
+      fabClickReset.current = null
+    }
+    const screenRect = expenseScreenRef.current.getBoundingClientRect()
+    const buttonRect = event.currentTarget.getBoundingClientRect()
+    const x = fabPosition?.x ?? buttonRect.left - screenRect.left
+    const y = fabPosition?.y ?? buttonRect.top - screenRect.top
+    fabDragStart.current = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      x,
+      y,
+    }
+    fabWasDragged.current = false
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const moveFab = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const start = fabDragStart.current
+    const screen = expenseScreenRef.current
+    if (!start || !screen || start.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - start.pointerX
+    const deltaY = event.clientY - start.pointerY
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 6) fabWasDragged.current = true
+    if (!fabWasDragged.current) return
+    const width = event.currentTarget.offsetWidth
+    const height = event.currentTarget.offsetHeight
+    const maxY = Math.max(132, screen.clientHeight - height - 80)
+    setFabPosition({
+      x: Math.max(12, Math.min(screen.clientWidth - width - 12, start.x + deltaX)),
+      y: Math.max(132, Math.min(maxY, start.y + deltaY)),
+    })
+  }
+
+  const endFabDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (fabDragStart.current?.pointerId !== event.pointerId) return
+    fabDragStart.current = null
+    if (event.type === 'pointercancel') {
+      fabWasDragged.current = false
+      return
+    }
+    if (fabWasDragged.current) {
+      fabClickReset.current = window.setTimeout(() => {
+        fabWasDragged.current = false
+        fabClickReset.current = null
+      }, 500)
+    }
   }
 
   const loadExpenses = async () => {
@@ -96,7 +195,12 @@ export default function ExpensesScreen({ onNavigate }: Props) {
       setForm(emptyExpenseForm())
       setShowAdd(false)
       setEditingExpense(null)
-    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to save expense.') }
+      notify(editingExpense ? 'Expense updated successfully.' : 'Expense added successfully.', 'success')
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Unable to save expense.'
+      setDataError(message)
+      notify(message, 'error')
+    }
     finally { setSaving(false) }
   }
 
@@ -113,7 +217,12 @@ export default function ExpensesScreen({ onNavigate }: Props) {
     try {
       await apiFetch(`/api/expenses?id=${encodeURIComponent(expense.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
       setExpenses(previous => previous.filter(item => item.id !== expense.id))
-    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to delete expense.') }
+      notify('Expense deleted successfully.', 'success')
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Unable to delete expense.'
+      setDataError(message)
+      notify(message, 'error')
+    }
     finally { setSaving(false); setConfirmDeleteId(null) }
   }
 
@@ -130,7 +239,8 @@ export default function ExpensesScreen({ onNavigate }: Props) {
 
   if (showAdd) {
     return (
-      <div className="screen" style={{ background: c.bg }}>
+      <div ref={expenseScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
+        {toastNode}
         <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <button className="btn" onClick={() => { setShowAdd(false); setEditingExpense(null); setForm(emptyExpenseForm()) }} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -194,7 +304,8 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   }
 
   return (
-    <div className="screen" style={{ background: c.bg }}>
+    <div ref={expenseScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
+      {toastNode}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
@@ -225,21 +336,36 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           {cat === 'All' ? 'All Expenses' : cat} · KSh {total.toLocaleString()}
         </div>
         {filtered.map(e => (
-          <div key={e.id} className="card" style={{ padding: '14px 16px', marginBottom: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div key={e.id} className="card" style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '14px 16px', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: c.tint(categoryColors[normalizeCategory(e.category)] || '#6B7A99'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{getExpenseIcon(e)}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{e.description}</div>
-                {e.recurring && <span style={{ fontSize: 9, background: c.iconBg, color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>RECURRING</span>}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
+                  <div style={{ minWidth: 0, overflowWrap: 'anywhere', fontSize: 13, fontWeight: 700, color: c.text }}>{e.description}</div>
+                  {e.recurring && <span style={{ fontSize: 9, background: c.iconBg, color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700, flexShrink: 0 }}>RECURRING</span>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 4, minWidth: 0 }}>
+                  <span style={{ minWidth: 0, overflowWrap: 'anywhere', fontSize: 11, color: c.muted }}>{normalizeCategory(e.category)}</span>
+                  <span
+                    className={`badge ${
+                      getExpenseMethod(e).toLowerCase().includes('mpesa')
+                        ? 'badge-success'
+                        : 'badge-blue'
+                    }`}
+                    style={{ fontSize: 10, flexShrink: 0 }}
+                  >
+                    {getExpenseMethod(e)}
+                  </span>
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{normalizeCategory(e.category)} · {getExpenseMethod(e)} · {formatExpenseDate(e.createdAt)}</div>
+              <div style={{ flexShrink: 0, whiteSpace: 'nowrap', fontSize: 15, fontWeight: 800, color: '#D32F2F' }}>KSh {e.amount.toLocaleString()}</div>
             </div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: '#D32F2F', flexShrink: 0 }}>KSh {e.amount.toLocaleString()}</div>
-            {confirmDeleteId !== e.id && <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              <button className="btn" onClick={() => startEdit(e)} aria-label={`Edit ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-              <button className="btn" onClick={() => setConfirmDeleteId(e.id)} aria-label={`Delete ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
-            </div>}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0, marginTop: 10 }}>
+              <div style={{ minWidth: 0, overflowWrap: 'anywhere', fontSize: 11, color: c.muted }}>{formatExpenseDate(e.createdAt)}</div>
+              {confirmDeleteId !== e.id && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexShrink: 0 }}>
+                <button className="btn" onClick={() => startEdit(e)} aria-label={`Edit ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                <button className="btn" onClick={() => setConfirmDeleteId(e.id)} aria-label={`Delete ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
+              </div>}
             </div>
             {confirmDeleteId === e.id ? (
               <div role="alert" style={{ marginTop: 12, paddingTop: 12, borderTop: c.divider }}>
@@ -250,8 +376,49 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           </div>
         ))}
       </div>
-      <div style={{ position: 'absolute', bottom: 80, right: 16 }}>
-        <button className="btn" onClick={openAdd} style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', fontSize: 24, color: 'white', boxShadow: '0 4px 16px rgba(211,47,47,0.45)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+      <div style={{ position: 'absolute', zIndex: 20, ...(fabPosition ? { left: fabPosition.x, top: fabPosition.y } : { bottom: 80, right: 16 }) }}>
+        <button
+          className="btn"
+          type="button"
+          draggable={false}
+          aria-label="Add expense (drag to reposition)"
+          title="Drag to reposition · tap to add expense"
+          onPointerDown={startFabDrag}
+          onPointerMove={moveFab}
+          onPointerUp={endFabDrag}
+          onPointerCancel={endFabDrag}
+          onDragStart={event => event.preventDefault()}
+          onClick={event => {
+            if (fabWasDragged.current) {
+              event.preventDefault()
+              event.stopPropagation()
+              fabWasDragged.current = false
+              if (fabClickReset.current !== null) {
+                window.clearTimeout(fabClickReset.current)
+                fabClickReset.current = null
+              }
+              return
+            }
+            openAdd()
+          }}
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #D32F2F, #B71C1C)',
+            border: 'none',
+            fontSize: 24,
+            color: 'white',
+            boxShadow: '0 4px 16px rgba(211,47,47,0.45)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            touchAction: 'none',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+          }}
+        >+</button>
       </div>
     </div>
   )

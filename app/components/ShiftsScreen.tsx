@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type ShiftType = { id: string; code: string; name: string; scheduledStart: string; scheduledEnd: string; icon: string | null; color: string | null }
 type ShiftIcon = { value: string; label: string }
@@ -21,7 +22,7 @@ const SHIFT_TYPE_ICONS: ShiftIcon[] = [
 interface ShiftRecord {
   id: string; cashierId: string | null; cashier: string; initials: string
   type: string; label: string; icon: string; color: string
-  start: string; end: string | null; openedAt: string; sales: number; amount: number; date: string
+  start: string; end: string | null; openedAt: string; closedAt: string | null; sales: number; amount: number; date: string
 }
 
 interface Props { onNavigate: (s: string) => void; openActiveShift?: boolean }
@@ -92,6 +93,50 @@ const formatShiftTime = (value: string) => {
   return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
+const dateKey = (value: Date) => {
+  const date = new Date(value)
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+}
+
+const formatDateLabel = (value: Date) => value.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' })
+const formatTimeLabel = (value: Date) => value.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+
+const formatShiftDuration = (openedAt: string, closedAt: string) => {
+  const minutes = Math.max(0, Math.floor((new Date(closedAt).getTime() - new Date(openedAt).getTime()) / 60_000))
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (hours === 0 && remainingMinutes === 0) return '<1m'
+  return `${hours}h ${remainingMinutes}m`
+}
+
+const formatElapsedShiftDuration = (openedAt: string, now: number) => {
+  const minutes = Math.max(0, Math.floor((now - new Date(openedAt).getTime()) / 60_000))
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (hours === 0 && remainingMinutes === 0) return '<1m'
+  return `${hours}h ${remainingMinutes}m`
+}
+
+const hasExceededShiftDuration = (openedAt: string, now: number) =>
+  now - new Date(openedAt).getTime() > 8 * 60 * 60 * 1000
+
+const formatShiftRange = (openedAt: string, closedAt: string | null) => {
+  const start = new Date(openedAt)
+  const end = closedAt ? new Date(closedAt) : null
+
+  if (!end) {
+    const sameDay = dateKey(start) === dateKey(new Date())
+    return sameDay ? `Started ${formatTimeLabel(start)}` : `Started ${formatDateLabel(start)} · ${formatTimeLabel(start)}`
+  }
+
+  const sameDay = dateKey(start) === dateKey(end)
+  if (sameDay) {
+    return `${formatTimeLabel(start)} → ${formatTimeLabel(end)}`
+  }
+
+  return `${formatDateLabel(start)} ${formatTimeLabel(start)} → ${formatDateLabel(end)} ${formatTimeLabel(end)}`
+}
+
 const createShiftCode = (name: string, existingCodes: Set<string>) => {
   const base = name.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'shift'
   let code = base
@@ -136,7 +181,13 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   const [selectedStaff, setSelectedStaff] = useState('')
   const [pastShifts, setPastShifts] = useState<ShiftRecord[]>([])
   const [activeShift, setActiveShift] = useState<ShiftRecord | null>(null)
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
+  const [clockNow, setClockNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     if (!shiftTypeMessage) return
@@ -202,7 +253,27 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
       if (!selectedStaff && staff[0]) setSelectedStaff(staff[0].id)
       const mappedSessions = operationalSessions.map(item => {
         const type = item.shift ?? shiftTypeResponse.shiftTypes.find(shift => shift.code === item.shiftType) ?? shiftTypeResponse.shiftTypes[0]
-        return { id: item.id, cashierId: item.cashier?.id ?? null, cashier: item.cashier?.fullName ?? 'Unknown', initials: item.cashier?.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() ?? '??', type: type?.code ?? item.shiftType, label: type?.name ?? item.shiftType, icon: type?.icon ?? '🕐', color: type?.color ?? '#123A8F', start: new Date(item.openedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), end: item.closedAt ? new Date(item.closedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null, openedAt: item.openedAt, sales: item.sales, amount: Number(item.amount), date: new Date(item.openedAt).toLocaleDateString() }
+        const startDate = new Date(item.openedAt)
+        const endDate = item.closedAt ? new Date(item.closedAt) : null
+        return {
+          id: item.id,
+          cashierId: item.cashier?.id ?? null,
+          cashier: item.cashier?.fullName ?? 'Unknown',
+          initials: item.cashier?.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase() ?? '??',
+          type: type?.code ?? item.shiftType,
+          label: type?.name ?? item.shiftType,
+          icon: type?.icon ?? '🕐',
+          color: type?.color ?? '#123A8F',
+          start: formatTimeLabel(startDate),
+          end: endDate ? formatTimeLabel(endDate) : null,
+          startDate: formatDateLabel(startDate),
+          endDate: endDate ? formatDateLabel(endDate) : null,
+          openedAt: item.openedAt,
+          closedAt: item.closedAt,
+          sales: item.sales,
+          amount: Number(item.amount),
+          date: new Date(item.openedAt).toLocaleDateString(),
+        }
       }).sort((left, right) => new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime())
       setPastShifts(mappedSessions)
       const active = operationalSessions.find(item => !item.closedAt)
@@ -432,6 +503,8 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
 
   // ── Active Shift ─────────────────────────────────────────────────────────
   if (view === 'active' && activeShift) {
+    const activeShiftDuration = formatElapsedShiftDuration(activeShift.openedAt, clockNow)
+    const activeShiftOvertime = hasExceededShiftDuration(activeShift.openedAt, clockNow)
     return (
       <div className="screen" style={{ background: c.bg }}>
         <style>{`@keyframes shift-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.38; } } .live-shift-badge { animation: shift-live-pulse 1.2s ease-in-out infinite; }`}</style>
@@ -445,7 +518,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
-          <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
+          <div className="card" style={{ padding: '20px', marginBottom: 16, border: activeShiftOvertime ? '1px solid #C62828' : undefined, boxShadow: activeShiftOvertime ? '0 0 0 1px rgba(198,40,40,0.14)' : undefined }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
               <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: 'white', flexShrink: 0 }}>
                 {activeShift.initials}
@@ -461,21 +534,28 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
               {[
-                { label: 'Started', value: activeShift.start },
+                { label: 'Elapsed', value: activeShiftDuration },
                 { label: 'Sales', value: String(activeShift.sales) },
                 { label: 'Revenue', value: `KSh ${activeShift.amount.toLocaleString()}` },
               ].map(stat => (
                 <div key={stat.label} style={{ background: c.cardAlt, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
                   <div style={{ fontSize: 10, color: c.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>{stat.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: c.text }}>{stat.value}</div>
+                  <div className={stat.label === 'Elapsed' ? 'live-shift-badge' : undefined} style={{ fontSize: 13, fontWeight: 800, color: stat.label === 'Elapsed' && activeShiftOvertime ? '#C62828' : c.text }}>{stat.value}</div>
+                  {stat.label === 'Elapsed' && <div style={{ fontSize: 9, color: c.muted, marginTop: 3 }}>{formatShiftRange(activeShift.openedAt, null)}</div>}
                 </div>
               ))}
             </div>
           </div>
 
-          <div style={{ background: c.successBg, border: `1px solid ${c.isDark ? 'rgba(46,125,50,0.3)' : '#C8E6C9'}`, borderRadius: 14, padding: '14px 16px', marginBottom: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#2E7D32', marginBottom: 4 }}>🟢 Shift in progress</div>
-            <div style={{ fontSize: 12, color: c.muted }}>All POS sales during this shift are being tracked and attributed to {activeShift.cashier.split(' ')[0]}.</div>
+          <div style={{ background: activeShiftOvertime ? (c.isDark ? 'rgba(198,40,40,0.14)' : '#FFEBEE') : c.successBg, border: `1px solid ${activeShiftOvertime ? (c.isDark ? 'rgba(198,40,40,0.5)' : '#EF9A9A') : (c.isDark ? 'rgba(46,125,50,0.3)' : '#C8E6C9')}`, borderRadius: 14, padding: '14px 16px', marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: activeShiftOvertime ? '#C62828' : '#2E7D32', marginBottom: 4 }}>
+              {activeShiftOvertime ? '● Shift exceeded 8 hours' : '🟢 Shift in progress'}
+            </div>
+            <div style={{ fontSize: 12, color: c.muted }}>
+              {activeShiftOvertime
+                ? 'This shift should be closed. Please end it when ready.'
+                : `All POS sales during this shift are being tracked and attributed to ${activeShift.cashier.split(' ')[0]}.`}
+            </div>
           </div>
 
           <button className="btn" onClick={endShift} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #D32F2F, #B71C1C)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(211,47,47,0.35)' }}>
@@ -673,8 +753,13 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
         {Object.entries(grouped).map(([date, shifts]) => (
           <div key={date} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{date}</div>
-            {shifts.map(s => (
-              <div key={s.id} className="card" onClick={() => { if (!s.end) { setActiveShift(s); setView('active') } }} style={{ padding: '14px 16px', marginBottom: 10, cursor: s.end ? 'default' : 'pointer' }}>
+            {shifts.map(s => {
+              const isOvertime = !s.end && hasExceededShiftDuration(s.openedAt, clockNow)
+              const duration = s.closedAt
+                ? formatShiftDuration(s.openedAt, s.closedAt)
+                : formatElapsedShiftDuration(s.openedAt, clockNow)
+              return (
+              <div key={s.id} className="card" onClick={() => { if (!s.end) { setActiveShift(s); setView('active') } }} style={{ padding: '14px 16px', marginBottom: 10, cursor: s.end ? 'default' : 'pointer', border: isOvertime ? '1px solid #C62828' : undefined, boxShadow: isOvertime ? '0 0 0 1px rgba(198,40,40,0.14)' : undefined }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: 'white', flexShrink: 0 }}>
                     {s.initials}
@@ -686,7 +771,18 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
                         {s.icon} {s.label}
                       </span>
                     </div>
-                    <div style={{ fontSize: 11, color: c.muted }}>{s.start} → {s.end} · {s.sales} sales</div>
+                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px 7px', fontSize: 11, color: c.muted }}>
+                      <span>{formatShiftRange(s.openedAt, s.closedAt)} · {s.sales} sales</span>
+                      <span
+                        className={s.closedAt ? undefined : 'live-shift-badge'}
+                        title={s.closedAt ? 'Time between shift opening and closing' : 'Elapsed shift time'}
+                        aria-label={`${s.closedAt ? 'Shift duration' : 'Elapsed shift time'} ${duration}`}
+                        style={{ padding: '2px 6px', borderRadius: 6, background: isOvertime ? (c.isDark ? 'rgba(198,40,40,0.2)' : '#FFEBEE') : c.cardAlt, color: isOvertime ? '#C62828' : c.text, fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap' }}
+                      >
+                        {duration}
+                      </span>
+                      {isOvertime && <span style={{ color: '#C62828', fontSize: 10, fontWeight: 700 }}>Over 8h · close shift</span>}
+                    </div>
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>KSh {s.amount.toLocaleString()}</div>
@@ -694,7 +790,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
                   </div>
                 </div>
               </div>
-            ))}
+            )})}
           </div>
         ))}
       </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props { onNavigate: (s: string) => void }
 
@@ -24,12 +25,12 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
   const [vatPin, setVatPin] = useState('')
   const [editingPin, setEditingPin] = useState(false)
   const [pinDraft, setPinDraft] = useState(vatPin)
-  const [pinError, setPinError] = useState('')
+  const [pinError, setPinError] = useAutoDismissMessage()
   const [taxConfig, setTaxConfig] = useState<TaxConfig>(defaultTaxConfig)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useAutoDismissMessage()
 
   useEffect(() => {
     const session = getClientSession()

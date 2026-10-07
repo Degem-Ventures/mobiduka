@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession, startCreditorSale as saveCreditorSaleIntent } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Transaction = { id: string; date: string; desc: string; amount: number; type: 'credit' | 'payment' }
 type Credit = { id: string; customer: string; phone: string | null; balance: number; lastTx: string; txCount: number; initials: string; color: string; daysOld: number; transactions: Transaction[] }
@@ -17,7 +18,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
   const [showRecord, setShowRecord] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState<'cash' | 'mpesa'>('cash')
-  const [dataError, setDataError] = useState('')
+  const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
 
   type CustomerSummary = { id: string; name: string; phone: string | null; creditAccount: { balance: number } | null; _count?: { sales: number; creditEntries: number }; creditEntries?: Array<{ id: string; type: string; amount: number; paymentMethod?: string | null; createdAt: string }>; sales?: Array<{ id: string; createdAt: string; total?: number; payments?: Array<{ paymentMethod: { name: string } }>; items?: Array<{ quantity: number }> }> }

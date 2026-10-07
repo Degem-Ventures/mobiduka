@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props { onNavigate: (s: string) => void }
 
@@ -24,7 +25,7 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
   const [form, setForm] = useState<ReceiptConfig>(defaultReceiptConfig)
   const [business, setBusiness] = useState({ name: '', branch: '', country: '', phone: '', email: '' })
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [error, setError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [preview, setPreview] = useState(false)

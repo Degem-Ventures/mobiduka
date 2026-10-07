@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Html5Qrcode } from "html5-qrcode";
+import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message";
 
 interface WebSmartScanProps {
   businessId: string;
@@ -14,7 +15,7 @@ export default function WebSmartScan({ businessId, onScanSuccess, onClose }: Web
   const handledScanRef = useRef(false);
   const closingRef = useRef(false);
   const viewfinderId = `web-smartscan-viewfinder-${useId().replace(/:/g, "")}`;
-  const [scanError, setScanError] = useState("");
+  const [scanError, setScanError] = useAutoDismissMessage();
 
   useEffect(() => {
     const scanner = new Html5Qrcode(viewfinderId);

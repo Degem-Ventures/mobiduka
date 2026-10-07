@@ -6,6 +6,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type WeekPoint = { day: string; sales: number; profit: number; future: boolean; isToday: boolean }
 type MonthPoint = { month: string; sales: number; profit: number; future: boolean; isNow: boolean }
@@ -62,7 +63,7 @@ interface Props { onNavigate: (s: string) => void }
 export default function ReportsScreen({ onNavigate }: Props) {
   const [tab, setTab] = useState<'daily' | 'monthly' | 'profit'>('daily')
   const [report, setReport] = useState<ReportsData | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useAutoDismissMessage()
   const [loading, setLoading] = useState(true)
   const c = useColors()
 
