@@ -2,11 +2,13 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { createContext, useContext, useMemo, useState, type FormEvent, type ReactNode, type Dispatch, type SetStateAction } from 'react'
+import { createContext, useContext, useMemo, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
 import {
   Area,
   AreaChart,
   CartesianGrid,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -48,6 +50,7 @@ function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
 
 const navigation = [
   { to: '/admin', label: 'Overview', icon: 'overview' as IconName, end: true },
+  { to: '/admin/infrastructure', label: 'Infrastructure', icon: 'activity' as IconName },
   { to: '/admin/tenants', label: 'Tenants', icon: 'tenants' as IconName },
   { to: '/admin/identity', label: 'Identity & Roles', icon: 'identity' as IconName },
   { to: '/admin/licenses', label: 'Licenses', icon: 'licenses' as IconName },
@@ -172,6 +175,7 @@ function AdminCrudModal({ type, onClose, onCreate }: {
 
 const pageMeta: Record<string, { eyebrow: string; title: string; description: string }> = {
   '/admin': { eyebrow: 'Platform pulse', title: 'Global Overview', description: 'Live operating health across every MobiDuka tenant.' },
+  '/admin/infrastructure': { eyebrow: 'Engineering operations', title: 'System Infrastructure & Telemetry Node', description: 'Backend routes, reconciliation, workers, devices, and hidden ecosystem pipelines.' },
   '/admin/tenants': { eyebrow: 'Business registry', title: 'Tenants & Businesses', description: 'Manage storefronts, owners, gateways, and platform access.' },
   '/admin/identity': { eyebrow: 'Access control', title: 'Identity & Roles', description: 'Platform-wide users, sessions, and role assignments.' },
   '/admin/licenses': { eyebrow: 'Monetization', title: 'License Management', description: 'Plans, renewals, enforcement, and recurring revenue controls.' },
@@ -443,9 +447,9 @@ export function AdminOverview() {
           <div className="admin-monitor-modal">
             <div className="admin-modal-head"><div><span>LIVE PROCESSING FABRIC</span><h2>Transaction Telemetry Monitor</h2><p>Real-time M-PESA checkout nodes and webhook delivery state.</p></div><button className="admin-icon-button" onClick={() => setMonitorOpen(false)}><AdminIcon name="close"/></button></div>
             <div className="admin-monitor-stats">
-              <div><span>Active STK pushes</span><strong>18</strong><small>Across 11 tenants</small></div>
-              <div><span>Median authorization</span><strong>4.2s</strong><small>−0.8s this hour</small></div>
-              <div><span>Completion rate</span><strong>98.7%</strong><small>Last 500 requests</small></div>
+              <div><span>Total GTV volume</span><strong>KSh 2.18B</strong><small>Across 1,284 tenants</small></div>
+              <div><span>Median authorization</span><strong>2.4s</strong><small>−0.8s this hour</small></div>
+              <div><span>Completion rate</span><strong>98.4%</strong><small>Last 500 requests</small></div>
             </div>
             <div className="admin-monitor-list">
               {liveTransactions.map(transaction => (
@@ -460,6 +464,157 @@ export function AdminOverview() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+const apiRateData = [
+  { time: '09:00', requests: 182 }, { time: '09:10', requests: 248 },
+  { time: '09:20', requests: 216 }, { time: '09:30', requests: 354 },
+  { time: '09:40', requests: 328 }, { time: '09:50', requests: 412 },
+  { time: '10:00', requests: 386 }, { time: '10:10', requests: 468 },
+]
+
+type SyncConflict = { id: string; tenant: string; store: string; profile: string; description: string; updated: string }
+type ExpenseAudit = { id: string; tenant: string; category: string; amount: number; owner: string; status: 'awaiting' | 'approved' | 'rejected' }
+type ProcurementOrder = { id: string; supplier: string; tenant: string; value: number; progress: number; eta: string }
+
+export function AdminInfrastructure() {
+  const [conflicts, setConflicts] = useState<SyncConflict[]>([
+    { id: 'SYNC-CF-104', tenant: 'T-002', store: 'Barngetuny Plaza Shop 18', profile: 'HALTED - CONFLICT', description: 'Conflict on Product SKU 104 (Maize Flour): Terminal update (Qty: 10) vs Store Owner update (Qty: 15)', updated: '12 sec ago' },
+    { id: 'SYNC-CF-091', tenant: 'T-018', store: 'Tulia Mini Mart', profile: 'RETRYING', description: 'Receipt sequence 44019 has diverging offline tax totals on TERMINAL_KSM_04.', updated: '41 sec ago' },
+  ])
+  const [broadcast, setBroadcast] = useState({ target: 'All Cashier Terminals', title: 'Scheduled Daraja Maintenance', message: 'Service Alert: Safaricom Daraja core ledger maintenance tonight from 11:59 PM EAT.' })
+  const [broadcastStatus, setBroadcastStatus] = useState('')
+  const [cron, setCron] = useState({ running: false, last: 'Today, 06:00 AM', next: 'Tomorrow, 06:00 AM', duration: '142ms' })
+  const [deviceOpen, setDeviceOpen] = useState(true)
+  const [deviceConfirm, setDeviceConfirm] = useState(false)
+  const [apiToken, setApiToken] = useState('')
+  const [sentryEvents, setSentryEvents] = useState([
+    { id: 'SEN-401-8F2', message: 'ERROR: 401 Unauthorized API request failed caused by invalid token on sourcemap upload node.', trace: 'at uploadSourceMap (/app/build/sentry.ts:84:17)', time: '10:14:08.291 EAT', resolved: false },
+    { id: 'SEN-500-2A9', message: 'ERROR: Prisma connection pool timeout after 10,000ms on tenant shard KE-WEST-02.', trace: 'at TenantPrisma.acquire (/app/db/pool.ts:119:9)', time: '09:52:44.018 EAT', resolved: false },
+  ])
+  const [expenses, setExpenses] = useState<ExpenseAudit[]>([
+    { id: 'EXP-90218', tenant: 'T-002', category: 'Supplier Petty Cash', amount: 12000, owner: 'Brian Kiptoo', status: 'awaiting' },
+    { id: 'EXP-90177', tenant: 'T-018', category: 'Emergency Generator Fuel', amount: 8500, owner: 'Achieng Otieno', status: 'approved' },
+  ])
+  const [orders, setOrders] = useState<ProcurementOrder[]>([
+    { id: 'PO-2026-00918', supplier: 'Eldoret Wholesalers Ltd', tenant: 'T-002', value: 284000, progress: 68, eta: 'ETA 14 Oct · 16:30 EAT' },
+    { id: 'PO-2026-00911', supplier: 'Rift Valley FMCG Supply', tenant: 'T-041', value: 148500, progress: 92, eta: 'ETA today · 18:00 EAT' },
+  ])
+
+  const runCron = () => {
+    setCron(current => ({ ...current, running: true }))
+    window.setTimeout(() => setCron({ running: false, last: 'Just now', next: 'Tomorrow, 06:00 AM', duration: '138ms' }), 900)
+  }
+  const sendBroadcast = () => {
+    if (!broadcast.title.trim() || !broadcast.message.trim()) return
+    setBroadcastStatus(`Queued for ${broadcast.target} · PUSH-${Date.now().toString().slice(-6)}`)
+  }
+  const generateToken = () => setApiToken(`mdk_live_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`)
+
+  return (
+    <div className="admin-page-stack">
+      <section className="admin-infra-health">
+        <div><span className="admin-live-dot"/><div><span>Daraja Gateway</span><strong>Operational</strong></div><code>182ms</code></div>
+        <div><i className="cyan"/><div><span>Synchronization Queue</span><strong>Active · 0ms</strong></div><code>42 events</code></div>
+        <div><AdminIcon name="check" size={16}/><div><span>License Service</span><strong>Healthy</strong></div><code>0 errors</code></div>
+      </section>
+
+      <section className="admin-infra-grid">
+        <div className="admin-infra-column">
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api/sync</span><h2>Data Sync &amp; Collision Registry</h2></div><span className="admin-status-badge suspended"><i/>{conflicts.length} open</span></div>
+            <div className="admin-conflict-list">
+              {conflicts.length === 0 ? <div className="admin-compact-empty"><AdminIcon name="check"/><span>All reconciliation loops are converged.</span></div> : conflicts.map(conflict => (
+                <div className="admin-conflict-row" key={conflict.id}>
+                  <div className="admin-conflict-meta"><code>{conflict.tenant}</code><span>{conflict.store}</span><strong>{conflict.profile}</strong></div>
+                  <p>{conflict.description}</p>
+                  <div><code>{conflict.id} · {conflict.updated}</code><button onClick={() => setConflicts(current => current.filter(item => item.id !== conflict.id))}>Resolve Conflict via Server State</button></div>
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api/notifications</span><h2>Global Push Broadcaster</h2></div><AdminIcon name="bell" size={17}/></div>
+            <div className="admin-infra-form">
+              <label><span>Target account role</span><select value={broadcast.target} onChange={event => setBroadcast(current => ({ ...current, target: event.target.value }))}><option>All Cashier Terminals</option><option>Store Owners Only</option><option>Accountants &amp; Managers</option><option>All Tenant Devices</option></select></label>
+              <label><span>Push title</span><input value={broadcast.title} onChange={event => setBroadcast(current => ({ ...current, title: event.target.value }))}/></label>
+              <label><span>Message payload</span><textarea value={broadcast.message} onChange={event => setBroadcast(current => ({ ...current, message: event.target.value }))}/></label>
+              {broadcastStatus && <div className="admin-execution-result"><AdminIcon name="check" size={14}/><code>{broadcastStatus}</code><button onClick={() => setBroadcastStatus('')}>Dismiss</button></div>}
+              <button className="admin-execute-button" onClick={sendBroadcast}><AdminIcon name="activity" size={15}/> Broadcast Global Push Message</button>
+            </div>
+          </article>
+        </div>
+
+        <div className="admin-infra-column">
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api/cron/billing-warnings</span><h2>Cron Scheduler Registry Engine</h2></div><span className="admin-status-badge active"><i/>armed</span></div>
+            <div className="admin-cron-metrics">
+              <div><span>Last Run</span><strong>{cron.last}</strong></div>
+              <div><span>Next Scheduled Runtime</span><strong>{cron.next}</strong></div>
+              <div><span>Execution Duration</span><strong>{cron.duration}</strong></div>
+            </div>
+            <button className="admin-secondary-button admin-full-button" onClick={runCron} disabled={cron.running}>{cron.running ? 'Executing worker lifecycle…' : 'Manually Trigger Billing Warning Engine'}</button>
+          </article>
+
+          <article className="admin-panel admin-infra-card critical">
+            <div className="admin-panel-heading"><div><span>app/api/cash/session</span><h2>Terminal Device Remote Kill-Switch</h2></div><span className={`admin-status-badge ${deviceOpen ? 'trial' : 'suspended'}`}><i/>{deviceOpen ? 'shift open' : 'vault closed'}</span></div>
+            <div className="admin-device-block">
+              <div><span>Hardware signature</span><code>FINGERPRINT_PAD_ADB_902</code></div>
+              <div><span>Active shift token UUID</span><code>{deviceOpen ? '7fb9c2e4-11d8-4d17-a6d3-902f8e71bc20' : 'REVOKED'}</code></div>
+              <div><span>Open drawer cash delta</span><code className="danger">Expected: KSh 14,500 | Logged: KSh 14,000</code></div>
+            </div>
+            {deviceOpen ? <div className="admin-device-action"><button className="admin-danger-button" onClick={() => setDeviceConfirm(true)}>Force Remote Close Shift &amp; Vault Balance</button>{deviceConfirm && <div className="admin-inline-confirm"><AdminIcon name="warning" size={16}/><div><strong>Force-close physical register?</strong><span>A KSh 500 cash variance will be written to the audit ledger.</span><div><button onClick={() => setDeviceConfirm(false)}>Cancel</button><button onClick={() => { setDeviceOpen(false); setDeviceConfirm(false) }}>Execute kill-switch</button></div></div></div>}</div> : <div className="admin-execution-result"><AdminIcon name="check" size={14}/><code>Remote close acknowledged · VAULT-902 locked</code></div>}
+          </article>
+
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api-docs</span><h2>Global API Documentation Explorer</h2></div><code className="admin-rate-code">468 req/min</code></div>
+            <div className="admin-api-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={apiRateData} margin={{ top: 8, right: 8, left: -30, bottom: 0 }}>
+                  <CartesianGrid stroke="rgba(255,255,255,.05)" vertical={false}/>
+                  <XAxis dataKey="time" stroke="#53627e" tickLine={false} axisLine={false} fontSize={8}/>
+                  <YAxis stroke="#53627e" tickLine={false} axisLine={false} fontSize={8}/>
+                  <Line type="monotone" dataKey="requests" stroke="#0288D1" strokeWidth={2.2} dot={false}/>
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="admin-api-key">
+              <div><span>Developer access controller</span><code>{apiToken || 'No active programmatic token'}</code></div>
+              <button className={`admin-toggle ${apiToken ? 'on' : ''}`} onClick={() => apiToken ? setApiToken('') : generateToken()} aria-pressed={Boolean(apiToken)}><span/></button>
+            </div>
+            <button className="admin-secondary-button admin-full-button" onClick={generateToken}>Generate Programmatic Access Key Token</button>
+          </article>
+        </div>
+
+        <div className="admin-infra-column">
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api/sentry-example-api</span><h2>Sentry Error Diagnostic Matrix</h2></div><span className="admin-status-badge suspended"><i/>{sentryEvents.filter(event => !event.resolved).length} active</span></div>
+            <div className="admin-code-terminal">
+              <div className="admin-terminal-bar"><i/><i/><i/><code>production-crash.log</code></div>
+              {sentryEvents.map(event => <div className={`admin-error-trace ${event.resolved ? 'resolved' : ''}`} key={event.id}><div><code>{event.time}</code><span>{event.resolved ? 'RESOLVED' : 'ERROR'}</span></div><strong>{event.message}</strong><code>{event.trace}</code><div className="admin-trace-actions"><button onClick={() => setSentryEvents(current => current.map(item => item.id === event.id ? { ...item, resolved: !item.resolved } : item))}>{event.resolved ? 'Reopen' : 'Mark resolved'}</button><button onClick={() => setSentryEvents(current => current.filter(item => item.id !== event.id))}>Delete trace</button></div></div>)}
+            </div>
+          </article>
+
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api/expenses</span><h2>Expense Leakage Audit Tracker</h2></div><strong className="admin-mono">KSh {expenses.reduce((sum, item) => sum + item.amount, 0).toLocaleString()}</strong></div>
+            <div className="admin-ledger-list">
+              {expenses.map(expense => <div className="admin-ledger-row" key={expense.id}><div><code>{expense.tenant} · {expense.id}</code><strong>{expense.category}</strong><span>{expense.owner}</span></div><div><strong>KSh {expense.amount.toLocaleString()}</strong><span className={`admin-compliance-badge ${expense.status}`}>{expense.status === 'awaiting' ? 'Awaiting Owner Cross-Verification Approval' : expense.status}</span><div className="admin-ledger-actions">{expense.status === 'awaiting' && <><button onClick={() => setExpenses(current => current.map(item => item.id === expense.id ? { ...item, status: 'approved' } : item))}>Approve</button><button onClick={() => setExpenses(current => current.map(item => item.id === expense.id ? { ...item, status: 'rejected' } : item))}>Reject</button></>}<button onClick={() => setExpenses(current => current.filter(item => item.id !== expense.id))}>Delete</button></div></div></div>)}
+            </div>
+            <button className="admin-text-button" onClick={() => setExpenses(current => [...current, { id: `EXP-${90219 + current.length}`, tenant: 'T-NEW', category: 'Unclassified Operational Expense', amount: 0, owner: 'Pending assignment', status: 'awaiting' }])}>+ Create expense audit record</button>
+          </article>
+
+          <article className="admin-panel admin-infra-card">
+            <div className="admin-panel-heading"><div><span>app/api/purchase-orders</span><h2>Procurement Pipeline Tracker</h2></div><span className="admin-status-badge active"><i/>{orders.length} active</span></div>
+            <div className="admin-procurement-list">
+              {orders.map(order => <div className="admin-procurement-row" key={order.id}><div className="admin-procurement-head"><div><code>{order.id} · {order.tenant}</code><strong>{order.supplier}</strong></div><strong>KSh {order.value.toLocaleString()}</strong></div><div className="admin-progress-track"><span style={{ width: `${order.progress}%` }}/></div><div className="admin-progress-meta"><code>{order.progress}% delivered · {order.eta}</code><div><button onClick={() => setOrders(current => current.map(item => item.id === order.id ? { ...item, progress: Math.min(100, item.progress + 10) } : item))}>Advance +10%</button><button onClick={() => setOrders(current => current.filter(item => item.id !== order.id))}>Remove</button></div></div></div>)}
+            </div>
+            <button className="admin-text-button" onClick={() => setOrders(current => [...current, { id: `PO-2026-${String(919 + current.length).padStart(5, '0')}`, supplier: 'Pending Supplier Assignment', tenant: 'T-NEW', value: 0, progress: 0, eta: 'ETA pending' }])}>+ Create procurement pipeline</button>
+          </article>
+        </div>
+      </section>
     </div>
   )
 }
@@ -637,7 +792,7 @@ export function AdminIdentity() {
                 <td><select className={`admin-role-select ${user.role.toLowerCase()}`} value={user.role} onChange={event => setUsers(current => current.map(record => record.id === user.id ? { ...record, role: event.target.value } : record))}><option>SUPER_ADMIN</option><option>STORE_OWNER</option><option>ACCOUNTANT</option><option>CASHIER</option></select></td>
                 <td><div className="admin-session-count"><span>{user.sessions}</span><small>{user.sessions === 1 ? 'Active Device' : 'Active Devices'}</small></div></td>
                 <td><strong>{user.lastSeen}</strong><span className={`admin-cell-sub ${user.status}`}>{user.status}</span></td>
-                <td><div className="admin-row-actions"><button className="admin-danger-button" disabled={user.sessions === 0} onClick={() => setUsers(current => current.map(record => record.id === user.id ? { ...record, sessions: 0, status: 'locked', lastSeen: 'Terminated now' } : record))}>Terminate Access Node</button><button className="admin-row-button" aria-label={`Remove ${user.legal}`} onClick={() => setUsers(current => current.filter(record => record.id !== user.id))}><AdminIcon name="close" size={13}/></button></div></td>
+                <td><div className="admin-row-actions"><button className="admin-danger-button" disabled={user.sessions === 0} onClick={() => setUsers(current => current.map(record => record.id === user.id ? { ...record, sessions: 0, status: 'locked', lastSeen: 'Terminated now' } : record))}>Terminate Active Session Node</button><button className="admin-row-button" aria-label={`Remove ${user.legal}`} onClick={() => setUsers(current => current.filter(record => record.id !== user.id))}><AdminIcon name="close" size={13}/></button></div></td>
               </tr>
             ))}</tbody>
           </table>
@@ -733,7 +888,7 @@ export function AdminLicenses() {
                 <td><strong>{license.expires}</strong><span className={`admin-countdown ${license.days <= 7 ? 'urgent' : license.days <= 30 ? 'warning' : ''}`}>{license.days > 0 ? `${license.days} days remaining` : `${Math.abs(license.days)} days overdue`}</span></td>
                 <td><div className="admin-renewal-cell"><button className={`admin-toggle ${license.renewal ? 'on' : ''}`} onClick={() => toggleRenewal(license.id)} disabled={license.status === 'revoked'} aria-pressed={license.renewal}><span/></button><small>{license.renewal ? 'Enabled' : 'Disabled'}</small></div></td>
                 <td><strong className="admin-mono">KSh {license.amount.toLocaleString()}</strong></td>
-                <td>{license.status === 'revoked' ? <div className="admin-row-actions"><span className="admin-status-badge suspended"><i/>Revoked</span><button className="admin-row-button" aria-label="Delete license" onClick={() => setLicenses(current => current.filter(record => record.id !== license.id))}><AdminIcon name="close" size={13}/></button></div> : <div className="admin-confirm-anchor"><button className="admin-danger-button" onClick={() => setConfirmRevoke(license.id)}>Revoke Operational Access Node</button>{confirmRevoke === license.id && <div className="admin-confirm-popover"><AdminIcon name="warning" size={17}/><div><strong>Revoke tenant access?</strong><span>POS terminals will be blocked immediately.</span><div><button onClick={() => setConfirmRevoke(null)}>Cancel</button><button onClick={() => revoke(license.id)}>Confirm revoke</button></div></div></div>}</div>}</td>
+                <td>{license.status === 'revoked' ? <div className="admin-row-actions"><span className="admin-status-badge suspended"><i/>Revoked</span><button className="admin-row-button" aria-label="Delete license" onClick={() => setLicenses(current => current.filter(record => record.id !== license.id))}><AdminIcon name="close" size={13}/></button></div> : <div className="admin-confirm-anchor"><button className="admin-danger-button" onClick={() => setConfirmRevoke(license.id)}>Revoke Operational Access Node</button>{confirmRevoke === license.id && <div className="admin-confirm-popover"><AdminIcon name="warning" size={17}/><div><strong>Strategic Contract License Expiration Revocation</strong><span>POS terminals will be blocked immediately.</span><div><button onClick={() => setConfirmRevoke(null)}>Cancel</button><button onClick={() => revoke(license.id)}>Confirm Access Node Revocation</button></div><button className="admin-permanent-remove" onClick={() => { setLicenses(current => current.filter(record => record.id !== license.id)); setConfirmRevoke(null) }}>Permanently Remove Revoked Ledger Record</button></div></div>}</div>}</td>
               </tr>
             ))}</tbody>
           </table>
