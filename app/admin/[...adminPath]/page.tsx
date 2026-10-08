@@ -1,5 +1,10 @@
-import { AdminNotFound } from '../AdminPortal'
+import { AdminWorkspace } from '../ControlPlanePages'
 
-export default function AdminNotFoundPage() {
-  return <AdminNotFound />
+type AdminWorkspacePageProps = {
+  params: Promise<{ adminPath: string[] }>
+}
+
+export default async function AdminWorkspacePage({ params }: AdminWorkspacePageProps) {
+  const { adminPath } = await params
+  return <AdminWorkspace workspace={adminPath.join('-')} />
 }

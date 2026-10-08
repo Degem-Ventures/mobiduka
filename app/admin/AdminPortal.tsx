@@ -19,6 +19,13 @@ type IconName =
   | 'overview' | 'tenants' | 'identity' | 'licenses' | 'activity' | 'search'
   | 'bell' | 'chevron' | 'store' | 'revenue' | 'pulse' | 'churn'
   | 'shield' | 'settings' | 'external' | 'close' | 'check' | 'warning'
+  | 'layout' | 'workflow' | 'buildings' | 'key' | 'wallet' | 'payment'
+  | 'server' | 'lifeBuoy' | 'receipt' | 'webhook' | 'clock' | 'alert' | 'device' | 'sync'
+  | 'tenantHealth' | 'user' | 'role' | 'sessions' | 'audit' | 'subscription'
+  | 'invoice' | 'billingPayment' | 'license' | 'mpesa' | 'reconcile'
+  | 'paymentEvent' | 'securityCenter' | 'compliance' | 'securityEvent' | 'infrastructure'
+  | 'flag' | 'integration' | 'backup' | 'platformSettings' | 'support'
+  | 'announcement' | 'status'
 
 function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -40,6 +47,43 @@ function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
     close: <><path d="m18 6-12 12M6 6l12 12"/></>,
     check: <path d="m5 12 4 4L19 6"/>,
     warning: <><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.7 2.4 17.4A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.6L13.7 3.7a2 2 0 0 0-3.4 0Z"/></>,
+    layout: <><rect x="3" y="3" width="8" height="7" rx="1.5"/><rect x="13" y="3" width="8" height="4" rx="1.5"/><rect x="13" y="9" width="8" height="12" rx="1.5"/><rect x="3" y="12" width="8" height="9" rx="1.5"/></>,
+    workflow: <><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h4a2 2 0 0 1 2 2v7M15 11l-3 3 3 3"/></>,
+    buildings: <><path d="M3 21h18M5 21V5l7-2v18M12 9h7v12M8 7h1M8 11h1M8 15h1M15 12h1M15 16h1"/></>,
+    key: <><circle cx="8" cy="15" r="5"/><path d="m11.5 11.5 9-9M17 6l2 2M14 9l2 2"/></>,
+    wallet: <><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H20v16H6.5A2.5 2.5 0 0 1 4 17.5z"/><path d="M4 7h14a2 2 0 0 1 2 2v4h-5a2 2 0 0 0 0 4h5M15 15h.01"/></>,
+    payment: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/></>,
+    server: <><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></>,
+    lifeBuoy: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="m5.6 5.6 4.3 4.3m4.2 4.2 4.3 4.3m0-12.8-4.3 4.3m-4.2 4.2-4.3 4.3"/></>,
+    receipt: <><path d="M5 3h14v18l-3-2-4 2-4-2-3 2z"/><path d="M8 8h8M8 12h8M8 16h4"/></>,
+    webhook: <><path d="M8 8a4 4 0 1 1 6.8 2.8L12 13.5M8 8l2-2M8 8l-2 2"/><path d="M12 13.5a4 4 0 1 0 4 6.9l1-3.7M16 20.4l3 .3-.3-3"/><path d="M12 13.5a4 4 0 1 0-4-6.9"/></>,
+    clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+    alert: <><path d="M12 3 2.8 19h18.4z"/><path d="M12 9v4M12 16h.01"/></>,
+    tenantHealth: <><path d="M3 12h4l2-5 4 10 2-5h6"/><path d="M4 4h16v16H4z"/></>,
+    user: <><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,
+    role: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M9 12h6M12 9v6"/></>,
+    sessions: <><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M10 17h4M9 7h6"/></>,
+    audit: <><path d="M8 3h8l4 4v14H4V3z"/><path d="M16 3v5h4M8 12h8M8 16h6"/></>,
+    subscription: <><path d="M4 7h16M4 12h16M4 17h10"/><path d="M7 3v4M17 3v4M17 15l3 3-3 3"/></>,
+    invoice: <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></>,
+    billingPayment: <><circle cx="12" cy="12" r="9"/><path d="M15 8.5c0-1-1.3-1.8-3-1.8s-3 .8-3 1.8 1.3 1.8 3 1.8 3 .8 3 1.8-1.3 1.8-3 1.8-3-.8-3-1.8M12 5v14"/></>,
+    license: <><path d="M12 3 5 6v5c0 5 3 8 7 10 4-2 7-5 7-10V6z"/><path d="m9 12 2 2 4-4"/></>,
+    mpesa: <><path d="M5 19c1-6 3-10 5-10 2 0 2 6 4 6s3-4 5-10"/><path d="M4 5h4M16 19h4"/></>,
+    reconcile: <><path d="M20 7h-6V1M4 17h6v6"/><path d="M5.6 9A7 7 0 0 1 18 6l2 1M4 17l2 1a7 7 0 0 0 12-3"/></>,
+    paymentEvent: <><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h5M8 16h8"/><circle cx="17" cy="12" r="1"/></>,
+    compliance: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m8 12 2.5 2.5L16 9"/></>,
+    securityEvent: <><path d="M12 3 2.8 19h18.4z"/><path d="M12 9v4M12 16h.01"/><path d="M18 5h3v3"/></>,
+    infrastructure: <><path d="M4 21V9l8-6 8 6v12M2 21h20M9 21v-6h6v6M8 10h.01M16 10h.01"/></>,
+    flag: <><path d="M5 21V4M5 5h13l-2 4 2 4H5"/></>,
+    integration: <><path d="M8 8V4h8v4M8 16v4h8v-4M4 8h4v8H4zM16 8h4v8h-4zM8 12h8"/></>,
+    backup: <><path d="M4 7a8 8 0 1 1-1 8"/><path d="M3 3v5h5M12 7v5l3 2"/></>,
+    platformSettings: <><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M2 10h4M10 8h4M18 12h4M18 16h4"/></>,
+    support: <><path d="M4 13v-2a8 8 0 0 1 16 0v2"/><path d="M4 13H3v5h4v-5zM20 13h1v5h-4v-5zM17 20a5 5 0 0 1-5 2"/></>,
+    announcement: <><path d="m3 11 18-5v12L3 13z"/><path d="M7 14l2 7h4l-2-6M21 10l2-1M21 16l2 1"/></>,
+    status: <><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></>,
+    device: <><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M10 18h4M9 5h6"/><circle cx="12" cy="14" r="2"/></>,
+    sync: <><path d="M20 7h-6V1M4 17h6v6"/><path d="M5 9a7 7 0 0 1 12-3l3 1M4 17l3 1a7 7 0 0 0 12-3"/></>,
+    securityCenter: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4l3 2"/></>,
   }
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -48,12 +92,56 @@ function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
   )
 }
 
-const navigation = [
-  { to: '/admin', label: 'Overview', icon: 'overview' as IconName, end: true },
-  { to: '/admin/infrastructure', label: 'Infrastructure', icon: 'activity' as IconName },
-  { to: '/admin/tenants', label: 'Tenants', icon: 'tenants' as IconName },
-  { to: '/admin/identity', label: 'Identity & Roles', icon: 'identity' as IconName },
-  { to: '/admin/licenses', label: 'Licenses', icon: 'licenses' as IconName },
+const navigationGroups = [
+  { label: 'Workspace', icon: 'layout' as IconName, items: [{ to: '/admin', label: 'Platform Pulse', icon: 'overview' as IconName }] },
+  { label: 'Operations', icon: 'workflow' as IconName, items: [
+    { to: '/admin/transactions', label: 'Transactions', icon: 'receipt' as IconName },
+    { to: '/admin/sync-health', label: 'Sync Health', icon: 'sync' as IconName },
+    { to: '/admin/devices', label: 'Devices', icon: 'device' as IconName },
+    { to: '/admin/webhooks', label: 'Webhooks', icon: 'webhook' as IconName },
+    { to: '/admin/jobs', label: 'Background Jobs', icon: 'clock' as IconName },
+    { to: '/admin/incidents', label: 'Incidents', icon: 'alert' as IconName, badge: '3' },
+  ] },
+  { label: 'Tenants', icon: 'buildings' as IconName, items: [
+    { to: '/admin/tenants', label: 'Tenant Registry', icon: 'tenants' as IconName },
+    { to: '/admin/tenant-health', label: 'Tenant Health', icon: 'tenantHealth' as IconName },
+  ] },
+  { label: 'Identity & Access', icon: 'key' as IconName, items: [
+    { to: '/admin/identity', label: 'Users & Roles', icon: 'user' as IconName },
+    { to: '/admin/roles', label: 'Permissions', icon: 'role' as IconName },
+    { to: '/admin/sessions', label: 'Sessions', icon: 'sessions' as IconName },
+    { to: '/admin/audit-logs', label: 'Audit Logs', icon: 'audit' as IconName },
+  ] },
+  { label: 'Billing', icon: 'wallet' as IconName, items: [
+    { to: '/admin/subscriptions', label: 'Subscriptions', icon: 'subscription' as IconName },
+    { to: '/admin/invoices', label: 'Invoices', icon: 'invoice' as IconName },
+    { to: '/admin/billing-payments', label: 'Billing Payments', icon: 'billingPayment' as IconName },
+    { to: '/admin/revenue', label: 'Revenue', icon: 'revenue' as IconName },
+    { to: '/admin/licenses', label: 'Licenses', icon: 'license' as IconName },
+  ] },
+  { label: 'Payments', icon: 'payment' as IconName, items: [
+    { to: '/admin/mpesa', label: 'M-PESA Operations', icon: 'mpesa' as IconName, badge: '8' },
+    { to: '/admin/reconciliation', label: 'Reconciliation', icon: 'reconcile' as IconName },
+    { to: '/admin/payment-events', label: 'Payment Events', icon: 'paymentEvent' as IconName },
+  ] },
+  { label: 'Security & Compliance', icon: 'shield' as IconName, items: [
+    { to: '/admin/security', label: 'Security Center', icon: 'securityCenter' as IconName },
+    { to: '/admin/compliance', label: 'Compliance', icon: 'compliance' as IconName },
+    { to: '/admin/security-events', label: 'Security Events', icon: 'securityEvent' as IconName },
+  ] },
+  { label: 'Platform', icon: 'server' as IconName, items: [
+    { to: '/admin/infrastructure', label: 'Infrastructure', icon: 'infrastructure' as IconName },
+    { to: '/admin/feature-flags', label: 'Feature Flags', icon: 'flag' as IconName },
+    { to: '/admin/integrations', label: 'Integrations', icon: 'integration' as IconName },
+    { to: '/admin/notifications', label: 'Notifications', icon: 'bell' as IconName },
+    { to: '/admin/backups', label: 'Backups', icon: 'backup' as IconName },
+    { to: '/admin/system-settings', label: 'System Settings', icon: 'platformSettings' as IconName },
+  ] },
+  { label: 'Support', icon: 'lifeBuoy' as IconName, items: [
+    { to: '/admin/support', label: 'Support Center', icon: 'support' as IconName, badge: '3' },
+    { to: '/admin/announcements', label: 'Announcements', icon: 'announcement' as IconName },
+    { to: '/admin/system-status', label: 'System Status', icon: 'status' as IconName },
+  ] },
 ]
 
 type UserRecord = {
@@ -183,7 +271,9 @@ const pageMeta: Record<string, { eyebrow: string; title: string; description: st
 
 export function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname()
-  const meta = pageMeta[pathname] ?? pageMeta['/admin']
+  const slug = pathname.split('/').filter(Boolean).at(-1) ?? 'admin'
+  const readableSlug = slug.replace(/-/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
+  const meta = pageMeta[pathname] ?? { eyebrow: 'Control plane', title: readableSlug, description: 'Platform-wide operations and administrative controls.' }
   const [tenants, setTenants] = useState<Tenant[]>(tenantData)
   const [users, setUsers] = useState<UserRecord[]>(initialUsers)
   const [licenses, setLicenses] = useState<LicenseRecord[]>(initialLicenses)
@@ -192,6 +282,8 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const [createModal, setCreateModal] = useState<AdminModalType>(null)
   const [quickOpen, setQuickOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
   const openCreate = (type: Exclude<AdminModalType, null>) => {
     setCreateModal(type)
@@ -235,7 +327,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <AdminDataContext.Provider value={context}>
-    <div className="admin-shell">
+    <div className={`admin-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <aside className="admin-sidebar">
         <div className="admin-brand">
           <div className="admin-brand-mark">M</div>
@@ -243,17 +335,25 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <strong>MobiDuka</strong>
             <span>Control Plane</span>
           </div>
+          <button className="admin-sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? '›' : '‹'}</button>
         </div>
 
-        <div className="admin-nav-label">Workspace</div>
-        <nav className="admin-nav" aria-label="Admin navigation">
-          {navigation.map(item => (
-            <Link key={item.to} href={item.to} className={`admin-nav-item${(item.end ? pathname === item.to : pathname.startsWith(item.to)) ? ' active' : ''}`}>
-              <AdminIcon name={item.icon} />
-              <span>{item.label}</span>
-              <AdminIcon name="chevron" size={14} />
-            </Link>
-          ))}
+        <nav className="admin-nav admin-nav-scroll" aria-label="Admin navigation">
+          {navigationGroups.map(group => {
+            const expanded = collapsedGroups[group.label] !== true
+            return <section className="admin-nav-group" key={group.label}>
+              <button className="admin-nav-group-trigger" aria-label={group.label} title={sidebarCollapsed ? group.label : undefined} aria-expanded={expanded} onClick={() => setCollapsedGroups(current => ({ ...current, [group.label]: expanded }))}>
+                <AdminIcon name={group.icon} size={13}/><span>{group.label}</span><AdminIcon name="chevron" size={12}/>
+              </button>
+              {expanded && group.items.map(item => (
+                <Link key={item.to} href={item.to} aria-label={item.label} title={sidebarCollapsed ? item.label : undefined} aria-current={pathname === item.to ? 'page' : undefined} className={`admin-nav-item${(item.to === '/admin' ? pathname === item.to : pathname === item.to || pathname.startsWith(`${item.to}/`)) ? ' active' : ''}`}>
+                  <AdminIcon name={item.icon} />
+                  <span>{item.label}</span>
+                  {'badge' in item && item.badge && <b>{item.badge}</b>}
+                </Link>
+              ))}
+            </section>
+          })}
         </nav>
 
         <div className="admin-sidebar-spacer" />
