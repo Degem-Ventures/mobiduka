@@ -119,7 +119,7 @@ function responseFor(business: {
           dailyReport: false,
           autoBackup: true,
           mpesaEnabled: false,
-          themeMode: "light",
+          themeMode: "auto",
           paymentConfig: defaultPaymentConfig,
         },
   }

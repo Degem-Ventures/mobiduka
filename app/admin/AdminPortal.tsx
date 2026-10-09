@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createContext, useContext, useMemo, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
+import { useTheme } from '../context/ThemeContext'
 import {
   Area,
   AreaChart,
@@ -25,7 +26,7 @@ type IconName =
   | 'invoice' | 'billingPayment' | 'license' | 'mpesa' | 'reconcile'
   | 'paymentEvent' | 'securityCenter' | 'compliance' | 'securityEvent' | 'infrastructure'
   | 'flag' | 'integration' | 'backup' | 'platformSettings' | 'support'
-  | 'announcement' | 'status'
+  | 'announcement' | 'status' | 'sun' | 'moon' | 'monitor'
 
 function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -81,6 +82,9 @@ function AdminIcon({ name, size = 18 }: { name: IconName; size?: number }) {
     support: <><path d="M4 13v-2a8 8 0 0 1 16 0v2"/><path d="M4 13H3v5h4v-5zM20 13h1v5h-4v-5zM17 20a5 5 0 0 1-5 2"/></>,
     announcement: <><path d="m3 11 18-5v12L3 13z"/><path d="M7 14l2 7h4l-2-6M21 10l2-1M21 16l2 1"/></>,
     status: <><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></>,
+    sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></>,
+    moon: <path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/>,
+    monitor: <><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></>,
     device: <><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M10 18h4M9 5h6"/><circle cx="12" cy="14" r="2"/></>,
     sync: <><path d="M20 7h-6V1M4 17h6v6"/><path d="M5 9a7 7 0 0 1 12-3l3 1M4 17l3 1a7 7 0 0 0 12-3"/></>,
     securityCenter: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4l3 2"/></>,
@@ -270,6 +274,7 @@ const pageMeta: Record<string, { eyebrow: string; title: string; description: st
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
+  const { theme, isDark, setTheme } = useTheme()
   const pathname = usePathname()
   const slug = pathname.split('/').filter(Boolean).at(-1) ?? 'admin'
   const readableSlug = slug.replace(/-/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
@@ -282,6 +287,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const [createModal, setCreateModal] = useState<AdminModalType>(null)
   const [quickOpen, setQuickOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
@@ -327,7 +333,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <AdminDataContext.Provider value={context}>
-    <div className={`admin-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+    <div className={`admin-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
       <aside className="admin-sidebar">
         <div className="admin-brand">
           <div className="admin-brand-mark">M</div>
@@ -389,6 +395,29 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <p>{meta.description}</p>
           </div>
           <div className="admin-topbar-actions">
+            <div className="admin-popover-anchor">
+              <button
+                className={`admin-theme-toggle ${isDark ? 'is-dark' : 'is-light'}`}
+                onClick={() => setThemeMenuOpen(value => !value)}
+                aria-label="Choose color theme"
+                aria-expanded={themeMenuOpen}
+                aria-haspopup="menu"
+                title="Choose color theme"
+              >
+                <AdminIcon name={theme === 'auto' ? 'monitor' : isDark ? 'sun' : 'moon'} size={17}/>
+              </button>
+              {themeMenuOpen && (
+                <div className="admin-theme-menu" role="menu" aria-label="Color theme">
+                  {(['light', 'dark', 'auto'] as const).map(mode => (
+                    <button key={mode} role="menuitemradio" aria-checked={theme === mode} className={theme === mode ? 'active' : ''} onClick={() => { setTheme(mode); setThemeMenuOpen(false) }}>
+                      <AdminIcon name={mode === 'light' ? 'sun' : mode === 'dark' ? 'moon' : 'monitor'} size={15}/>
+                      <span>{mode === 'auto' ? 'System' : mode === 'light' ? 'Light' : 'Dark'}</span>
+                      {theme === mode && <AdminIcon name="check" size={14}/>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="admin-global-search">
               <AdminIcon name="search" size={16} />
               <input aria-label="Search platform" placeholder="Search tenants, users, IDs…" />

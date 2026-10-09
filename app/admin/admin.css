@@ -3591,3 +3591,357 @@
     font-size: 14px;
   }
 }
+
+.admin-theme-toggle {
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(212,175,55,.35);
+  border-radius: 12px;
+  background: rgba(212,175,55,.09);
+  color: #d4af37;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.admin-theme-toggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(212,175,55,.65);
+  background: rgba(212,175,55,.16);
+}
+
+.admin-theme-toggle.is-light {
+  border-color: rgba(78,127,232,.3);
+  background: rgba(78,127,232,.09);
+  color: #4e7fe8;
+}
+
+.admin-theme-menu,
+.mk-theme-menu {
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--admin-border, #dfe5ef);
+  border-radius: 12px;
+  background: var(--admin-panel, #fff);
+  box-shadow: 0 16px 38px rgba(4, 12, 26, .24);
+}
+
+.admin-theme-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+}
+
+.admin-theme-menu button,
+.mk-theme-menu button {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--admin-text, #17233b);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-theme-menu button > span,
+.mk-theme-menu button > span {
+  flex: 1;
+}
+
+.admin-theme-menu button:hover,
+.admin-theme-menu button.active {
+  background: rgba(78,127,232,.12);
+  color: var(--admin-blue);
+}
+
+.admin-shell[data-theme="light"] {
+  --admin-bg: #f3f6fb;
+  --admin-panel: #ffffff;
+  --admin-panel-raised: #f8faff;
+  --admin-panel-soft: #eef2f8;
+  --admin-border: #dfe5ef;
+  --admin-text: #17233b;
+  --admin-muted: #5f6d85;
+  --admin-faint: #718099;
+  --admin-blue: #2456b6;
+  color-scheme: light;
+  background: var(--admin-bg);
+}
+
+.admin-shell[data-theme="light"] .admin-sidebar,
+.admin-shell[data-theme="light"] .admin-topbar {
+  background: rgba(255,255,255,.96);
+}
+
+.admin-shell[data-theme="light"] .admin-main,
+.admin-shell[data-theme="light"] .admin-content {
+  background: var(--admin-bg);
+}
+
+.admin-shell[data-theme="light"] :is(
+  .admin-panel,
+  .admin-metric-card,
+  .admin-health-card,
+  .admin-plan-card,
+  .admin-license-card,
+  .admin-table-panel,
+  .admin-search-panel,
+  .admin-toolbar,
+  .admin-notifications-popover,
+  .admin-quick-menu,
+  .admin-popover,
+  .admin-modal,
+  .admin-drawer,
+  .admin-audit-modal,
+  .admin-monitor-modal,
+  .ops-panel,
+  .ops-kpi-card,
+  .ops-table-panel,
+  .ops-context-card
+) {
+  border-color: var(--admin-border);
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(30, 48, 80, .06);
+}
+
+.admin-shell[data-theme="light"] :is(
+  [class$="-panel"],
+  [class*="-panel "],
+  [class$="-card"],
+  [class*="-card "],
+  [class$="-popover"],
+  [class*="-popover "],
+  [class$="-menu"],
+  [class*="-menu "],
+  [class$="-modal"],
+  [class*="-modal "],
+  [class$="-drawer"],
+  [class*="-drawer "],
+  [class$="-table"],
+  [class*="-table "]
+) {
+  border-color: var(--admin-border);
+  background: #fff;
+}
+
+.admin-shell[data-theme="light"] :is(h1, h2, h3, h4, strong) {
+  color: #17233b;
+}
+
+.admin-shell[data-theme="light"] :is([class*="-title"], [class*="-name"], [class*="-value"]) {
+  color: #17233b;
+}
+
+.admin-shell[data-theme="light"] :is(
+  .admin-topbar p,
+  .admin-nav-item,
+  .admin-profile strong,
+  .admin-system-stats,
+  [class*="muted"],
+  [class*="subtitle"],
+  [class*="description"],
+  [class*="meta"],
+  [class*="summary"],
+  [class*="breadcrumb"],
+  [class*="label"]
+) {
+  color: #5f6d85;
+}
+
+.admin-shell[data-theme="light"] .admin-nav-item:hover {
+  color: #17233b;
+  background: #f0f4fa;
+}
+
+.admin-shell[data-theme="light"] .admin-nav-item.active {
+  color: #173b7a;
+  background: linear-gradient(90deg, rgba(18,58,143,.12), rgba(18,58,143,.035));
+}
+
+.admin-shell[data-theme="light"] :is(
+  .admin-global-search,
+  .admin-search-field,
+  .admin-toolbar input,
+  .admin-modal input,
+  .admin-modal select,
+  .admin-modal textarea,
+  .admin-drawer input,
+  .admin-drawer select,
+  .admin-drawer textarea,
+  .ops-search
+) {
+  border-color: #d8e0ed;
+  background: #f8faff;
+  color: #17233b;
+  color-scheme: light;
+}
+
+.admin-shell[data-theme="light"] :is(input, select, textarea) {
+  border-color: #d8e0ed;
+  background-color: #f8faff;
+  color: #17233b;
+  color-scheme: light;
+}
+
+.admin-shell[data-theme="light"] .admin-theme-toggle {
+  border-color: rgba(18,58,143,.25);
+  background: rgba(18,58,143,.07);
+  color: #123a8f;
+}
+
+.admin-shell[data-theme="light"] .admin-theme-toggle.is-dark {
+  border-color: rgba(212,175,55,.4);
+  background: rgba(212,175,55,.12);
+  color: #9a7412;
+}
+
+.admin-shell[data-theme="light"] .admin-code-terminal {
+  border-radius: 0 0 13px 13px;
+  background: #f0f3f8;
+}
+
+.admin-shell[data-theme="light"] .admin-error-trace {
+  border-top: 1px solid #e1e6ef;
+  border-right: 1px solid #e1e6ef;
+  border-bottom: 1px solid #e1e6ef;
+  background: #fff;
+}
+
+.admin-shell[data-theme="light"] .admin-error-trace strong {
+  color: #9f3030;
+}
+
+.admin-shell[data-theme="light"] .admin-terminal-bar code,
+.admin-shell[data-theme="light"] .admin-error-trace > div:first-child code,
+.admin-shell[data-theme="light"] .admin-error-trace > code {
+  color: #65738a;
+}
+
+.admin-shell[data-theme="light"] .admin-infra-health > div {
+  border-color: var(--admin-border);
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(30,48,80,.06);
+}
+
+.admin-shell[data-theme="light"] .admin-infra-health strong {
+  color: #17233b;
+}
+
+.admin-shell[data-theme="light"] .admin-infra-health code {
+  color: #718099;
+}
+
+.admin-shell[data-theme="light"] .admin-infra-form :is(input, select, textarea) {
+  border-color: #d8e0ed;
+  background: #f8faff;
+  color: #17233b;
+  color-scheme: light;
+}
+
+.admin-shell[data-theme="light"] .admin-infra-form label > span {
+  color: #5f6d85;
+}
+
+.admin-shell[data-theme="light"] .ops-context-grid article {
+  border-color: var(--admin-border);
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(30,48,80,.06);
+}
+
+.admin-shell[data-theme="light"] .ops-context-grid strong {
+  color: #17233b;
+}
+
+.admin-shell[data-theme="light"] .ops-context-grid span,
+.admin-shell[data-theme="light"] .ops-context-grid small {
+  color: #5f6d85;
+}
+
+.admin-shell[data-theme="light"] .ops-pipeline {
+  border-color: var(--admin-border);
+  background: #fff;
+}
+
+.admin-shell[data-theme="light"] .ops-pipeline strong {
+  color: #45536c;
+}
+
+.admin-shell[data-theme="light"] .admin-topbar .admin-icon-button,
+.admin-shell[data-theme="light"] .admin-icon-button {
+  color: var(--admin-muted);
+}
+
+.admin-shell[data-theme="light"] .recharts-cartesian-grid line {
+  stroke: rgba(23, 35, 59, .1);
+}
+
+.admin-shell[data-theme="light"] .admin-theme-menu {
+  --admin-text: #17233b;
+  --admin-blue: #2456b6;
+}
+
+.admin-shell[data-theme="light"] .ops-kpi {
+  border-color: var(--admin-border);
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(30,48,80,.06);
+}
+
+.admin-shell[data-theme="light"] .ops-kpi > strong {
+  color: #17233b;
+}
+
+.admin-shell[data-theme="light"] .ops-kpi > span {
+  color: #5f6d85;
+}
+
+.admin-shell[data-theme="light"] .ops-kpi > div {
+  color: #718099;
+}
+
+.admin-shell[data-theme="light"] .admin-license-metrics > div {
+  border-color: var(--admin-border);
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(30,48,80,.06);
+}
+
+.admin-shell[data-theme="light"] .admin-license-metrics span {
+  color: #5f6d85;
+}
+
+.admin-shell[data-theme="light"] .admin-license-metrics strong {
+  color: #17233b;
+}
+
+.admin-shell[data-theme="light"] .admin-license-metrics small {
+  color: #287a42;
+}
+
+.admin-shell[data-theme="light"] .admin-toggle:not(.on) {
+  border-color: #c6cfdd;
+  background: #e4e9f1;
+}
+
+.admin-shell[data-theme="light"] .admin-toggle:not(.on) span {
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(23,35,59,.24);
+}
+
+@media (max-width: 640px) {
+  .admin-theme-toggle {
+    order: 2;
+    margin-left: auto;
+  }
+}

@@ -11,23 +11,27 @@ interface ThemeCtx {
   isDark: boolean
 }
 
-const ThemeContext = createContext<ThemeCtx>({ theme: 'light', setTheme: () => {}, isDark: false })
+const ThemeContext = createContext<ThemeCtx>({ theme: 'auto', setTheme: () => {}, isDark: false })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   // 1. Initialize with safe static defaults to prevent server compilation exceptions
-  const [theme, setThemeState] = useState<ThemeMode>('light')
+  const [theme, setThemeState] = useState<ThemeMode>('auto')
   const [sysDark, setSysDark] = useState(false)
 
   // 2. Safely read browser variables ONLY after the layout mounts onto the client device
   useEffect(() => {
     // A. Safely recover the custom merchant dark/light theme tracking choice
+    let hasSavedTheme = false
     try {
-      const savedTheme = localStorage.getItem('md_theme') as ThemeMode
-      if (savedTheme && ['light', 'dark', 'auto'].includes(savedTheme)) setThemeState(savedTheme)
+      const savedTheme = localStorage.getItem('md_theme')
+      if (savedTheme && ['light', 'dark', 'auto'].includes(savedTheme)) {
+        setThemeState(savedTheme as ThemeMode)
+        hasSavedTheme = true
+      }
     } catch {}
 
     const session = getClientSession()
-    if (session) {
+    if (session && !hasSavedTheme) {
       apiFetch<{ preferences: { themeMode: ThemeMode } }>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`)
         .then(response => {
           if (['light', 'dark', 'auto'].includes(response.preferences.themeMode)) {

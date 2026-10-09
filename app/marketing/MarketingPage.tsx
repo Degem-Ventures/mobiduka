@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { useTheme } from "../context/ThemeContext";
 
-type MarketingIconName = 'arrow' | 'check' | 'menu' | 'close' | 'scan' | 'stock' | 'mpesa' | 'offline' | 'report' | 'team' | 'shield' | 'printer'
+type MarketingIconName = 'arrow' | 'check' | 'menu' | 'close' | 'scan' | 'stock' | 'mpesa' | 'offline' | 'report' | 'team' | 'shield' | 'printer' | 'sun' | 'moon' | 'monitor'
 
 function MarketingIcon({ name, size = 20 }: { name: MarketingIconName; size?: number }) {
   const paths: Record<MarketingIconName, ReactNode> = {
@@ -20,6 +21,9 @@ function MarketingIcon({ name, size = 20 }: { name: MarketingIconName; size?: nu
     team: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/></>,
     shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></>,
     printer: <><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></>,
+    sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></>,
+    moon: <path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/>,
+    monitor: <><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></>,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -69,7 +73,9 @@ const faqs = [
 ]
 
 export default function MarketingPage() {
+  const { theme, isDark, setTheme } = useTheme()
   const [mobileMenu, setMobileMenu] = useState(false)
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [experience, setExperience] = useState<'android' | 'ios' | 'web'>('android')
   const [annual, setAnnual] = useState(false)
   const [openFaq, setOpenFaq] = useState(0)
@@ -86,14 +92,33 @@ export default function MarketingPage() {
   }
 
   return (
-    <div className="marketing-page">
+    <div className="marketing-page" data-theme={isDark ? 'dark' : 'light'}>
       <header className="mk-nav">
         <div className="mk-container mk-nav-inner">
           <button className="mk-brand" onClick={() => scrollTo('top')}><span>M</span><div><strong>MobiDuka</strong><small>POS</small></div></button>
           <nav className={mobileMenu ? 'open' : ''}>
             {['features','how-it-works','app-screens','packages','industries','faq'].map(item => <button key={item} onClick={() => scrollTo(item)}>{item.split('-').map(word => word[0].toUpperCase() + word.slice(1)).join(' ')}</button>)}
           </nav>
-          <div className="mk-nav-actions"><Link href="/">Log in</Link><button className="mk-primary small" onClick={() => setContactOpen(true)}>Get Started</button></div>
+          <div className="mk-nav-actions">
+            <div className="mk-theme-anchor">
+              <button className={`mk-theme-toggle ${isDark ? 'is-dark' : 'is-light'}`} onClick={() => setThemeMenuOpen(value => !value)} aria-label="Choose color theme" aria-expanded={themeMenuOpen} aria-haspopup="menu" title="Choose color theme">
+                <MarketingIcon name={theme === 'auto' ? 'monitor' : isDark ? 'sun' : 'moon'} size={17}/>
+              </button>
+              {themeMenuOpen && (
+                <div className="mk-theme-menu" role="menu" aria-label="Color theme">
+                  {(['light', 'dark', 'auto'] as const).map(mode => (
+                    <button key={mode} role="menuitemradio" aria-checked={theme === mode} className={theme === mode ? 'active' : ''} onClick={() => { setTheme(mode); setThemeMenuOpen(false) }}>
+                      <MarketingIcon name={mode === 'light' ? 'sun' : mode === 'dark' ? 'moon' : 'monitor'} size={15}/>
+                      <span>{mode === 'auto' ? 'System' : mode === 'light' ? 'Light' : 'Dark'}</span>
+                      {theme === mode && <MarketingIcon name="check" size={14}/>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Link href="/">Log in</Link>
+            <button className="mk-primary small" onClick={() => setContactOpen(true)}>Get Started</button>
+          </div>
           <button className="mk-mobile-toggle" onClick={() => setMobileMenu(value => !value)} aria-label="Toggle menu"><MarketingIcon name={mobileMenu ? 'close' : 'menu'}/></button>
         </div>
       </header>

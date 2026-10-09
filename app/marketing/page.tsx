@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ThemeProvider } from "../context/ThemeContext";
 import MarketingPage from "./MarketingPage";
 import "./marketing.css";
 
@@ -9,5 +10,9 @@ export const metadata: Metadata = {
 };
 
 export default function Page() {
-  return <MarketingPage />;
+  return (
+    <ThemeProvider>
+      <MarketingPage />
+    </ThemeProvider>
+  );
 }
