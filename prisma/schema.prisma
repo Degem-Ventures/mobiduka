@@ -83,7 +83,7 @@ model BusinessSettings {
   dailyReport        Boolean  @default(false)
   autoBackup         Boolean  @default(true)
   mpesaEnabled       Boolean  @default(true)
-  themeMode          String   @default("light")
+  themeMode          String   @default("auto")
   paymentConfig      Json?
   receiptConfig      Json?
   taxConfig          Json?
