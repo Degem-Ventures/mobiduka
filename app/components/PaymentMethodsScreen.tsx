@@ -909,6 +909,20 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                       merchant&apos;s Till or Paybill. Credentials are encrypted
                       by the backend before storage.
                     </div>
+                    {hasStoredCredentialsForSelectedEnvironment && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: c.muted,
+                          lineHeight: 1.5,
+                          marginBottom: 14,
+                        }}
+                      >
+                        If the server encryption key changed, restore its
+                        original value or enter all three credentials here to
+                        replace them.
+                      </div>
+                    )}
                     {[
                       {
                         id: "mpesa-consumer-key",

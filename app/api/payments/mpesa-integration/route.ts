@@ -193,7 +193,12 @@ export async function PUT(request: Request) {
 
     const publicFields = validatePublicFields(body)
     const existing = await findMpesaIntegration(access.businessId)
-    const existingCredentials = existing
+    const hasCompleteCredentialBundle = [
+      body.consumerKey,
+      body.consumerSecret,
+      body.passkey,
+    ].every((value) => typeof value === "string" && value.trim().length > 0)
+    const existingCredentials = existing && !hasCompleteCredentialBundle
       ? decryptMpesaCredentials(
           access.businessId,
           existing.credentialCiphertext,
@@ -240,8 +245,16 @@ export async function PUT(request: Request) {
       )
     }
     if (error instanceof MpesaCredentialError) {
+      const message =
+        error.message ===
+        "M-Pesa credential encryption is not configured on this server."
+          ? "M-Pesa credential storage is unavailable because MPESA_CREDENTIALS_ENCRYPTION_KEY is missing from the server configuration."
+          : error.message ===
+              "MPESA_CREDENTIALS_ENCRYPTION_KEY must be a base64-encoded 32-byte key."
+            ? "MPESA_CREDENTIALS_ENCRYPTION_KEY must be a valid base64-encoded 32-byte key."
+            : "Existing M-Pesa credentials could not be decrypted. Restore the original server encryption key or enter all three credentials to replace them."
       return NextResponse.json(
-        { error: "M-Pesa credentials could not be stored securely." },
+        { error: message },
         { status: 500 },
       )
     }

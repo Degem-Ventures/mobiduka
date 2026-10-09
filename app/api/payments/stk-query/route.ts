@@ -16,6 +16,8 @@ type DarajaQueryResult = {
   ResponseCode?: unknown
   ResultCode?: unknown
   ResultDesc?: unknown
+  errorCode?: unknown
+  errorMessage?: unknown
 }
 
 function timestamp() {
@@ -146,8 +148,38 @@ export async function POST(request: Request) {
       .json()
       .catch(() => ({}))) as DarajaQueryResult
     if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) {
+        return NextResponse.json({
+          source: "live_query",
+          status: "PENDING",
+          message: "Safaricom's STK status service is temporarily unavailable. Retrying...",
+        })
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        return NextResponse.json(
+          {
+            error:
+              "Safaricom rejected the STK status query. Verify the business's Daraja credentials, environment, shortcode, and passkey in Payment Methods.",
+          },
+          { status: 502 },
+        )
+      }
+
+      const providerMessage =
+        typeof result.errorMessage === "string"
+          ? result.errorMessage
+          : typeof result.ResultDesc === "string"
+            ? result.ResultDesc
+            : typeof result.errorCode === "string"
+              ? `Safaricom error ${result.errorCode}.`
+              : null
       return NextResponse.json(
-        { error: "Safaricom STK status query is temporarily unavailable." },
+        {
+          error: providerMessage
+            ? `Safaricom rejected the STK status query: ${providerMessage.slice(0, 200)}`
+            : `Safaricom rejected the STK status query (HTTP ${response.status}). Verify the checkout request and M-Pesa configuration.`,
+        },
         { status: 502 },
       )
     }
