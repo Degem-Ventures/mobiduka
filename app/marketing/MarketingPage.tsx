@@ -42,7 +42,7 @@ const shiftsScreen = "/mobiduka-shifts.png";
 const shopkeeperPhoto = "/kenyan-shopkeeper.png";
 
 function PhoneMockup({ src, alt, className = '' }: { src: string; alt: string; className?: string }) {
-  return <div className={`mk-phone ${className}`}><div className="mk-phone-speaker"/><img src={src} alt={alt}/></div>
+  return <div className={`mk-phone ${className}`}><img src={src} alt={alt}/></div>
 }
 
 function WebDashboardMockup() {
