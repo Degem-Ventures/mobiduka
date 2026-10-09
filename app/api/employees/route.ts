@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { JWT_SECRET, requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
@@ -9,6 +10,8 @@ import { canonicalRoleName } from "@/lib/roles";
 const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"] as const;
 
 type AllowedRole = (typeof ALLOWED_ROLES)[number];
+
+class EmployeeProfileError extends Error {}
 
 function normalizeRole(value: unknown): AllowedRole | null {
   const rawRole = String(value ?? "").trim().toUpperCase();
@@ -117,7 +120,7 @@ export async function POST(request: Request) {
 
     const employee = await prisma.$transaction(async (tx) => {
       const business = await tx.business.findUnique({ where: { id: businessId }, select: { id: true } });
-      if (!business) throw new Error("Target business was not found.");
+      if (!business) throw new EmployeeProfileError("Target business was not found.");
 
       const existingRole = roleId
         ? await tx.role.findFirst({ where: { id: roleId, businessId }, select: { id: true, name: true } })
@@ -126,13 +129,20 @@ export async function POST(request: Request) {
             update: {},
             create: { businessId, name: canonicalRoleName(role!) },
           });
-      if (!existingRole) throw new Error("The selected role is not available for this business.");
+      if (!existingRole) throw new EmployeeProfileError("The selected role is not available for this business.");
+      if (email) {
+        const employeeWithEmail = await tx.user.findFirst({
+          where: { email, ...(id ? { id: { not: id } } : {}) },
+          select: { id: true },
+        });
+        if (employeeWithEmail) throw new EmployeeProfileError("An account with this email address already exists.");
+      }
       if (id && pin && currentPin) {
         const existingEmployee = await tx.user.findFirst({ where: { id, businessId }, select: { pinHash: true } });
-        if (existingEmployee?.pinHash && !await bcrypt.compare(currentPin, existingEmployee.pinHash)) throw new Error("The current PIN is incorrect.");
+        if (existingEmployee?.pinHash && !await bcrypt.compare(currentPin, existingEmployee.pinHash)) throw new EmployeeProfileError("The current PIN is incorrect.");
       } else if (id && pin) {
         const existingEmployee = await tx.user.findFirst({ where: { id, businessId }, select: { pinHash: true } });
-        if (existingEmployee?.pinHash) throw new Error("Enter the employee's current PIN before setting a new PIN.");
+        if (existingEmployee?.pinHash) throw new EmployeeProfileError("Enter the employee's current PIN before setting a new PIN.");
       }
       if (pin) {
         const candidates = await tx.user.findMany({
@@ -145,7 +155,7 @@ export async function POST(request: Request) {
         });
         for (const candidate of candidates) {
           if (candidate.pinHash && await bcrypt.compare(pin, candidate.pinHash)) {
-            throw new Error("That PIN is already assigned to another employee in this business.");
+            throw new EmployeeProfileError("That PIN is already assigned to another employee in this business.");
           }
         }
       }
@@ -165,7 +175,7 @@ export async function POST(request: Request) {
 
       if (id) {
         const existing = await tx.user.findUnique({ where: { id }, select: { businessId: true } });
-        if (existing && existing.businessId !== businessId) throw new Error("Employee does not belong to this business.");
+        if (existing && existing.businessId !== businessId) throw new EmployeeProfileError("Employee does not belong to this business.");
         return tx.user.upsert({ where: { id }, update: data, create: { id, ...data } });
       }
 
@@ -184,9 +194,20 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, employeeId: employee.id }, { status: 201 });
   } catch (error) {
+    if (error instanceof EmployeeProfileError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const target = error.meta?.target;
+      const fields = Array.isArray(target) ? target : [target];
+      if (fields.some((field) => typeof field === "string" && field.toLowerCase().includes("email"))) {
+        return NextResponse.json({ error: "An account with this email address already exists." }, { status: 409 });
+      }
+    }
+    console.error("Staff profile orchestration failed:", error);
     return NextResponse.json(
-      { error: "Staff profile orchestration failed.", details: error instanceof Error ? error.message : "Unknown error" },
-      { status: 400 },
+      { error: "Unable to save the employee profile. Please try again." },
+      { status: 500 },
     );
   }
 }

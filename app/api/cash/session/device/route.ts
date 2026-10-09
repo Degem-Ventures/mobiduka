@@ -154,8 +154,11 @@ export async function PUT(request: Request) {
           businessId: access.businessId,
           closedAt: null,
           cashier: {
+            businessId: access.businessId,
             status: "ACTIVE",
-            role: { name: { in: ["CASHIER", "SUPERVISOR"] } },
+            role: {
+              name: { in: ["CASHIER", "SUPERVISOR"], mode: "insensitive" },
+            },
           },
         },
         select: { id: true },

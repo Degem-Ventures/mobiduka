@@ -111,8 +111,24 @@ export async function loadTenantMpesaIntegration(
     }
   } catch (error) {
     if (error instanceof MpesaCredentialError) {
+      if (
+        error.message ===
+        "M-Pesa credential encryption is not configured on this server."
+      ) {
+        throw new MpesaConfigurationError(
+          "M-Pesa payments are unavailable because MPESA_CREDENTIALS_ENCRYPTION_KEY is missing from the server configuration.",
+        )
+      }
+      if (
+        error.message ===
+        "MPESA_CREDENTIALS_ENCRYPTION_KEY must be a base64-encoded 32-byte key."
+      ) {
+        throw new MpesaConfigurationError(
+          "M-Pesa payments are unavailable because MPESA_CREDENTIALS_ENCRYPTION_KEY is invalid. Restore the original key or configure a valid base64-encoded 32-byte key.",
+        )
+      }
       throw new MpesaConfigurationError(
-        "The business M-Pesa credentials cannot be read by this server.",
+        "The saved M-Pesa credentials cannot be decrypted with the server's current encryption key. Restore the original MPESA_CREDENTIALS_ENCRYPTION_KEY, or enter all three Daraja credentials again in Payment Methods to replace them.",
       )
     }
     throw error
