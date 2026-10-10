@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import AdminRegisterScreen from './AdminRegisterScreen'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
@@ -16,7 +22,7 @@ interface Employee {
   pin: string
   hasPin: boolean
   shift: string
-  salary: number
+  salary: number | null
   startDate: string
   active: boolean
   initials: string
@@ -53,31 +59,94 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   const [form, setForm] = useState({ name: '', role: 'Cashier' as Role, phone: '', email: '', pin: '', shift: 'Morning', salary: '' })
   const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
 
   const loadEmployees = async () => {
     if (!session) { setDataError('Please sign in to load employees.'); return }
+    const businessId = session.user.businessId
+    const cacheKey = 'employees.directory.v1'
+    let previousUpdatedAt: string | null = null
     try {
-      const response = await apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; roleId: string; phone: string | null; email: string | null; status: string; shift: string; salary: number; startDate: string; hasPin: boolean }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`)
-      setList(response.employees.map((employee, index) => ({
-        id: employee.id,
-        roleId: employee.roleId,
-        name: employee.fullName,
-        role: roleFromApi(employee.role),
-        phone: employee.phone ?? '',
-        email: employee.email ?? '',
-        pin: '',
-        hasPin: employee.hasPin,
-        shift: employee.shift,
-        salary: Number(employee.salary),
-        startDate: new Date(employee.startDate).toLocaleDateString(),
-        active: employee.status === 'ACTIVE',
-        initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase(),
-        color: ['#123A8F', '#2E7D32', '#D32F2F', '#F57C00', '#7B1FA2'][index % 5] ?? '#123A8F',
-      })))
+      previousUpdatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+    } catch (reason) {
+      console.error('Unable to read the employee snapshot timestamp.', reason)
+    }
+    try {
+      let employees: Employee[]
+      let usedSnapshot = false
+      try {
+        const response = await apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; roleId: string; phone: string | null; email: string | null; status: string; shift: string; salary: number; startDate: string; hasPin: boolean }> }>(`/api/employees?businessId=${encodeURIComponent(businessId)}`)
+        employees = response.employees.map((employee, index) => ({
+          id: employee.id,
+          roleId: employee.roleId,
+          name: employee.fullName,
+          role: roleFromApi(employee.role),
+          phone: employee.phone ?? '',
+          email: employee.email ?? '',
+          pin: '',
+          hasPin: employee.hasPin,
+          shift: employee.shift,
+          salary: Number(employee.salary),
+          startDate: new Date(employee.startDate).toLocaleDateString(),
+          active: employee.status === 'ACTIVE',
+          initials: employee.fullName.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase(),
+          color: ['#123A8F', '#2E7D32', '#D32F2F', '#F57C00', '#7B1FA2'][index % 5] ?? '#123A8F',
+        }))
+        const offlineDirectory = employees.map(employee => ({
+          ...employee,
+          phone: '',
+          email: '',
+          hasPin: false,
+          salary: null,
+          startDate: 'Not available offline',
+        }))
+        try {
+          await writeOfflineCollection(businessId, cacheKey, offlineDirectory)
+        } catch (error) {
+          console.error('Unable to cache the employee directory for offline use.', error)
+        }
+      } catch (error) {
+        const canUseCache =
+          error instanceof TypeError ||
+          (error instanceof ApiResponseError && error.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) throw error
+        const cachedEmployees = await readOfflineCollection<Employee[]>(businessId, cacheKey)
+        if (cachedEmployees === null) {
+          throw new Error('The employee directory is not available offline yet. Connect to the internet once to load it.')
+        }
+        employees = cachedEmployees
+        usedSnapshot = true
+      }
+      setList(employees)
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the employee snapshot timestamp.', reason)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (usedSnapshot || !navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
+      setDataError('')
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load employees.') }
   }
 
-  useEffect(() => { void loadEmployees() }, [session?.user.businessId])
+  useEffect(() => {
+    void loadEmployees()
+    const handleOnline = () => void loadEmployees()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setIsOfflineSnapshot(true)
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.businessId])
 
   const _openAdd = () => {
     setEditing(null)
@@ -88,13 +157,13 @@ export default function EmployeesScreen({ onNavigate }: Props) {
 
   const openEdit = (emp: Employee) => {
     setEditing(emp)
-    setForm({ name: emp.name, role: emp.role, phone: emp.phone, email: emp.email, pin: emp.pin, shift: emp.shift, salary: String(emp.salary) })
+    setForm({ name: emp.name, role: emp.role, phone: emp.phone, email: emp.email, pin: emp.pin, shift: emp.shift, salary: String(emp.salary ?? 0) })
     setShowForm(true)
     setSelected(null)
   }
 
   const saveForm = async () => {
-    if (!session || !form.name.trim()) return
+    if (!session || !form.name.trim() || isOfflineSnapshot) return
     setSaving(true)
     try {
       await apiFetch('/api/employees', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, id: editing?.id, name: form.name, role: roleToApi(form.role), phone: form.phone, email: form.email, pin: form.pin || undefined, shift: form.shift, salary: Number(form.salary || 0), isActive: editing?.active ?? true, startDate: editing?.startDate }) })
@@ -105,7 +174,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   }
 
   const toggleActive = async (employee: Employee) => {
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     try {
       await apiFetch('/api/employees', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, id: employee.id, name: employee.name, role: roleToApi(employee.role), phone: employee.phone, email: employee.email, shift: employee.shift, salary: employee.salary, isActive: !employee.active }) })
       await loadEmployees()
@@ -115,7 +184,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
   if (showForm) {
     return <AdminRegisterScreen
       onNavigate={onNavigate}
-      employee={editing ? { id: editing.id, name: editing.name, phone: editing.phone, email: editing.email, roleId: editing.roleId, shift: editing.shift, salary: editing.salary, active: editing.active, hasPin: editing.hasPin, startDate: editing.startDate } : null}
+      employee={editing ? { id: editing.id, name: editing.name, phone: editing.phone, email: editing.email, roleId: editing.roleId, shift: editing.shift, salary: editing.salary ?? 0, active: editing.active, hasPin: editing.hasPin, startDate: editing.startDate } : null}
       onComplete={() => { void loadEmployees(); setShowForm(false); setEditing(null) }}
     />
   }
@@ -220,8 +289,13 @@ export default function EmployeesScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Showing saved employee directory{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Contact, salary, and PIN details aren’t stored offline; employee changes require internet.
+            </div>
+          )}
           <div className="card" style={{ padding: '16px', marginBottom: 14 }}>
-            {[['Phone', emp.phone], ['Email', emp.email], ['Shift', emp.shift], ['Monthly Salary', `KSh ${emp.salary.toLocaleString()}`], ['Start Date', emp.startDate], ['PIN', '••••']].map(([k, v], i) => (
+            {[['Phone', isOfflineSnapshot ? 'Not available offline' : emp.phone || '—'], ['Email', isOfflineSnapshot ? 'Not available offline' : emp.email || '—'], ['Shift', emp.shift], ['Monthly Salary', isOfflineSnapshot || emp.salary === null ? 'Not available offline' : `KSh ${emp.salary.toLocaleString()}`], ['Start Date', isOfflineSnapshot ? 'Not available offline' : emp.startDate], ['PIN', isOfflineSnapshot ? 'Not available offline' : emp.hasPin ? 'Set' : 'Not set']].map(([k, v], i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < 5 ? c.divider : 'none' }}>
                 <div style={{ fontSize: 12, color: c.muted }}>{k}</div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{v}</div>
@@ -237,8 +311,8 @@ export default function EmployeesScreen({ onNavigate }: Props) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn" onClick={() => openEdit(emp)} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Edit Details</button>
-            <button className="btn" onClick={() => { void toggleActive(emp); setSelected(null) }} style={{ flex: 1, padding: '13px', background: emp.active ? '#FFF5F5' : c.successBg, border: `1px solid ${emp.active ? '#FFCDD2' : '#C8E6C9'}`, borderRadius: 14, fontSize: 13, fontWeight: 600, color: emp.active ? '#D32F2F' : '#2E7D32', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => openEdit(emp)} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', opacity: isOfflineSnapshot ? 0.7 : 1 }}>Edit Details</button>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => { void toggleActive(emp); setSelected(null) }} style={{ flex: 1, padding: '13px', background: emp.active ? '#FFF5F5' : c.successBg, border: `1px solid ${emp.active ? '#FFCDD2' : '#C8E6C9'}`, borderRadius: 14, fontSize: 13, fontWeight: 600, color: emp.active ? '#D32F2F' : '#2E7D32', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', opacity: isOfflineSnapshot ? 0.7 : 1 }}>
               {emp.active ? 'Deactivate' : 'Activate'}
             </button>
           </div>
@@ -263,7 +337,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
               <span style={{ fontSize: 15 }}>🕐</span>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'white' }}>Shifts</span>
             </button>
-            <button className="btn" onClick={_openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={_openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 5, cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', opacity: isOfflineSnapshot ? 0.7 : 1 }}>
               <span style={{ fontSize: 15, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 12, fontWeight: 700, color: '#0D1B3D' }}>Register</span>
             </button>
@@ -278,7 +352,12 @@ export default function EmployeesScreen({ onNavigate }: Props) {
           ))}
         </div>
       </div>
-      {dataError && <div style={{ margin: 12, marginBottom: 0, color: '#C62828', fontSize: 12 }}>{dataError}</div>}
+      {isOfflineSnapshot && (
+        <div role="status" style={{ margin: 12, marginBottom: 0, padding: '9px 12px', borderRadius: 10, background: '#FFF8E1', color: '#795548', fontSize: 12 }}>
+          Showing saved employee directory{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Contact, salary, and PIN details aren’t stored offline; employee changes require internet.
+        </div>
+      )}
+      {dataError && <div role="alert" style={{ margin: 12, marginBottom: 0, color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {list.map(emp => (
           <button key={emp.id} className="btn card" onClick={() => setSelected(emp)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', opacity: emp.active ? 1 : 0.6 }}>
@@ -291,7 +370,7 @@ export default function EmployeesScreen({ onNavigate }: Props) {
               </div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: c.text }}>KSh {(emp.salary / 1000).toFixed(0)}K</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: c.text }}>{isOfflineSnapshot || emp.salary === null ? 'Salary hidden' : `KSh ${(emp.salary / 1000).toFixed(0)}K`}</div>
               <div style={{ fontSize: 10, color: emp.active ? '#2E7D32' : '#D32F2F', fontWeight: 600, marginTop: 3 }}>● {emp.active ? 'Active' : 'Inactive'}</div>
             </div>
           </button>

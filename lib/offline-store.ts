@@ -23,6 +23,7 @@ export function isNativeOfflineApp() {
 }
 
 const offlinePinRosterMaxAgeMs = 7 * 24 * 60 * 60 * 1000
+const offlinePinRosterRefreshIntervalMs = 24 * 60 * 60 * 1000
 const offlinePinMaxAttempts = 5
 const offlinePinLockoutMs = 5 * 60 * 1000
 
@@ -104,6 +105,29 @@ export async function refreshOfflinePinRoster(businessId: string) {
   }
 }
 
+export async function refreshOfflinePinRosterIfNeeded(businessId: string) {
+  if (!isNativeApp()) return false
+  const database = await getDatabase()
+  if (!database) throw new Error("Native SQLite is unavailable for PIN roster caching.")
+  const result = await database.query(
+    `SELECT updated_at FROM offline_pin_roster_state WHERE business_id = ?`,
+    [businessId],
+  )
+  const updatedAt = result.values?.[0]?.updated_at
+  const rosterAge = typeof updatedAt === "string"
+    ? Date.now() - new Date(updatedAt).getTime()
+    : Number.POSITIVE_INFINITY
+  if (
+    Number.isFinite(rosterAge) &&
+    rosterAge >= 0 &&
+    rosterAge < offlinePinRosterRefreshIntervalMs
+  ) {
+    return false
+  }
+  await refreshOfflinePinRoster(businessId)
+  return true
+}
+
 export async function authenticateOfflinePin(
   businessId: string,
   pin: string,
@@ -128,7 +152,7 @@ export async function authenticateOfflinePin(
   )
   const state = stateResult.values?.[0]
   if (!state || typeof state.updated_at !== "string") {
-    return { success: false, message: "Connect and sign in online once to enable business PIN login offline." }
+    return { success: false, message: "Offline PIN setup has not finished on this device. Sign in online and keep the app connected while it syncs." }
   }
   const rosterAge = Date.now() - new Date(state.updated_at).getTime()
   if (!Number.isFinite(rosterAge) || rosterAge < 0 || rosterAge > offlinePinRosterMaxAgeMs) {
@@ -291,6 +315,79 @@ export async function readOfflineCollectionUpdatedAt(
   return typeof updatedAt === "string" ? updatedAt : null
 }
 
+export type OfflineCacheIndexEntry = {
+  cacheKey: string
+  updatedAt: string
+}
+
+export async function getOfflineCacheIndex(
+  businessId: string,
+): Promise<OfflineCacheIndexEntry[]> {
+  const database = await getDatabase()
+  if (!database) return []
+  const [collections, pinRoster] = await Promise.all([
+    database.query(
+      `SELECT cache_key, updated_at FROM offline_collection_cache
+       WHERE business_id = ? ORDER BY cache_key`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT updated_at FROM offline_pin_roster_state WHERE business_id = ?`,
+      [businessId],
+    ),
+  ])
+  const entries: OfflineCacheIndexEntry[] = (collections.values ?? [])
+    .filter(row => typeof row.cache_key === "string" && typeof row.updated_at === "string")
+    .map(row => ({
+      cacheKey: String(row.cache_key),
+      updatedAt: String(row.updated_at),
+    }))
+  const pinRosterUpdatedAt = pinRoster.values?.[0]?.updated_at
+  if (typeof pinRosterUpdatedAt === "string") {
+    entries.push({ cacheKey: "offline.pin-roster.v1", updatedAt: pinRosterUpdatedAt })
+  }
+  return entries
+}
+
+export type OfflineStorageUsage = {
+  cachedCollections: number
+  cachedPayloadBytes: number
+  queuedRecords: number
+  queuedPayloadBytes: number
+}
+
+export async function getOfflineStorageUsage(
+  businessId: string,
+): Promise<OfflineStorageUsage> {
+  const database = await getDatabase()
+  if (!database) {
+    return {
+      cachedCollections: 0,
+      cachedPayloadBytes: 0,
+      queuedRecords: 0,
+      queuedPayloadBytes: 0,
+    }
+  }
+  const [cache, queue] = await Promise.all([
+    database.query(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(length(CAST(payload AS BLOB))), 0) AS bytes
+       FROM offline_collection_cache WHERE business_id = ?`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(length(CAST(payload AS BLOB))), 0) AS bytes
+       FROM sync_outbox WHERE business_id = ?`,
+      [businessId],
+    ),
+  ])
+  return {
+    cachedCollections: Number(cache.values?.[0]?.count ?? 0),
+    cachedPayloadBytes: Number(cache.values?.[0]?.bytes ?? 0),
+    queuedRecords: Number(queue.values?.[0]?.count ?? 0),
+    queuedPayloadBytes: Number(queue.values?.[0]?.bytes ?? 0),
+  }
+}
+
 export async function writeOfflineCollection(
   businessId: string,
   cacheKey: string,
@@ -349,6 +446,172 @@ export type OfflineCashSale = {
     unitPrice: number
     total: number
   }>
+}
+
+export type QueuedOfflineCashSale = {
+  id: string
+  createdAt: string
+  status: "PENDING" | "FAILED"
+  lastError: string | null
+  payload: {
+    saleNumber: string
+    cashierId: string
+    subtotal: number
+    discount: number
+    total: number
+    items: Array<{
+      productId: string
+      quantity: number
+      unitPrice: number
+      total: number
+    }>
+  }
+}
+
+export type OfflineCashExpense = {
+  description: string
+  amount: number
+  category: string
+  recurring: boolean
+  date: string
+  userId: string
+}
+
+export type QueuedOfflineExpense = {
+  id: string
+  createdAt: string
+  status: "PENDING" | "FAILED"
+  lastError: string | null
+  payload: OfflineCashExpense & { id: string; businessId: string }
+}
+
+export async function getQueuedOfflineExpenses(
+  businessId: string,
+): Promise<QueuedOfflineExpense[]> {
+  const database = await getDatabase()
+  if (!database) return []
+  const result = await database.query(
+    `SELECT id, payload, status, last_error, created_at FROM sync_outbox
+     WHERE business_id = ? AND entity_name = 'Expense' AND operation = 'CREATE'
+       AND status IN ('PENDING', 'FAILED')
+     ORDER BY created_at DESC LIMIT 100`,
+    [businessId],
+  )
+  return (result.values ?? []).map((row) => ({
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    status: String(row.status) as QueuedOfflineExpense["status"],
+    lastError: typeof row.last_error === "string" ? row.last_error : null,
+    payload: JSON.parse(String(row.payload)) as QueuedOfflineExpense["payload"],
+  }))
+}
+
+export async function commitOfflineCashExpense(
+  businessId: string,
+  expense: OfflineCashExpense,
+) {
+  const database = await getDatabase()
+  if (!database) {
+    throw new Error("Offline expenses are only available in the native app.")
+  }
+  const dateValue = new Date(`${expense.date}T00:00:00.000Z`)
+  if (
+    !businessId ||
+    !expense.userId ||
+    !expense.description.trim() ||
+    !expense.category.trim() ||
+    !Number.isFinite(expense.amount) ||
+    expense.amount <= 0 ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(expense.date) ||
+    Number.isNaN(dateValue.getTime()) ||
+    dateValue.toISOString().slice(0, 10) !== expense.date
+  ) {
+    throw new Error("A valid description, category, amount, date, and signed-in user are required.")
+  }
+
+  const now = new Date().toISOString()
+  const expenseId = crypto.randomUUID()
+  const payload = {
+    id: expenseId,
+    businessId,
+    userId: expense.userId,
+    description: expense.description.trim(),
+    amount: expense.amount,
+    category: expense.category.trim(),
+    paymentMethod: "Cash",
+    icon: null,
+    recurring: expense.recurring,
+    date: expense.date,
+  }
+  const payloadJson = JSON.stringify(payload)
+  const hashBuffer = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(payloadJson),
+  )
+  const payloadHash = Array.from(new Uint8Array(hashBuffer), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")
+
+  await database.execute("BEGIN IMMEDIATE;", false)
+  try {
+    const cached = await database.query(
+      `SELECT payload FROM offline_collection_cache
+       WHERE business_id = ? AND cache_key = 'expenses.list.v1'`,
+      [businessId],
+    )
+    const rawExpenses = cached.values?.[0]?.payload
+    const expenses = typeof rawExpenses === "string"
+      ? JSON.parse(rawExpenses) as Array<Record<string, unknown>>
+      : []
+    expenses.unshift({
+      ...payload,
+      createdAt: now,
+      isPendingSync: true,
+    })
+    await database.run(
+      `INSERT INTO offline_collection_cache (business_id, cache_key, payload, updated_at)
+       VALUES (?, 'expenses.list.v1', ?, ?)
+       ON CONFLICT (business_id, cache_key) DO UPDATE SET
+         payload = excluded.payload,
+         updated_at = excluded.updated_at`,
+      [businessId, JSON.stringify(expenses), now],
+      false,
+    )
+    await database.run(
+      `INSERT INTO sync_outbox (
+         id, business_id, entity_name, operation, external_id, payload,
+         payload_hash, status, created_at, next_retry_at
+       ) VALUES (?, ?, 'Expense', 'CREATE', ?, ?, ?, 'PENDING', ?, ?)`,
+      [expenseId, businessId, expenseId, payloadJson, payloadHash, now, now],
+      false,
+    )
+    await database.execute("COMMIT;", false)
+    return { id: expenseId, createdAt: now }
+  } catch (error) {
+    await database.execute("ROLLBACK;", false)
+    throw error
+  }
+}
+
+export async function getQueuedOfflineCashSales(
+  businessId: string,
+): Promise<QueuedOfflineCashSale[]> {
+  const database = await getDatabase()
+  if (!database) return []
+  const result = await database.query(
+    `SELECT id, payload, status, last_error, created_at FROM sync_outbox
+     WHERE business_id = ? AND entity_name = 'Sale' AND operation = 'CREATE'
+       AND status IN ('PENDING', 'FAILED')
+     ORDER BY created_at DESC LIMIT 51`,
+    [businessId],
+  )
+  return (result.values ?? []).map((row) => ({
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    status: String(row.status) as QueuedOfflineCashSale["status"],
+    lastError: typeof row.last_error === "string" ? row.last_error : null,
+    payload: JSON.parse(String(row.payload)) as QueuedOfflineCashSale["payload"],
+  }))
 }
 
 export async function commitOfflineCashSale(sale: OfflineCashSale) {
@@ -453,11 +716,38 @@ export async function commitOfflineCashSale(sale: OfflineCashSale) {
 
     await database.run(
       `UPDATE offline_collection_cache
-       SET payload = ?, updated_at = ?
+       SET payload = ?
        WHERE business_id = ? AND cache_key = 'pos.products.v1'`,
-      [JSON.stringify(products), now, sale.businessId],
+      [JSON.stringify(products), sale.businessId],
       false,
     )
+    const inventoryCatalog = await database.query(
+      `SELECT payload FROM offline_collection_cache
+       WHERE business_id = ? AND cache_key = 'inventory.products.v1'`,
+      [sale.businessId],
+    )
+    const rawInventory = inventoryCatalog.values?.[0]?.payload
+    if (typeof rawInventory === "string") {
+      const inventoryProducts = JSON.parse(rawInventory) as Array<{
+        id: string
+        inventory?: { quantity?: number | null } | null
+      }>
+      for (const [productId, quantity] of quantitiesByProduct) {
+        const product = inventoryProducts.find((row) => row.id === productId)
+        if (!product) continue
+        product.inventory = {
+          ...product.inventory,
+          quantity: Number(product.inventory?.quantity ?? 0) - quantity,
+        }
+      }
+      await database.run(
+        `UPDATE offline_collection_cache
+         SET payload = ?
+         WHERE business_id = ? AND cache_key = 'inventory.products.v1'`,
+        [JSON.stringify(inventoryProducts), sale.businessId],
+        false,
+      )
+    }
     await database.run(
       `INSERT INTO sync_outbox (
          id, business_id, entity_name, operation, external_id, payload,
@@ -562,17 +852,17 @@ export async function getOfflineSaleSyncStatus(businessId: string) {
   const [pendingResult, failedResult, errorResult] = await Promise.all([
     database.query(
       `SELECT COUNT(*) AS count FROM sync_outbox
-       WHERE business_id = ? AND status = 'PENDING'`,
+       WHERE business_id = ? AND entity_name = 'Sale' AND status = 'PENDING'`,
       [businessId],
     ),
     database.query(
       `SELECT COUNT(*) AS count FROM sync_outbox
-       WHERE business_id = ? AND status = 'FAILED'`,
+       WHERE business_id = ? AND entity_name = 'Sale' AND status = 'FAILED'`,
       [businessId],
     ),
     database.query(
       `SELECT last_error FROM sync_outbox
-       WHERE business_id = ? AND status = 'FAILED'
+       WHERE business_id = ? AND entity_name = 'Sale' AND status = 'FAILED'
        ORDER BY created_at DESC LIMIT 1`,
       [businessId],
     ),
@@ -587,13 +877,52 @@ export async function getOfflineSaleSyncStatus(businessId: string) {
   }
 }
 
-export async function retryFailedOfflineSales(businessId: string) {
+export async function getOfflineExpenseSyncStatus(businessId: string) {
+  const database = await getDatabase()
+  if (!database) return { pending: 0, failed: 0, lastError: null }
+  const [pendingResult, failedResult, errorResult] = await Promise.all([
+    database.query(
+      `SELECT COUNT(*) AS count FROM sync_outbox
+       WHERE business_id = ? AND entity_name = 'Expense' AND status = 'PENDING'`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT COUNT(*) AS count FROM sync_outbox
+       WHERE business_id = ? AND entity_name = 'Expense' AND status = 'FAILED'`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT last_error FROM sync_outbox
+       WHERE business_id = ? AND entity_name = 'Expense' AND status = 'FAILED'
+       ORDER BY created_at DESC LIMIT 1`,
+      [businessId],
+    ),
+  ])
+  return {
+    pending: Number(pendingResult.values?.[0]?.count ?? 0),
+    failed: Number(failedResult.values?.[0]?.count ?? 0),
+    lastError:
+      typeof errorResult.values?.[0]?.last_error === "string"
+        ? errorResult.values[0].last_error
+        : null,
+  }
+}
+
+export async function retryFailedOfflineRecords(
+  businessId: string,
+  entityName?: "Sale" | "Expense",
+) {
   const database = await getDatabase()
   if (!database) return
   await database.run(
     `UPDATE sync_outbox
      SET status = 'PENDING', attempt_count = 0, next_retry_at = ?, last_error = NULL
-     WHERE business_id = ? AND status = 'FAILED'`,
-    [new Date().toISOString(), businessId],
+     WHERE business_id = ? AND status = 'FAILED'
+       AND (? IS NULL OR entity_name = ?)`,
+    [new Date().toISOString(), businessId, entityName ?? null, entityName ?? null],
   )
+}
+
+export async function retryFailedOfflineSales(businessId: string) {
+  return retryFailedOfflineRecords(businessId, "Sale")
 }

@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Perm = { id: string; label: string; section: string }
@@ -36,6 +42,7 @@ interface Role {
 }
 
 type RolesResponse = { roles: Array<{ id: string; name: string; icon: string; color: string; isSystem: boolean; permissions: string[]; userCount: number }> }
+type RoleSnapshot = RolesResponse
 
 interface Props { onNavigate: (s: string) => void }
 
@@ -50,28 +57,79 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useAutoDismissMessage()
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
 
   const loadRoles = async () => {
     const session = getClientSession()
     if (!session) { setError('Please sign in to manage roles.'); setLoading(false); return }
+    const businessId = session.user.businessId
+    const cacheKey = 'roles.list.v1'
     try {
-      const response = await apiFetch<RolesResponse>(`/api/roles?businessId=${encodeURIComponent(session.user.businessId)}`)
+      let response: RoleSnapshot
+      let usedSnapshot = false
+      try {
+        response = await apiFetch<RoleSnapshot>(`/api/roles?businessId=${encodeURIComponent(businessId)}`)
+        try {
+          await writeOfflineCollection(businessId, cacheKey, response)
+        } catch (reason) {
+          console.error('Unable to cache roles for offline use.', reason)
+        }
+      } catch (reason) {
+        const canUseCache =
+          reason instanceof TypeError ||
+          (reason instanceof ApiResponseError && reason.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) throw reason
+        const cached = await readOfflineCollection<RoleSnapshot>(businessId, cacheKey)
+        if (cached === null) {
+          throw new Error('Roles are not available offline yet. Connect to the internet once to load them.')
+        }
+        response = cached
+        usedSnapshot = true
+      }
       setRoles(response.roles.map(role => ({ id: role.id, name: role.name, icon: role.icon, color: role.color, builtin: role.isSystem, perms: new Set(role.permissions) })))
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the roles snapshot timestamp.', reason)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(isNativeOfflineApp() && (usedSnapshot || !navigator.onLine))
       setError('')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to load roles.') }
     finally { setLoading(false) }
   }
 
-  useEffect(() => { void loadRoles() }, [])
+  useEffect(() => {
+    void loadRoles()
+    const handleOnline = () => void loadRoles()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(true)
+        setEditing(false)
+        setSelected(null)
+        setDraft(null)
+        setShowNewRole(false)
+      }
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
 
   const openEdit = (r: Role) => {
+    if (isOfflineSnapshot) return
     setSelected(r)
     setDraft({ name: r.name, perms: new Set(r.perms) })
     setEditing(true)
   }
 
   const saveRole = async () => {
-    if (!draft || !selected) return
+    if (!draft || !selected || isOfflineSnapshot) return
     const session = getClientSession(); if (!session) return
     try {
       await apiFetch('/api/roles', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, roleId: selected.id, ...(selected.builtin ? {} : { name: draft.name }), permissions: [...draft.perms] }) })
@@ -87,13 +145,14 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
   }
 
   const addCustomRole = async () => {
-    if (!newRoleName.trim()) return
+    if (!newRoleName.trim() || isOfflineSnapshot) return
     const session = getClientSession(); if (!session) return
     try { await apiFetch('/api/roles', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, name: newRoleName.trim(), permissions: ['pos'] }) }); await loadRoles(); setNewRoleName(''); setShowNewRole(false) }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to create role.') }
   }
 
   const deleteRole = async (roleId: string) => {
+    if (isOfflineSnapshot) return
     const session = getClientSession(); if (!session) return
     try { await apiFetch('/api/roles', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, roleId }) }); await loadRoles() }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to delete role.') }
@@ -176,6 +235,11 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 100 }}>
         {error && <div style={{ background: c.errorBg, borderRadius: 12, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#D32F2F' }}>{error}</div>}
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: c.cardAlt, borderRadius: 12, padding: '12px 16px', marginBottom: 16, fontSize: 12, lineHeight: 1.5, color: c.muted }}>
+            Showing saved roles{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Role changes require internet.
+          </div>
+        )}
         {saved && (
           <div style={{ background: c.successBg, border: `1px solid ${c.isDark ? 'rgba(46,125,50,0.4)' : '#C8E6C9'}`, borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span>✅</span><span style={{ fontSize: 13, fontWeight: 600, color: '#2E7D32' }}>Role permissions saved</span>
@@ -190,7 +254,7 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{r.name}</div>
               <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{r.perms.size} permissions</div>
             </div>
-            <button className="btn" onClick={() => openEdit(r)} style={{ background: c.iconBg, border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => openEdit(r)} style={{ background: c.iconBg, border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>
               Edit
             </button>
           </div>
@@ -207,8 +271,8 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
                   <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{r.perms.size} permissions</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn" onClick={() => openEdit(r)} style={{ background: c.iconBg, border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
-                  <button className="btn" onClick={() => void deleteRole(r.id)} style={{ background: c.errorBg, border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#D32F2F', cursor: 'pointer', fontFamily: 'inherit' }}>✕</button>
+                  <button className="btn" disabled={isOfflineSnapshot} onClick={() => openEdit(r)} style={{ background: c.iconBg, border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>Edit</button>
+                  <button className="btn" disabled={isOfflineSnapshot} onClick={() => void deleteRole(r.id)} style={{ background: c.errorBg, border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#D32F2F', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>✕</button>
                 </div>
               </div>
             ))}
@@ -221,13 +285,13 @@ export default function ManageRolesScreen({ onNavigate }: Props) {
             <input className="input" placeholder="e.g. Warehouse Staff" value={newRoleName} onChange={e => setNewRoleName(e.target.value)} style={{ marginBottom: 12 }} />
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn" onClick={() => setShowNewRole(false)} style={{ flex: 1, padding: '11px', background: 'none', border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-              <button className="btn" onClick={() => void addCustomRole()} style={{ flex: 2, padding: '11px', background: newRoleName.trim() ? '#123A8F' : c.cardAlt, border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: newRoleName.trim() ? 'white' : c.faint, cursor: newRoleName.trim() ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+                <button className="btn" disabled={isOfflineSnapshot} onClick={() => void addCustomRole()} style={{ flex: 2, padding: '11px', background: newRoleName.trim() && !isOfflineSnapshot ? '#123A8F' : c.cardAlt, border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: newRoleName.trim() && !isOfflineSnapshot ? 'white' : c.faint, cursor: newRoleName.trim() && !isOfflineSnapshot ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
                 Create Role
               </button>
             </div>
           </div>
         ) : (
-          <button className="btn" onClick={() => setShowNewRole(true)} style={{ width: '100%', marginTop: 8, padding: '14px', background: 'none', border: `1.5px dashed ${c.isDark ? '#1A3366' : '#D0D7E8'}`, borderRadius: 14, fontSize: 14, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" disabled={isOfflineSnapshot} onClick={() => setShowNewRole(true)} style={{ width: '100%', marginTop: 8, padding: '14px', background: 'none', border: `1.5px dashed ${c.isDark ? '#1A3366' : '#D0D7E8'}`, borderRadius: 14, fontSize: 14, fontWeight: 600, color: '#123A8F', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>
             + Create Custom Role
           </button>
         )}

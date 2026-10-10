@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type OrderItem = { name: string; qty: number; unit: string; cost: number; total: number; productId: string }
@@ -8,6 +13,22 @@ type PurchaseOrder = { id: string; orderNo: string; supplierId: string | null; s
 type Supplier = { id: string; name: string }
 type Product = { id: string; name: string; unit: string | null; costPrice: number | null }
 type NewOrderItem = { productId: string; quantity: string; costPrice: string }
+type PurchaseOrderApiRow = {
+  id: string
+  orderNo: string | null
+  supplierId: string | null
+  supplier: { name: string } | null
+  status: string
+  totalCost: number
+  dueDate: string | null
+  createdAt: string
+  items: Array<{
+    productId: string
+    quantity: number
+    costPrice: number
+    product: { name: string; unit: string | null }
+  }>
+}
 
 const statusColor: Record<string, string> = {
   pending: '#F9A825',
@@ -30,6 +51,8 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
   const [orders, setOrders] = useState<PurchaseOrder[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [filter, setFilter] = useState<'all' | 'pending' | 'delivered'>('all')
@@ -38,13 +61,34 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
   const [newForm, setNewForm] = useState({ supplierId: '', dueDate: '', notes: '' })
   const [newItems, setNewItems] = useState<NewOrderItem[]>([])
 
-  const loadData = () => {
+  const loadData = async () => {
     if (!session) { setDataError('Please sign in to load purchase orders.'); return }
-    Promise.all([
-      apiFetch<Array<{ id: string; orderNo: string | null; supplierId: string | null; supplier: { name: string } | null; status: string; totalCost: number; dueDate: string | null; createdAt: string; items: Array<{ productId: string; quantity: number; costPrice: number; product: { name: string; unit: string | null } }> }>>(`/api/purchase-orders?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<Supplier[]>(`/api/suppliers?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<Product[]>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
-    ]).then(([orderRows, supplierRows, productRows]) => {
+    const businessId = session.user.businessId
+    const cacheKey = 'purchases.orders.v1'
+    let previousUpdatedAt: string | null = null
+    try {
+      previousUpdatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+    } catch (reason) {
+      console.error('Unable to read the purchase-order snapshot timestamp.', reason)
+    }
+    try {
+      const [orderRows, supplierRows, productRows] = await Promise.all([
+        fetchCachedCollection<PurchaseOrderApiRow[]>(
+          businessId,
+          cacheKey,
+          `/api/purchase-orders?businessId=${encodeURIComponent(businessId)}`,
+        ),
+        fetchCachedCollection<Supplier[]>(
+          businessId,
+          'purchases.suppliers.v1',
+          `/api/suppliers?businessId=${encodeURIComponent(businessId)}`,
+        ),
+        fetchCachedCollection<Product[]>(
+          businessId,
+          'purchases.products.v1',
+          `/api/products?businessId=${encodeURIComponent(businessId)}`,
+        ),
+      ])
       setSuppliers(supplierRows)
       setProducts(productRows)
       setOrders(orderRows.map(order => ({
@@ -59,10 +103,29 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
         dueDate: order.dueDate ? new Date(order.dueDate).toLocaleDateString() : 'Not specified',
         itemRows: order.items.map(item => ({ name: item.product.name, qty: item.quantity, unit: item.product.unit ?? 'units', cost: item.costPrice, total: item.quantity * item.costPrice, productId: item.productId })),
       })))
-    }).catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load purchase orders.'))
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the purchase-order snapshot timestamp.', reason)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
+      setDataError('')
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to load purchase orders.')
+    }
   }
 
-  useEffect(loadData, [session?.user.businessId])
+  useEffect(() => {
+    void loadData()
+    const handleOnline = () => void loadData()
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [session?.user.businessId])
 
   const filtered = orders.filter(o => filter === 'all' || (filter === 'pending' && (o.status === 'pending' || o.status === 'partial')) || (filter === 'delivered' && o.status === 'delivered'))
 
@@ -142,6 +205,12 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ paddingTop: '20px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 100 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Offline · creating purchase orders requires internet.
+            </div>
+          )}
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 16 }}>Order Details</div>
             <div style={{ marginBottom: 14 }}>
@@ -237,6 +306,12 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ paddingTop: '16px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 80 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Offline · showing saved purchase-order data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Order changes require internet.
+            </div>
+          )}
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div style={{ fontSize: 13, fontWeight: 700, color: c.text, marginBottom: 10 }}>Order Items</div>
           {selected.itemRows.map((item, i) => (
             <div key={i} className="card" style={{ padding: '12px 14px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -289,6 +364,11 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
         </div>
       </div>
       <div className="scroll-area" style={{ paddingTop: '12px', paddingRight: '12px', paddingLeft: '12px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
+            Offline · showing saved purchase-order data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Order changes require internet.
+          </div>
+        )}
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
           {[

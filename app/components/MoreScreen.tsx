@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 
 interface Props {
   onLogout: () => void
@@ -27,6 +33,17 @@ const menuItems = [
   ]},
 ]
 
+type ProfileResponse = {
+  profile: {
+    name: string
+    email: string | null
+    role: string
+    business: { name: string; branch: string | null }
+  }
+}
+type NotificationCountResponse = { unreadCount: number }
+type SettingsOverviewSnapshot = { business: { name: string; branch: string | null } }
+
 export default function MoreScreen({ onLogout, onNavigate }: Props) {
   const c = useColors()
   const session = getClientSession()
@@ -37,30 +54,186 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
     email: '',
     role: session?.user.role ?? '',
   })
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [overviewError, setOverviewError] = useState('')
 
   useEffect(() => {
     if (!session) return
-    apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(response => setUnreadNotifications(response.unreadCount))
-      .catch(() => setUnreadNotifications(0))
-    apiFetch<{
-      profile: {
-        name: string
-        email: string | null
-        role: string
-        business: { name: string; branch: string | null }
-      }
-    }>('/api/profile')
-      .then(response => {
-        setUserInfo({
-          name: response.profile.name,
-          email: response.profile.email ?? '',
-          role: response.profile.role,
-        })
-        setBusinessInfo({ name: response.profile.business.name, branch: response.profile.business.branch ?? 'Branch' })
+    let active = true
+    let requestId = 0
+    const businessId = session.user.businessId
+    const profileCacheKey = `profile.v1:${session.user.id}`
+    const notificationCacheKey = 'dashboard.notifications.v1'
+    const settingsCacheKey = 'settings.overview.v1'
+    const isOfflineOnly = () =>
+      isNativeOfflineApp() && (!navigator.onLine || Boolean(session.user.offline))
+    const isNetworkFailure = (error: unknown) =>
+      error instanceof TypeError ||
+      (error instanceof ApiResponseError && error.status >= 500)
+
+    const applyProfile = (response: ProfileResponse) => {
+      setUserInfo({
+        name: response.profile.name,
+        email: response.profile.email ?? '',
+        role: response.profile.role,
       })
-      .catch(() => undefined)
-  }, [])
+      setBusinessInfo({
+        name: response.profile.business.name,
+        branch: response.profile.business.branch ?? 'Branch',
+      })
+    }
+
+    const loadOverview = async () => {
+      const currentRequestId = ++requestId
+      let usedSnapshot = isOfflineOnly()
+      let profileLoaded = false
+      let latestSnapshotTime: string | null = null
+      const errors: string[] = []
+      const recordSnapshotTime = async (cacheKey: string) => {
+        try {
+          const updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+          if (updatedAt && (!latestSnapshotTime || updatedAt > latestSnapshotTime)) {
+            latestSnapshotTime = updatedAt
+          }
+        } catch (error) {
+          console.error(`Unable to read the ${cacheKey} snapshot timestamp.`, error)
+        }
+      }
+
+      const loadProfile = async () => {
+        if (isOfflineOnly()) {
+          const cached = await readOfflineCollection<ProfileResponse>(businessId, profileCacheKey)
+          if (cached) {
+            applyProfile(cached)
+            profileLoaded = true
+            await recordSnapshotTime(profileCacheKey)
+          }
+          return
+        }
+        try {
+          const response = await apiFetch<ProfileResponse>('/api/profile')
+          if (!active || currentRequestId !== requestId) return
+          applyProfile(response)
+          profileLoaded = true
+          try {
+            await writeOfflineCollection(businessId, profileCacheKey, response)
+            await recordSnapshotTime(profileCacheKey)
+          } catch (error) {
+            console.error('Unable to cache the More-screen profile summary.', error)
+          }
+        } catch (error) {
+          if (!isNativeOfflineApp() || !isNetworkFailure(error)) throw error
+          const cached = await readOfflineCollection<ProfileResponse>(businessId, profileCacheKey)
+          if (cached) {
+            if (!active || currentRequestId !== requestId) return
+            applyProfile(cached)
+            profileLoaded = true
+            usedSnapshot = true
+            await recordSnapshotTime(profileCacheKey)
+          } else {
+            usedSnapshot = true
+          }
+        }
+      }
+
+      const loadUnreadCount = async () => {
+        if (isOfflineOnly()) {
+          const cached = await readOfflineCollection<NotificationCountResponse>(businessId, notificationCacheKey)
+          if (cached && typeof cached.unreadCount === 'number') {
+            setUnreadNotifications(cached.unreadCount)
+            await recordSnapshotTime(notificationCacheKey)
+            return
+          }
+          const cachedNotifications = await readOfflineCollection<{ notifications: Array<{ read: boolean }> }>(
+            businessId,
+            'notifications.list.v1',
+          )
+          if (cachedNotifications) {
+            setUnreadNotifications(cachedNotifications.notifications.filter(notification => !notification.read).length)
+            await recordSnapshotTime('notifications.list.v1')
+          }
+          return
+        }
+        try {
+          const response = await apiFetch<NotificationCountResponse>(
+            `/api/notifications?businessId=${encodeURIComponent(businessId)}`,
+          )
+          if (!active || currentRequestId !== requestId) return
+          setUnreadNotifications(response.unreadCount)
+          try {
+            await writeOfflineCollection(businessId, notificationCacheKey, response)
+            await recordSnapshotTime(notificationCacheKey)
+          } catch (error) {
+            console.error('Unable to cache the More-screen notification count.', error)
+          }
+        } catch (error) {
+          if (!isNativeOfflineApp() || !isNetworkFailure(error)) throw error
+          const cached = await readOfflineCollection<NotificationCountResponse>(businessId, notificationCacheKey)
+          if (cached && typeof cached.unreadCount === 'number') {
+            if (!active || currentRequestId !== requestId) return
+            setUnreadNotifications(cached.unreadCount)
+            usedSnapshot = true
+            await recordSnapshotTime(notificationCacheKey)
+          } else {
+            usedSnapshot = true
+          }
+        }
+      }
+
+      const loadBusinessFallback = async () => {
+        if (profileLoaded) return
+        const cached = await readOfflineCollection<SettingsOverviewSnapshot & { business?: SettingsOverviewSnapshot['business'] }>(
+          businessId,
+          settingsCacheKey,
+        )
+        if (cached?.business) {
+          setBusinessInfo({
+            name: cached.business.name,
+            branch: cached.business.branch ?? 'Branch',
+          })
+          await recordSnapshotTime(settingsCacheKey)
+        }
+      }
+
+      const tasks = await Promise.allSettled([loadProfile(), loadUnreadCount()])
+      if (!active || currentRequestId !== requestId) return
+      for (const result of tasks) {
+        if (result.status === 'rejected') {
+          console.error('Unable to refresh More-screen overview data.', result.reason)
+          errors.push(result.reason instanceof Error ? result.reason.message : 'Some overview details could not be loaded.')
+        }
+      }
+      if (!profileLoaded) {
+        try {
+          await loadBusinessFallback()
+        } catch (error) {
+          console.error('Unable to load cached business overview details.', error)
+          errors.push(error instanceof Error ? error.message : 'Saved business details could not be loaded.')
+        }
+      }
+      if (!active || currentRequestId !== requestId) return
+      setIsOfflineSnapshot(usedSnapshot || (isNativeOfflineApp() && !navigator.onLine))
+      setSnapshotUpdatedAt(latestSnapshotTime)
+      setOverviewError(errors.join(' '))
+    }
+
+    const handleOnline = () => void loadOverview()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(true)
+        void loadOverview()
+      }
+    }
+    void loadOverview()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      active = false
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.id, session?.user.businessId])
 
   const roleLabel = userInfo.role
     .toLowerCase()
@@ -101,6 +274,16 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: c.cardAlt, color: c.muted, borderRadius: 12, padding: '10px 14px', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
+            Offline overview{snapshotUpdatedAt ? ` · saved ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Only previously saved details are available.
+          </div>
+        )}
+        {overviewError && (
+          <div role="alert" style={{ background: c.errorBg, color: '#D32F2F', borderRadius: 12, padding: '10px 14px', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
+            {overviewError}
+          </div>
+        )}
         {menuItems.map((section) => (
           <div key={section.section} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{section.section}</div>

@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTheme, ThemeMode } from '../context/ThemeContext'
 import { formatPhoneForDisplay } from '../utils/format-phone'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
@@ -22,6 +28,8 @@ type SettingsResponse = {
   preferences: { receiptPrint: boolean; lowStockAlerts: boolean; salesNotifications: boolean; dailyReport: boolean; autoBackup: boolean; themeMode: ThemeMode; paymentConfig: PaymentConfig | null }
 }
 type BusinessResponse = { business: { name: string; branch: string | null; country: string | null; phone: string | null; kraPin: string | null; currency: string | null } }
+type BusinessSnapshot = { business: { name: string; branch: string | null; country: string | null; currency: string | null } }
+type SettingsSnapshot = { business: BusinessSnapshot['business']; preferences: SettingsResponse['preferences'] }
 
 export default function SettingsScreen({ onNavigate }: Props) {
   const { theme, setTheme, isDark } = useTheme()
@@ -41,6 +49,9 @@ export default function SettingsScreen({ onNavigate }: Props) {
   const [currencyOptions] = useState(CURRENCIES)
   const [settingsError, setSettingsError] = useAutoDismissMessage()
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false)
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const hasSettingsSnapshot = useRef(false)
 
   const applyPreferences = (response: SettingsResponse) => {
     setReceiptPrint(response.preferences.receiptPrint)
@@ -61,6 +72,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
   }
 
   const saveSettings = async (patch: Partial<SettingsResponse['preferences']>) => {
+    if (isOfflineSnapshot) return
     const session = getClientSession()
     if (!session) return
     try {
@@ -73,6 +85,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
   }
 
   const saveBusiness = async (patch: Partial<BusinessResponse['business']>) => {
+    if (isOfflineSnapshot) return
     const session = getClientSession()
     if (!session) return
     try {
@@ -87,11 +100,111 @@ export default function SettingsScreen({ onNavigate }: Props) {
   useEffect(() => {
     const session = getClientSession()
     if (!session) { setSettingsError('Please sign in to load settings.'); return }
-    void Promise.all([
-      apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`),
-    ]).then(([business, settings]) => { applyBusiness(business); applyPreferences(settings) })
-      .catch(reason => setSettingsError(reason instanceof Error ? reason.message : 'Unable to load settings.'))
+    let active = true
+    let requestId = 0
+    const businessId = session.user.businessId
+    const cacheKey = 'settings.overview.v1'
+    const loadSettings = async () => {
+      const thisRequestId = ++requestId
+      try {
+        const [business, settings] = await Promise.all([
+          apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(businessId)}`),
+          apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(businessId)}`),
+        ])
+        if (!active || thisRequestId !== requestId) return
+        applyBusiness(business)
+        applyPreferences(settings)
+        const snapshot: SettingsSnapshot = {
+          business: {
+            name: business.business.name,
+            branch: business.business.branch,
+            country: business.business.country,
+            currency: business.business.currency,
+          },
+          preferences: {
+            receiptPrint: settings.preferences.receiptPrint,
+            lowStockAlerts: settings.preferences.lowStockAlerts,
+            salesNotifications: settings.preferences.salesNotifications,
+            dailyReport: settings.preferences.dailyReport,
+            autoBackup: settings.preferences.autoBackup,
+            themeMode: settings.preferences.themeMode,
+            paymentConfig: settings.preferences.paymentConfig
+              ? { methods: { ...settings.preferences.paymentConfig.methods } }
+              : null,
+          },
+        }
+        try {
+          await writeOfflineCollection(businessId, cacheKey, snapshot)
+        } catch (reason) {
+          console.error('Unable to cache settings overview for offline use.', reason)
+        }
+        hasSettingsSnapshot.current = true
+        if (!active || thisRequestId !== requestId) return
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+        } catch (reason) {
+          console.error('Unable to read the settings snapshot timestamp.', reason)
+        }
+        if (!active || thisRequestId !== requestId) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(isNativeOfflineApp() && !navigator.onLine)
+        setSettingsError('')
+      } catch (reason) {
+        const canUseCache =
+          reason instanceof TypeError ||
+          (reason instanceof ApiResponseError && reason.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) {
+          if (active && thisRequestId === requestId) {
+            setSettingsError(reason instanceof Error ? reason.message : 'Unable to load settings.')
+          }
+          return
+        }
+        try {
+          const cached = await readOfflineCollection<SettingsSnapshot>(businessId, cacheKey)
+          if (!active || thisRequestId !== requestId) return
+          if (cached === null) {
+            throw new Error('Settings are not available offline yet. Connect to the internet once to load them.')
+          }
+          applyBusiness({
+            business: {
+              ...cached.business,
+              phone: null,
+              kraPin: null,
+            },
+          })
+          applyPreferences({ preferences: cached.preferences })
+          hasSettingsSnapshot.current = true
+          setTaxPin('')
+          setTaxPinDraft('')
+          const updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+          if (!active || thisRequestId !== requestId) return
+          setSnapshotUpdatedAt(updatedAt)
+          setIsOfflineSnapshot(true)
+          setSettingsError('')
+        } catch (cacheReason) {
+          if (active && thisRequestId === requestId) {
+            setSettingsError(cacheReason instanceof Error ? cacheReason.message : 'Unable to load saved settings.')
+          }
+        }
+      }
+    }
+    const handleOnline = () => void loadSettings()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(hasSettingsSnapshot.current)
+        setShowCurrencyPicker(false)
+        setEditingTaxPin(false)
+      }
+    }
+    void loadSettings()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      active = false
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
   }, [])
 
   const card = isDark ? '#0F2040' : '#FFFFFF'
@@ -100,11 +213,11 @@ export default function SettingsScreen({ onNavigate }: Props) {
   const muted = isDark ? '#7A8FBF' : '#6B7A99'
   const border = isDark ? '1px solid #1A3366' : '1px solid #F0F3F9'
 
-  const Toggle = ({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) => (
-    <button className="btn" onClick={() => onChange(!value)} style={{
+  const Toggle = ({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled: boolean }) => (
+    <button className="btn" disabled={disabled} onClick={() => onChange(!value)} style={{
       width: 46, height: 26, borderRadius: 13,
       background: value ? '#123A8F' : isDark ? '#1A3366' : '#D0D7E8',
-      border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0,
+      border: 'none', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1, position: 'relative', transition: 'background 0.2s', flexShrink: 0,
     }}>
       <div style={{
         position: 'absolute', top: 3, left: value ? 23 : 3,
@@ -139,9 +252,14 @@ export default function SettingsScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: card, color: muted, borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 12 }}>
+              Saved settings are read-only offline.
+            </div>
+          )}
           <div className="card" style={{ overflow: 'hidden', background: card }}>
             {currencyOptions.map((c, i) => (
-              <button key={c.code} className="btn" onClick={() => { setCurrency(c.code); setShowCurrencyPicker(false); void saveBusiness({ currency: c.code }) }} style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 14, border: 'none', borderBottom: i < currencyOptions.length - 1 ? border : 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              <button key={c.code} className="btn" disabled={isOfflineSnapshot} onClick={() => { setCurrency(c.code); setShowCurrencyPicker(false); void saveBusiness({ currency: c.code }) }} style={{ width: '100%', display: 'flex', alignItems: 'center', padding: '14px 16px', gap: 14, border: 'none', borderBottom: i < currencyOptions.length - 1 ? border : 'none', background: 'none', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit' }}>
                 <div style={{ flex: 1, textAlign: 'left' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: text }}>{c.label}</div>
                 </div>
@@ -171,6 +289,11 @@ export default function SettingsScreen({ onNavigate }: Props) {
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
         {settingsError && <div style={{ background: isDark ? '#3A1F2A' : '#FFF5F5', color: '#D32F2F', borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 13 }}>{settingsError}</div>}
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: card, color: muted, borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 12, lineHeight: 1.5 }}>
+            Showing saved settings{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Changes require internet; the Tax PIN is not stored in this snapshot.
+          </div>
+        )}
 
         {/* ── Appearance ── */}
         <SectionLabel>Appearance</SectionLabel>
@@ -181,11 +304,11 @@ export default function SettingsScreen({ onNavigate }: Props) {
               const labels = { light: '☀️ Light', dark: '🌙 Dark', auto: '⚙️ Auto' }
               const active = theme === t
               return (
-                <button key={t} className="btn" onClick={() => { setTheme(t); void saveSettings({ themeMode: t }) }} style={{
+                <button key={t} className="btn" disabled={isOfflineSnapshot} onClick={() => { setTheme(t); void saveSettings({ themeMode: t }) }} style={{
                   flex: 1, padding: '10px 6px', borderRadius: 12, border: active ? '2px solid #123A8F' : `1.5px solid ${isDark ? '#1A3366' : '#E8ECF4'}`,
                   background: active ? (isDark ? 'rgba(18,58,143,0.25)' : 'rgba(18,58,143,0.08)') : (isDark ? '#0D1B3D' : 'white'),
                   fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#123A8F' : muted,
-                  cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center',
+                  cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit', textAlign: 'center',
                 }}>{labels[t]}</button>
               )
             })}
@@ -198,7 +321,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
           {[
             { label: 'Business Name', value: businessInfo.name },
             { label: 'Location', value: [businessInfo.branch, businessInfo.country].filter(Boolean).join(', ') || '—' },
-            { label: 'Phone', value: businessInfo.phone ? formatPhoneForDisplay(businessInfo.phone) : '—' },
+            { label: 'Phone', value: isOfflineSnapshot ? 'Available online' : businessInfo.phone ? formatPhoneForDisplay(businessInfo.phone) : '—' },
           ].map((item, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', borderBottom: border }}>
               <div style={{ fontSize: 13, color: muted }}>{item.label}</div>
@@ -208,7 +331,9 @@ export default function SettingsScreen({ onNavigate }: Props) {
           {/* Tax PIN — editable */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: border, gap: 10 }}>
             <div style={{ fontSize: 13, color: muted, flex: 1 }}>Tax PIN</div>
-            {editingTaxPin ? (
+            {isOfflineSnapshot ? (
+              <div style={{ fontSize: 12, color: muted }}>Not stored offline</div>
+            ) : editingTaxPin ? (
               <>
                 <input className="input" value={taxPinDraft} onChange={e => setTaxPinDraft(e.target.value.toUpperCase())} style={{ width: 140, padding: '6px 10px', fontSize: 13, textAlign: 'right', fontFamily: 'monospace' }} />
                 <button className="btn" onClick={() => { setTaxPin(taxPinDraft); setEditingTaxPin(false); void saveBusiness({ kraPin: taxPinDraft }) }} style={{ background: '#123A8F', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
@@ -223,7 +348,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
             )}
           </div>
           {/* Currency — picker */}
-          <button className="btn" onClick={() => setShowCurrencyPicker(true)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+          <button className="btn" disabled={isOfflineSnapshot} onClick={() => setShowCurrencyPicker(true)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', border: 'none', background: 'none', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit', textAlign: 'left' }}>
             <div style={{ fontSize: 13, color: muted }}>Currency</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: '#123A8F' }}>{selectedCurrencyLabel}</div>
@@ -247,7 +372,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
                 <div style={{ fontSize: 13, fontWeight: 600, color: text }}>{item.label}</div>
                 <div style={{ fontSize: 11, color: muted, marginTop: 2 }}>{item.sub}</div>
               </div>
-              <Toggle value={item.value} onChange={item.onChange} />
+              <Toggle value={item.value} onChange={item.onChange} disabled={isOfflineSnapshot} />
             </div>
           ))}
         </div>
@@ -258,7 +383,7 @@ export default function SettingsScreen({ onNavigate }: Props) {
           {([
             { icon: '💳', label: 'Payment Methods', sub: activePaymentMethods, nav: 'payments', color: '#0288D1' },
             { icon: '🧾', label: 'Receipt Settings', sub: 'Logo, footer text, print format', nav: 'receiptsettings', color: '#5E35B1' },
-            { icon: '📊', label: 'Tax & Compliance', sub: `PIN: ${taxPin || 'Not set'}`, nav: 'taxcompliance', color: '#2E7D32' },
+            { icon: '📊', label: 'Tax & Compliance', sub: isOfflineSnapshot ? 'Tax PIN available online' : `PIN: ${taxPin || 'Not set'}`, nav: 'taxcompliance', color: '#2E7D32' },
             { icon: '🛡️', label: 'Roles & Permissions', sub: 'Manage what each role can do', nav: 'roles', color: '#D4AF37' },
           ] as { icon: string; label: string; sub: string; nav: string; color: string }[]).map((item, i, arr) => (
             <button key={i} className="btn" onClick={() => item.nav ? onNavigate(item.nav) : undefined} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', border: 'none', borderBottom: i < arr.length - 1 ? border : 'none', background: 'none', cursor: item.nav ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}>

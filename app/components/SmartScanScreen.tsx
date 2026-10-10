@@ -3,7 +3,13 @@ import { Capacitor } from '@capacitor/core'
 import { Haptics } from '@capacitor/haptics'
 import { Html5Qrcode } from 'html5-qrcode'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
 import { composeProductDisplayName } from '../../lib/product-display-name'
 import { loadProductTypes, productTypesStorageKey, type ProductTypeOption } from '../utils/product-types'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
@@ -13,6 +19,17 @@ type ScanLog = { name: string; barcode: string; action: string; time: string; em
 type ScanResponse = { found?: boolean; product: ScannedProduct | null; status: string }
 type CartItemSeed = { id: string; name: string; price: number; emoji: string }
 type CategoryItem = { id: string; name: string; emoji: string | null }
+type CachedCatalogProduct = {
+  id: string
+  name: string
+  barcode: string | null
+  sellingPrice: number | null
+  minimumStock: number | null
+  emoji: string | null
+  category: { name: string; emoji?: string | null } | null
+  inventory: { quantity: number } | null
+  supplier?: { name: string } | null
+}
 
 const productEmojis = ['🌾', '🫙', '🍬', '🧈', '🥛', '🌶️', '💊', '🧺', '🪥', '🍞', '🥚', '☕', '📦', '🥤', '🍫', '🧃']
 const quickScanItems = [
@@ -47,6 +64,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   const [productTypes, setProductTypes] = useState<ProductTypeOption[]>([])
   const [productIdentityExpanded, setProductIdentityExpanded] = useState(false)
   const [savingProduct, setSavingProduct] = useState(false)
+  const [productFromSnapshot, setProductFromSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [isOffline, setIsOffline] = useState(() =>
+    typeof navigator !== 'undefined' && !navigator.onLine && Capacitor.isNativePlatform(),
+  )
   const [addProductError, setAddProductError] = useAutoDismissMessage()
   const [productAdded, setProductAdded] = useState<string | null>(null)
   const [showAddProductForm, setShowAddProductForm] = useState(false)
@@ -64,12 +86,22 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       setError('Please sign in to use SmartScan.')
       return
     }
+    let active = true
     Promise.all([
-      apiFetch<{ scanActivity: { counts: Record<string, number>; recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<CategoryItem[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
+      fetchCachedCollection<{ scanActivity: { counts: Record<string, number>; recent: Array<{ name: string; barcode: string; status: string; emoji: string | null; createdAt: string }> } }>(
+        session.user.businessId,
+        'dashboard.summary.v1',
+        `/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`,
+      ),
+      fetchCachedCollection<CategoryItem[]>(
+        session.user.businessId,
+        'inventory.categories.v1',
+        `/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`,
+      ),
     ]).then(([response, categoryRows]) => {
-        setCategories(categoryRows)
-        setAddProductForm(form => ({ ...form, categoryId: form.categoryId || categoryRows[0]?.id || '' }))
+      if (!active) return
+      setCategories(categoryRows)
+      setAddProductForm(form => ({ ...form, categoryId: form.categoryId || categoryRows[0]?.id || '' }))
       try {
         setProductTypes(loadProductTypes(
           categoryRows,
@@ -79,26 +111,91 @@ export default function SmartScanScreen({ onNavigate }: Props) {
         setError(reason instanceof Error ? `Unable to load saved product types: ${reason.message}` : 'Unable to load saved product types.')
         setProductTypes(loadProductTypes(categoryRows, null))
       }
-        setScanCounts(response.scanActivity.counts)
-        setScanLog(response.scanActivity.recent.map(scan => ({
-          name: scan.name,
-          barcode: scan.barcode,
-          action: scan.status === 'UNKNOWN' ? 'Not found' : scan.status === 'MANUAL' ? 'Manual lookup' : 'Price checked',
-          time: new Date(scan.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-          emoji: scan.emoji ?? '📦',
-        })))
+      setScanCounts(response.scanActivity.counts)
+      setScanLog(response.scanActivity.recent.map(scan => ({
+        name: scan.name,
+        barcode: scan.barcode,
+        action: scan.status === 'UNKNOWN' ? 'Not found' : scan.status === 'MANUAL' ? 'Manual lookup' : 'Price checked',
+        time: new Date(scan.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        emoji: scan.emoji ?? '📦',
+      })))
+    })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load scan activity.')
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load scan activity.'))
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setIsOffline(true)
+    }
+    const handleOnline = () => setIsOffline(false)
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
+    return () => {
+      active = false
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
+    }
   }, [])
 
   const lookup = async (code: string, statusOverride = 'AUTO') => {
     const session = getClientSession()
     if (!session) throw new Error('Please sign in to use SmartScan.')
-    const response = await apiFetch<ScanResponse>('/api/scans', {
-      method: 'POST',
-      body: JSON.stringify({ businessId: session.user.businessId, barcode: code, statusOverride, action: 'LOOKUP' }),
-    })
+    let response: ScanResponse
+    let usedSnapshot = false
+    try {
+      response = await apiFetch<ScanResponse>('/api/scans', {
+        method: 'POST',
+        body: JSON.stringify({ businessId: session.user.businessId, barcode: code, statusOverride, action: 'LOOKUP' }),
+      })
+    } catch (reason) {
+      const canUseCache =
+        reason instanceof TypeError ||
+        (reason instanceof ApiResponseError && reason.status >= 500)
+      if (!isNativeOfflineApp() || !canUseCache) throw reason
+      let catalogKey = 'inventory.products.v1'
+      let catalog = await readOfflineCollection<CachedCatalogProduct[]>(
+        session.user.businessId,
+        catalogKey,
+      )
+      if (catalog === null) {
+        catalogKey = 'pos.products.v1'
+        catalog = await readOfflineCollection<CachedCatalogProduct[]>(
+          session.user.businessId,
+          catalogKey,
+        )
+      }
+      if (catalog === null) {
+        throw new Error('Product lookup is not available offline yet. Connect and load the inventory once before scanning offline.')
+      }
+      const match = catalog.find(item => item.barcode?.trim() === code)
+      const updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, catalogKey)
+      setSnapshotUpdatedAt(updatedAt)
+      const stock = Number(match?.inventory?.quantity ?? 0)
+      const reorder = Number(match?.minimumStock ?? 0)
+      const status = stock === 0 || (reorder > 0 && stock <= reorder * 0.3)
+        ? 'critical'
+        : reorder > 0 && stock <= reorder
+          ? 'low'
+          : 'good'
+      response = {
+        found: Boolean(match),
+        status: match ? 'FOUND' : 'UNKNOWN',
+        product: match ? {
+          id: match.id,
+          name: match.name,
+          barcode: match.barcode ?? code,
+          category: match.category?.name ?? null,
+          price: Number(match.sellingPrice ?? 0),
+          stock,
+          supplier: match.supplier ?? null,
+          emoji: match.emoji ?? match.category?.emoji ?? '📦',
+          status,
+        } : null,
+      }
+      usedSnapshot = true
+      setIsOffline(true)
+    }
     setScanned(code)
+    setProductFromSnapshot(usedSnapshot)
     const found = response.found === true || response.status === 'FOUND' || response.product !== null
     setProduct(response.product)
     setMode(found ? 'result' : 'unknown')
@@ -107,13 +204,15 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       setShowBulkCalculator(false)
       setBulkPurchase({ boxPrice: '', unitsPerBox: '' })
     }
-    setScanLog(previous => [{
-      name: response.product?.name ?? 'Unknown Product', barcode: code,
-      action: found ? (statusOverride === 'MANUAL' ? 'Manual lookup' : 'Price checked') : 'Not found',
-      time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-      emoji: response.product ? '📦' : '❓',
-    }, ...previous.filter(item => item.barcode !== code).slice(0, 9)])
-    setScanCounts(previous => ({ ...previous, [found ? (statusOverride === 'MANUAL' ? 'MANUAL' : 'FOUND') : 'UNKNOWN']: (previous[found ? (statusOverride === 'MANUAL' ? 'MANUAL' : 'FOUND') : 'UNKNOWN'] ?? 0) + 1 }))
+    if (!usedSnapshot) {
+      setScanLog(previous => [{
+        name: response.product?.name ?? 'Unknown Product', barcode: code,
+        action: found ? (statusOverride === 'MANUAL' ? 'Manual lookup' : 'Price checked') : 'Not found',
+        time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        emoji: response.product ? '📦' : '❓',
+      }, ...previous.filter(item => item.barcode !== code).slice(0, 9)])
+      setScanCounts(previous => ({ ...previous, [found ? (statusOverride === 'MANUAL' ? 'MANUAL' : 'FOUND') : 'UNKNOWN']: (previous[found ? (statusOverride === 'MANUAL' ? 'MANUAL' : 'FOUND') : 'UNKNOWN'] ?? 0) + 1 }))
+    }
   }
 
   // Animate scanning progress, then resolve the barcode against the database.
@@ -199,6 +298,15 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     if (!product) return
     const session = getClientSession()
     if (!session) return setError('Please sign in to add items to cart.')
+    if (productFromSnapshot && !isOffline && !session.user.offline) {
+      setError('Reconnect and scan this barcode again before adding it to cart.')
+      return
+    }
+    if (isNativeOfflineApp() && (isOffline || session.user.offline)) {
+      setAddedToCart(true)
+      onNavigate('pos', { cartItem: { id: product.id, name: product.name, price: product.price, emoji: product.emoji } })
+      return
+    }
     try {
       await apiFetch('/api/scans', { method: 'POST', body: JSON.stringify({ businessId: session.user.businessId, barcode: product.barcode, action: 'ADD_TO_CART' }) })
       setAddedToCart(true)
@@ -210,6 +318,10 @@ export default function SmartScanScreen({ onNavigate }: Props) {
 
   const restock = async () => {
     if (!product) return
+    if (isOffline || productFromSnapshot) {
+      setError('Restocking requires an internet connection.')
+      return
+    }
     const quantity = Number(window.prompt('Quantity to restock', '1'))
     const session = getClientSession()
     if (!session || !Number.isInteger(quantity) || quantity <= 0) return
@@ -222,6 +334,10 @@ export default function SmartScanScreen({ onNavigate }: Props) {
   }
 
   const saveMissingProduct = async () => {
+    if (isOffline || productFromSnapshot) {
+      setAddProductError('Adding products requires an internet connection.')
+      return
+    }
     const name = addProductForm.name.trim()
     const cost = Number(addProductForm.cost)
     const price = Number(addProductForm.price)
@@ -287,6 +403,8 @@ export default function SmartScanScreen({ onNavigate }: Props) {
     setMode('idle')
     setScanned('')
     setProduct(null)
+    setProductFromSnapshot(false)
+    setSnapshotUpdatedAt(null)
     setAddedToCart(false)
     setSavingProduct(false)
     setAddProductError('')
@@ -329,6 +447,13 @@ export default function SmartScanScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ flex: 1, padding: '0 0 80px' }}>
+        {(isOffline || productFromSnapshot) && (
+          <div role="status" style={{ margin: '12px 16px 0', background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+            {productFromSnapshot
+              ? `Showing product lookup from saved inventory${snapshotUpdatedAt ? ` · saved ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Offline lookups are not recorded in scan activity.`
+              : 'Offline mode · product lookups use saved inventory. Offline lookups are not recorded in scan activity.'}
+          </div>
+        )}
         {error && <div style={{ margin: '12px 16px 0', background: '#FFEBEE', color: '#C62828', border: '1px solid #FFCDD2', borderRadius: 10, padding: '10px 12px', fontSize: 12 }}>{error}</div>}
 
         {/* ── Viewfinder ── */}
@@ -383,7 +508,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
           {(mode === 'result' || mode === 'unknown') && product === null && mode === 'unknown' && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '0 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 40 }}>❓</div>
-              <div style={{ color: 'white', fontSize: 15, fontWeight: 700 }}>Product Not Found</div>
+              <div style={{ color: 'white', fontSize: 15, fontWeight: 700 }}>{productFromSnapshot ? 'Not in Saved Inventory' : 'Product Not Found'}</div>
               <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'monospace' }}>{scanned}</div>
             </div>
           )}
@@ -468,7 +593,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
                   <span style={{ fontSize: 18 }}>{addedToCart ? '✅' : '🛒'}</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: addedToCart ? '#2E7D32' : 'white' }}>{addedToCart ? 'Added!' : 'Add to Cart'}</span>
                 </button>
-                <button className="btn" onClick={restock} style={{ padding: '11px 6px', background: c.successBg, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <button className="btn" disabled={isOffline || productFromSnapshot} onClick={restock} style={{ padding: '11px 6px', background: c.successBg, border: 'none', borderRadius: 12, cursor: isOffline || productFromSnapshot ? 'default' : 'pointer', opacity: isOffline || productFromSnapshot ? 0.6 : 1, fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                   <span style={{ fontSize: 18 }}>📦</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: '#2E7D32' }}>Restock</span>
                 </button>
@@ -493,7 +618,7 @@ export default function SmartScanScreen({ onNavigate }: Props) {
         {/* ── Unknown product ── */}
         {mode === 'unknown' && (
           <div style={{ padding: '16px', background: c.bg }}>
-            {showAddProductForm ? <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
+            {showAddProductForm && !isOffline && !productFromSnapshot ? <div className="card" style={{ padding: '20px', marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}><span style={{ fontSize: 22 }}>➕</span><div><div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>Add New Product</div><div style={{ fontSize: 11, color: c.muted, fontFamily: 'monospace' }}>{scanned}</div></div></div>
               <div style={{ marginBottom: 12 }}>
                 <label htmlFor="smartscan-product-brand" style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Brand <span style={{ fontWeight: 400 }}>(optional)</span></label>
@@ -599,11 +724,11 @@ export default function SmartScanScreen({ onNavigate }: Props) {
               </div>
             </div> : <div className="card" style={{ padding: '20px', marginBottom: 12, textAlign: 'center' }}>
               <div style={{ fontSize: 40, marginBottom: 8 }}>❓</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: c.text, marginBottom: 4 }}>Product Not Found</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: c.text, marginBottom: 4 }}>{productFromSnapshot ? 'Not in Saved Inventory' : 'Product Not Found'}</div>
               <div style={{ fontSize: 12, color: c.muted, fontFamily: 'monospace', background: c.cardAlt, borderRadius: 8, padding: '6px 12px', marginBottom: 8, display: 'inline-block' }}>{scanned}</div>
-              <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>This barcode isn't in your inventory yet.</div>
+              <div style={{ fontSize: 13, color: c.muted, marginBottom: 16 }}>{productFromSnapshot ? 'This barcode is not present in the saved inventory. Reconnect to check the current catalog or add it.' : 'This barcode is not in your inventory yet.'}</div>
               <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn" onClick={() => { setAddProductError(''); setShowAddProductForm(true) }} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>➕ Add Product</button>
+                {!isOffline && !productFromSnapshot && <button className="btn" onClick={() => { setAddProductError(''); setShowAddProductForm(true) }} style={{ flex: 1, padding: '12px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>➕ Add Product</button>}
                 <button className="btn" onClick={reset} style={{ flex: 1, padding: '12px', background: c.cardAlt, border: c.divider, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Dismiss</button>
               </div>
             </div>}

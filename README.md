@@ -8,10 +8,11 @@ The platform is designed around reliable retail operations: sales continue durin
 
 | Capability | Description |
 | --- | --- |
-| Offline-first SQLite cache | The Capacitor app caches POS catalog data in SQLite after its first online load and records offline cash sales durably for later synchronization. Other workflows are being added incrementally. |
+| Offline-first SQLite cache | The Capacitor app can bulk-download supported POS, recent receipt history, dashboard, the More-screen profile/notification overview, shift history, inventory, reports, customer and credit-account lists plus each customer's latest 20 sales and credit entries, role and permission summaries, accepted payment method status, a limited employee directory, user profile, receipt preview configuration, tax settings, a limited settings overview, expense, supplier, purchase-order, and notification data to SQLite from On-device Sync. Inventory displays its snapshot time when offline and is read-only until connectivity returns. POS identifies when it is using saved catalog data and shows the catalog save time; local sales update cached stock without changing that save time. The app records offline cash sales and new cash expenses durably for later synchronization; On-device Sync lists up to the 50 most recent unsent cash sales, their pending/failed state, and the saved failure reason when present. It also shows dataset-level download progress and failures, a saved-data readiness summary with snapshot timestamps, and an estimate of collection-cache and queued-record JSON payload bytes. The estimate excludes PIN-roster data and SQLite overhead, and is not a device or cloud quota. Receipt history includes saved server receipts and locally queued sales labeled by sync state. This does not make every workflow offline: older customer/credit histories and all writes other than cash sales and new cash expenses still require connectivity. Cloud backups, CSV export, and cache clearing are not implemented. Payment account details and credentials are not cached. |
 | Idempotent synchronization | Uploads queued records when connectivity returns while preserving tenant context and retrying failed records safely. |
+| Offline cash expenses | The Capacitor app saves new cash expenses to SQLite for later synchronization, and shows pending or failed state. Expense edits and non-cash expenses still require an online session. |
 | M-Pesa payment processing | Supports server-side Daraja payment workflows and status polling for point-of-sale confirmation. |
-| SmartScan | Uses the device camera to read retail barcodes such as EAN-13 and UPC-A, plus structured customer account QR codes. |
+| SmartScan | Uses the device camera to read retail barcodes such as EAN-13 and UPC-A, plus structured customer account QR codes. In the Capacitor app, barcode lookup can fall back to the saved product catalog; offline lookups are not recorded as server scan activity. Restocking and adding products still require connectivity, while cached products can be added to the existing offline cash-sale flow. |
 | Bluetooth receipts | Supports local thermal receipt printing through Bluetooth-compatible ESC/POS printers. |
 | Reports and analytics | Provides tenant-scoped revenue, cost, expense, inventory valuation, low-stock, cash-session, and profitability metrics. |
 
@@ -48,6 +49,8 @@ Employee PINs are hashed before database storage. PIN validation and roster acce
 The mobile terminal uses the camera for product and customer identification:
 
 - Retail product codes, including EAN-13 and UPC-A, can be matched against the active product catalog.
+- In the Capacitor app, SmartScan can look up barcodes from the saved inventory/POS catalog when the server is unreachable. It shows the snapshot save time when available, and offline lookup results do not update server scan activity.
+- Restocking and creating products require connectivity. A cached product can be added to POS, where the existing offline cash-sale queue applies.
 - Customer QR payloads use approved formats such as `MOBIDUKA:USER:<customer-id>` and `CUST_<customer-id>`.
 - Successful scans can provide haptic feedback and attach a matching product or customer to the active workflow.
 - QR codes must not contain passwords, PINs, JWTs, or payment credentials.
