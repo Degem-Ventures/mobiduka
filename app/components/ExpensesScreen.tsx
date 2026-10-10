@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
 import {
-  commitOfflineCashExpense,
   fetchCachedCollection,
   getOfflineExpenseSyncStatus,
   getQueuedOfflineExpenses,
   isNativeOfflineApp,
+  queueOfflineExpenseMutation,
   readOfflineCollectionUpdatedAt,
   retryFailedOfflineRecords,
 } from '../../lib/offline-store'
@@ -200,7 +200,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           ])
         : [[], { pending: 0, failed: 0, lastError: null }]
       setExpenseSyncStatus(syncStatus)
-      const queuedById = new Map(queued.map(record => [record.id, record]))
+      const queuedById = new Map(queued.map(record => [record.payload.id, record]))
       const merged = rows.map(expense => {
         const record = queuedById.get(expense.id)
         if (!record) return { ...expense, isPendingSync: false, syncStatus: undefined, syncError: null }
@@ -209,12 +209,12 @@ export default function ExpensesScreen({ onNavigate }: Props) {
       })
       for (const record of queuedById.values()) {
         merged.unshift({
-          id: record.id,
+          id: record.payload.id,
           description: record.payload.description,
           category: record.payload.category,
           amount: record.payload.amount,
           createdAt: record.payload.date,
-          paymentMethod: 'Cash',
+          paymentMethod: record.payload.paymentMethod || 'Cash',
           icon: null,
           recurring: record.payload.recurring,
           isPendingSync: true,
@@ -271,28 +271,30 @@ export default function ExpensesScreen({ onNavigate }: Props) {
     if (!session || !form.desc.trim() || !form.amount) return
     const category = form.category === 'Other' ? form.categoryOther.trim() : form.category
     if (offlineReadOnly) {
-      if (editingExpense || form.method !== 'Cash') {
-        setDataError('Only new cash expenses can be saved offline. Edits and other payment methods require an online sign-in.')
+      if (editingExpense) {
+        setDataError('Queued expense edits are still online-only for now. Create a new expense to queue it offline.')
         return
       }
       setSaving(true)
       setDataError('')
       try {
-        await commitOfflineCashExpense(session.user.businessId, {
+        const expenseInput = {
           description: form.desc.trim(),
           amount: Number(form.amount),
           category,
+          paymentMethod: form.method,
           recurring: form.recurring,
           date: form.date,
           userId: session.user.id,
-        })
+        }
+        await queueOfflineExpenseMutation(session.user.businessId, expenseInput, 'CREATE')
         await loadExpenses()
         setForm(emptyExpenseForm())
         setShowAdd(false)
         setEditingExpense(null)
-        notify('Cash expense saved on this device and queued to sync.', 'success')
+        notify(`${expenseInput.paymentMethod} expense saved on this device and queued to sync.`, 'success')
       } catch (reason) {
-        const message = reason instanceof Error ? reason.message : 'Unable to save cash expense offline.'
+        const message = reason instanceof Error ? reason.message : 'Unable to save expense offline.'
         setDataError(message)
         notify(message, 'error')
       } finally {
@@ -332,7 +334,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
 
   const startEdit = (expense: Expense) => {
     if (offlineReadOnly) {
-      setDataError('Expense changes require an online sign-in. Only new cash expenses can be saved offline.')
+      setDataError('Saved expense data is read-only while offline. Connect to the internet to edit an existing expense.')
       return
     }
     const category = normalizeCategory(expense.category)
@@ -487,12 +489,12 @@ export default function ExpensesScreen({ onNavigate }: Props) {
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {isOfflineSnapshot && (
           <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
-            Offline · showing saved expense data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Only new cash expenses can be saved offline; edits require internet.
+            Offline · showing saved expense data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. New offline expenses can be queued; edits require internet.
           </div>
         )}
         {(expenseSyncStatus.pending > 0 || expenseSyncStatus.failed > 0) && (
           <div role="status" style={{ background: c.warningBg, color: c.isDark ? '#F0D060' : '#795548', borderRadius: 10, padding: '10px 12px', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
-            {expenseSyncStatus.pending} cash expense{expenseSyncStatus.pending === 1 ? '' : 's'} waiting to sync
+            {expenseSyncStatus.pending} queued expense{expenseSyncStatus.pending === 1 ? '' : 's'} waiting to sync
             {expenseSyncStatus.failed > 0 && ` · ${expenseSyncStatus.failed} failed`}
             {expenseSyncStatus.failed > 0 && (
               <>

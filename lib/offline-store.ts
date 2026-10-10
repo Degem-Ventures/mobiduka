@@ -468,13 +468,19 @@ export type QueuedOfflineCashSale = {
   }
 }
 
-export type OfflineCashExpense = {
+export type OfflineExpenseInput = {
+  id?: string
   description: string
   amount: number
   category: string
+  paymentMethod: string
   recurring: boolean
   date: string
   userId: string
+}
+
+export type OfflineCashExpense = OfflineExpenseInput & {
+  paymentMethod?: "Cash"
 }
 
 export type QueuedOfflineExpense = {
@@ -482,7 +488,26 @@ export type QueuedOfflineExpense = {
   createdAt: string
   status: "PENDING" | "FAILED"
   lastError: string | null
-  payload: OfflineCashExpense & { id: string; businessId: string }
+  payload: OfflineExpenseInput & { id: string; businessId: string }
+}
+
+export type OfflineCreditMutationInput = {
+  id?: string
+  customerId: string
+  amount: number
+  action: "RECORD_PAYMENT" | "RECORD_SALE"
+  userId: string
+  paymentMethod?: string
+  dueDate?: string | null
+  createdAt?: string
+}
+
+export type QueuedOfflineCredit = {
+  id: string
+  createdAt: string
+  status: "PENDING" | "FAILED"
+  lastError: string | null
+  payload: OfflineCreditMutationInput & { id: string; businessId: string }
 }
 
 export async function getQueuedOfflineExpenses(
@@ -492,7 +517,7 @@ export async function getQueuedOfflineExpenses(
   if (!database) return []
   const result = await database.query(
     `SELECT id, payload, status, last_error, created_at FROM sync_outbox
-     WHERE business_id = ? AND entity_name = 'Expense' AND operation = 'CREATE'
+     WHERE business_id = ? AND entity_name = 'Expense'
        AND status IN ('PENDING', 'FAILED')
      ORDER BY created_at DESC LIMIT 100`,
     [businessId],
@@ -506,15 +531,23 @@ export async function getQueuedOfflineExpenses(
   }))
 }
 
-export async function commitOfflineCashExpense(
+export async function queueOfflineExpenseMutation(
   businessId: string,
-  expense: OfflineCashExpense,
+  expense: OfflineExpenseInput,
+  operation: "CREATE" | "UPDATE" = "CREATE",
 ) {
   const database = await getDatabase()
   if (!database) {
     throw new Error("Offline expenses are only available in the native app.")
   }
+
   const dateValue = new Date(`${expense.date}T00:00:00.000Z`)
+  const normalizedPaymentMethod = (expense.paymentMethod || "Cash").trim() || "Cash"
+  const payloadId = operation === "UPDATE"
+    ? (expense.id ?? crypto.randomUUID())
+    : crypto.randomUUID()
+  const outboxId = crypto.randomUUID()
+
   if (
     !businessId ||
     !expense.userId ||
@@ -526,22 +559,22 @@ export async function commitOfflineCashExpense(
     Number.isNaN(dateValue.getTime()) ||
     dateValue.toISOString().slice(0, 10) !== expense.date
   ) {
-    throw new Error("A valid description, category, amount, date, and signed-in user are required.")
+    throw new Error("A valid description, category, amount, payment method, date, and signed-in user are required.")
   }
 
   const now = new Date().toISOString()
-  const expenseId = crypto.randomUUID()
   const payload = {
-    id: expenseId,
+    id: payloadId,
     businessId,
     userId: expense.userId,
     description: expense.description.trim(),
     amount: expense.amount,
     category: expense.category.trim(),
-    paymentMethod: "Cash",
+    paymentMethod: normalizedPaymentMethod,
     icon: null,
     recurring: expense.recurring,
     date: expense.date,
+    createdAt: now,
   }
   const payloadJson = JSON.stringify(payload)
   const hashBuffer = await crypto.subtle.digest(
@@ -563,11 +596,12 @@ export async function commitOfflineCashExpense(
     const expenses = typeof rawExpenses === "string"
       ? JSON.parse(rawExpenses) as Array<Record<string, unknown>>
       : []
-    expenses.unshift({
-      ...payload,
-      createdAt: now,
-      isPendingSync: true,
-    })
+    const index = expenses.findIndex((item) => String(item.id ?? item.externalId) === String(payloadId))
+    if (operation === "UPDATE" && index >= 0) {
+      expenses[index] = { ...expenses[index], ...payload, updatedAt: now, isPendingSync: true }
+    } else {
+      expenses.unshift({ ...payload, isPendingSync: true })
+    }
     await database.run(
       `INSERT INTO offline_collection_cache (business_id, cache_key, payload, updated_at)
        VALUES (?, 'expenses.list.v1', ?, ?)
@@ -581,16 +615,161 @@ export async function commitOfflineCashExpense(
       `INSERT INTO sync_outbox (
          id, business_id, entity_name, operation, external_id, payload,
          payload_hash, status, created_at, next_retry_at
-       ) VALUES (?, ?, 'Expense', 'CREATE', ?, ?, ?, 'PENDING', ?, ?)`,
-      [expenseId, businessId, expenseId, payloadJson, payloadHash, now, now],
+       ) VALUES (?, ?, 'Expense', ?, ?, ?, ?, 'PENDING', ?, ?)`,
+      [outboxId, businessId, operation, outboxId, payloadJson, payloadHash, now, now],
       false,
     )
     await database.execute("COMMIT;", false)
-    return { id: expenseId, createdAt: now }
+    return { id: payloadId, outboxId, createdAt: now }
   } catch (error) {
     await database.execute("ROLLBACK;", false)
     throw error
   }
+}
+
+export async function getQueuedOfflineCredits(
+  businessId: string,
+): Promise<QueuedOfflineCredit[]> {
+  const database = await getDatabase()
+  if (!database) return []
+  const result = await database.query(
+    `SELECT id, payload, status, last_error, created_at FROM sync_outbox
+     WHERE business_id = ? AND entity_name = 'Credit'
+       AND status IN ('PENDING', 'FAILED')
+     ORDER BY created_at DESC LIMIT 100`,
+    [businessId],
+  )
+  return (result.values ?? []).map((row) => ({
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    status: String(row.status) as QueuedOfflineCredit["status"],
+    lastError: typeof row.last_error === "string" ? row.last_error : null,
+    payload: JSON.parse(String(row.payload)) as QueuedOfflineCredit["payload"],
+  }))
+}
+
+export async function queueOfflineCreditMutation(
+  businessId: string,
+  credit: OfflineCreditMutationInput,
+) {
+  const database = await getDatabase()
+  if (!database) {
+    throw new Error("Offline credit ledger updates are only available in the native app.")
+  }
+
+  if (!businessId || !credit.customerId || !credit.userId) {
+    throw new Error("A valid business, customer, and signed-in user are required.")
+  }
+
+  if (!credit.action || !["RECORD_PAYMENT", "RECORD_SALE"].includes(credit.action)) {
+    throw new Error("Unsupported credit ledger action.")
+  }
+
+  const amount = Number(credit.amount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("A positive credit amount is required.")
+  }
+
+  const normalizedPaymentMethod = (credit.paymentMethod ?? "CASH").trim() || "CASH"
+  const payloadId = credit.id ?? crypto.randomUUID()
+  const outboxId = crypto.randomUUID()
+  const now = new Date().toISOString()
+  const payload = {
+    id: payloadId,
+    businessId,
+    customerId: credit.customerId,
+    userId: credit.userId,
+    amount,
+    action: credit.action,
+    paymentMethod: normalizedPaymentMethod,
+    dueDate: credit.dueDate ?? null,
+    createdAt: now,
+  }
+  const payloadJson = JSON.stringify(payload)
+  const hashBuffer = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(payloadJson),
+  )
+  const payloadHash = Array.from(new Uint8Array(hashBuffer), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")
+
+  await database.execute("BEGIN IMMEDIATE;", false)
+  try {
+    const customerList = await readOfflineCollection<Array<Record<string, unknown>>>(businessId, "customers.list.v1")
+    if (Array.isArray(customerList)) {
+      const customer = customerList.find((entry) => String(entry.id ?? entry.customerId) === String(credit.customerId))
+      if (customer && typeof customer === "object") {
+        const currentBalance = Number((customer.creditAccount as { balance?: number } | null | undefined)?.balance ?? 0)
+        const updatedBalance = Number.isFinite(currentBalance)
+          ? currentBalance + (credit.action === "RECORD_PAYMENT" ? -amount : amount)
+          : 0
+        customer.creditAccount = {
+          ...((customer.creditAccount as Record<string, unknown> | null | undefined) ?? {}),
+          balance: updatedBalance,
+        }
+        await writeOfflineCollection(businessId, "customers.list.v1", customerList)
+      }
+    }
+
+    const customerDetail = await readOfflineCollection<Record<string, unknown>>(businessId, `customers.details.v1:${credit.customerId}`)
+    if (customerDetail && typeof customerDetail === "object") {
+      const currentBalance = Number((customerDetail.creditAccount as { balance?: number } | null | undefined)?.balance ?? 0)
+      const updatedBalance = Number.isFinite(currentBalance)
+        ? currentBalance + (credit.action === "RECORD_PAYMENT" ? -amount : amount)
+        : 0
+      customerDetail.creditAccount = {
+        ...((customerDetail.creditAccount as Record<string, unknown> | null | undefined) ?? {}),
+        balance: updatedBalance,
+      }
+      const entries = Array.isArray(customerDetail.creditEntries)
+        ? customerDetail.creditEntries as Array<Record<string, unknown>>
+        : []
+      entries.unshift({
+        id: payloadId,
+        type: credit.action === "RECORD_PAYMENT" ? "PAYMENT" : "SALE",
+        amount,
+        paymentMethod: normalizedPaymentMethod,
+        createdAt: now,
+      })
+      customerDetail.creditEntries = entries
+      await writeOfflineCollection(businessId, `customers.details.v1:${credit.customerId}`, customerDetail)
+    }
+
+    await database.run(
+      `INSERT INTO sync_outbox (
+         id, business_id, entity_name, operation, external_id, payload,
+         payload_hash, status, created_at, next_retry_at
+       ) VALUES (?, ?, 'Credit', 'CREATE', ?, ?, ?, 'PENDING', ?, ?)`,
+      [outboxId, businessId, outboxId, payloadJson, payloadHash, now, now],
+      false,
+    )
+    await database.execute("COMMIT;", false)
+    return { id: payloadId, outboxId, createdAt: now }
+  } catch (error) {
+    await database.execute("ROLLBACK;", false)
+    throw error
+  }
+}
+
+export async function commitOfflineCashExpense(
+  businessId: string,
+  expense: OfflineCashExpense,
+) {
+  return queueOfflineExpenseMutation(businessId, {
+    ...expense,
+    paymentMethod: expense.paymentMethod ?? "Cash",
+  }, "CREATE")
+}
+
+export async function queueOfflineExpenseUpdate(
+  businessId: string,
+  expense: OfflineExpenseInput,
+) {
+  if (!expense.id) {
+    throw new Error("Expense updates require a valid local expense ID.")
+  }
+  return queueOfflineExpenseMutation(businessId, expense, "UPDATE")
 }
 
 export async function getQueuedOfflineCashSales(
@@ -908,9 +1087,40 @@ export async function getOfflineExpenseSyncStatus(businessId: string) {
   }
 }
 
+export async function getOfflineCreditSyncStatus(businessId: string) {
+  const database = await getDatabase()
+  if (!database) return { pending: 0, failed: 0, lastError: null }
+  const [pendingResult, failedResult, errorResult] = await Promise.all([
+    database.query(
+      `SELECT COUNT(*) AS count FROM sync_outbox
+       WHERE business_id = ? AND entity_name = 'Credit' AND status = 'PENDING'`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT COUNT(*) AS count FROM sync_outbox
+       WHERE business_id = ? AND entity_name = 'Credit' AND status = 'FAILED'`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT last_error FROM sync_outbox
+       WHERE business_id = ? AND entity_name = 'Credit' AND status = 'FAILED'
+       ORDER BY created_at DESC LIMIT 1`,
+      [businessId],
+    ),
+  ])
+  return {
+    pending: Number(pendingResult.values?.[0]?.count ?? 0),
+    failed: Number(failedResult.values?.[0]?.count ?? 0),
+    lastError:
+      typeof errorResult.values?.[0]?.last_error === "string"
+        ? errorResult.values[0].last_error
+        : null,
+  }
+}
+
 export async function retryFailedOfflineRecords(
   businessId: string,
-  entityName?: "Sale" | "Expense",
+  entityName?: "Sale" | "Expense" | "Credit",
 ) {
   const database = await getDatabase()
   if (!database) return
@@ -925,4 +1135,8 @@ export async function retryFailedOfflineRecords(
 
 export async function retryFailedOfflineSales(businessId: string) {
   return retryFailedOfflineRecords(businessId, "Sale")
+}
+
+export async function retryFailedOfflineCredits(businessId: string) {
+  return retryFailedOfflineRecords(businessId, "Credit")
 }
