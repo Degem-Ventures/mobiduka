@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession, startCreditorSale } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Customer = { id: string; name: string; phone: string | null; creditLimit: number; credit: number; purchases: number; lastVisit: string; initials: string; color: string }
@@ -29,6 +34,8 @@ export default function CustomersScreen({ onNavigate }: Props) {
   const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null)
   const [dataError, setDataError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
 
   const mapCustomer = (customer: { id: string; name: string; phone: string | null; creditLimit?: number | null; creditAccount?: { balance: number } | null; _count?: { sales: number }; sales?: Array<{ createdAt: string }> }): Customer => ({
     id: customer.id,
@@ -42,24 +49,93 @@ export default function CustomersScreen({ onNavigate }: Props) {
     color: customerColor(customer.id),
   })
 
-  const loadCustomers = () => {
+  const loadCustomers = async () => {
     if (!session) { setDataError('Please sign in to load customers.'); return }
-    apiFetch<Array<{ id: string; name: string; phone: string | null; creditAccount: { balance: number } | null; _count: { sales: number }; sales: Array<{ createdAt: string }> }>>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(rows => setCustomers(rows.map(mapCustomer)))
-      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load customers.'))
+    const cacheKey = 'customers.list.v1'
+    let previousUpdatedAt: string | null = null
+    try {
+      previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+    } catch (reason) {
+      console.error('Unable to read the customer snapshot timestamp.', reason)
+    }
+    try {
+      const rows = await fetchCachedCollection<Array<{
+        id: string
+        name: string
+        phone: string | null
+        creditLimit?: number | null
+        creditAccount: { balance: number } | null
+        _count: { sales: number }
+        sales: Array<{ createdAt: string }>
+      }>>(
+        session.user.businessId,
+        cacheKey,
+        `/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`,
+      )
+      setCustomers(rows.map(mapCustomer))
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the customer snapshot timestamp.', reason)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
+      setDataError('')
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to load customers.')
+    }
   }
 
-  useEffect(loadCustomers, [session?.user.businessId])
+  useEffect(() => {
+    void loadCustomers()
+    const handleOnline = () => void loadCustomers()
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [session?.user.businessId])
 
   const handleSelectCustomer = async (customer: Customer) => {
     if (!session) return
     try {
-      const details = await apiFetch<{ id: string; name: string; phone: string | null; creditAccount: { balance: number } | null; sales: Array<{ id: string; createdAt: string; total: number; payments: Array<{ amount: number; paymentMethod: { name: string } }>; items: Array<{ quantity: number }> }>; creditEntries: Array<{ id: string; type: string; amount: number; createdAt: string }> }>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}&customerId=${customer.id}`)
+      const cacheKey = `customers.details.v1:${customer.id}`
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the customer history snapshot timestamp.', reason)
+      }
+      const details = await fetchCachedCollection<{
+        id: string
+        name: string
+        phone: string | null
+        creditAccount: { balance: number } | null
+        sales: Array<{ id: string; createdAt: string; total: number; payments: Array<{ amount: number; paymentMethod: { name: string } }>; items: Array<{ quantity: number }> }>
+        creditEntries: Array<{ id: string; type: string; amount: number; createdAt: string }>
+      }>(
+        session.user.businessId,
+        cacheKey,
+        `/api/customers?businessId=${encodeURIComponent(session.user.businessId)}&customerId=${customer.id}`,
+      )
       const transactions: Transaction[] = [
         ...details.sales.map(sale => ({ id: sale.id, date: new Date(sale.createdAt).toLocaleDateString(), type: 'Sale', amount: sale.total, method: sale.payments[0]?.paymentMethod.name ?? 'Sale', items: sale.items.reduce((total, item) => total + item.quantity, 0) })),
         ...details.creditEntries.map(entry => ({ id: entry.id, date: new Date(entry.createdAt).toLocaleDateString(), type: entry.type === 'PAYMENT' ? 'Payment' : 'Credit', amount: entry.type === 'PAYMENT' ? -entry.amount : entry.amount, method: entry.type === 'PAYMENT' ? 'Credit payment' : 'Credit', items: 0 })),
       ].sort((a, b) => b.date.localeCompare(a.date))
       setSelected({ ...customer, phone: details.phone, credit: Number(details.creditAccount?.balance ?? 0), transactions })
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the customer history snapshot timestamp.', reason)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
+      setDataError('')
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load customer history.') }
   }
 
@@ -203,6 +279,12 @@ export default function CustomersScreen({ onNavigate }: Props) {
         </div>
 
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Offline · showing saved customer data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Customer changes and credit payments require internet.
+            </div>
+          )}
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           {/* Stats */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
             {[
@@ -313,6 +395,11 @@ export default function CustomersScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
+            Offline · showing saved customer data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Customer changes and credit payments require internet.
+          </div>
+        )}
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {customerToDelete && <div role="alert" className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid #EF9A9A', background: c.errorBg }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete &quot;{customerToDelete.name}&quot;?</div><div style={{ fontSize: 12, color: c.muted, marginBottom: 12 }}>Customers with sales or credit history are retained for record accuracy.</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setCustomerToDelete(null)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.card, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteCustomer()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div></div>}
         {filtered.map(cust => (

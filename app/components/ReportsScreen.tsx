@@ -5,7 +5,12 @@ import {
 } from 'recharts'
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type WeekPoint = { day: string; sales: number; profit: number; future: boolean; isToday: boolean }
@@ -65,27 +70,64 @@ export default function ReportsScreen({ onNavigate }: Props) {
   const [report, setReport] = useState<ReportsData | null>(null)
   const [error, setError] = useAutoDismissMessage()
   const [loading, setLoading] = useState(true)
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const c = useColors()
 
   useEffect(() => {
     let active = true
+    let requestId = 0
     const session = getClientSession()
     if (!session) {
       setError('Please sign in to load reports.')
       setLoading(false)
       return () => { active = false }
     }
-    apiFetch<ReportsData>(`/api/reports/summary?businessId=${encodeURIComponent(session.user.businessId)}`, { cache: 'no-store' })
-      .then(response => {
-        if (!active) return
+    const cacheKey = 'reports.summary.v1'
+    const loadReport = async () => {
+      const thisRequestId = ++requestId
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the reports snapshot timestamp.', reason)
+      }
+      try {
+        const response = await fetchCachedCollection<ReportsData>(
+          session.user.businessId,
+          cacheKey,
+          `/api/reports/summary?businessId=${encodeURIComponent(session.user.businessId)}`,
+        )
+        if (!active || thisRequestId !== requestId) return
         setReport(response)
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+        } catch (reason) {
+          console.error('Unable to read the reports snapshot timestamp.', reason)
+        }
+        if (!active || thisRequestId !== requestId) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(
+          !navigator.onLine ||
+          (isNativeOfflineApp() && updatedAt !== null && previousUpdatedAt === updatedAt),
+        )
         setError('')
-      })
-      .catch(reason => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load reports.')
-      })
-      .finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
+      } catch (reason) {
+        if (active && thisRequestId === requestId) {
+          setError(reason instanceof Error ? reason.message : 'Unable to load reports.')
+        }
+      } finally {
+        if (active && thisRequestId === requestId) setLoading(false)
+      }
+    }
+    const handleOnline = () => void loadReport()
+    void loadReport()
+    window.addEventListener('online', handleOnline)
+    return () => {
+      active = false
+      window.removeEventListener('online', handleOnline)
+    }
   }, [])
 
   const weekData = report?.trends ?? []
@@ -122,9 +164,9 @@ export default function ReportsScreen({ onNavigate }: Props) {
               {report ? `Week of ${curMonthLabel} ${year} · Up to ${todayLabel}` : 'Loading live store data...'}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(46,125,50,0.28)', borderRadius: 100, padding: '4px 10px', border: '1px solid rgba(76,175,80,0.4)' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#4CAF50' }} />
-            <span style={{ fontSize: 10, fontWeight: 700, color: '#81C784' }}>LIVE</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: isOfflineSnapshot ? 'rgba(255,193,7,0.2)' : 'rgba(46,125,50,0.28)', borderRadius: 100, padding: '4px 10px', border: `1px solid ${isOfflineSnapshot ? 'rgba(255,193,7,0.4)' : 'rgba(76,175,80,0.4)'}` }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: isOfflineSnapshot ? '#FFC107' : '#4CAF50' }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: isOfflineSnapshot ? '#FFE082' : '#81C784' }}>{isOfflineSnapshot ? 'OFFLINE' : 'LIVE'}</span>
           </div>
         </div>
 
@@ -155,6 +197,12 @@ export default function ReportsScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+            Offline · showing the last reports snapshot{snapshotUpdatedAt ? ` saved ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}
+          </div>
+        )}
 
         {loading && (
           <div className="card" style={{ padding: 24, textAlign: 'center', color: c.muted, fontSize: 13 }}>

@@ -5,6 +5,7 @@ export type ClientSession = {
     name: string;
     businessId: string;
     role: string;
+    offline?: boolean;
   };
 };
 
@@ -108,6 +109,11 @@ export function savePinLoginContext(context: PinLoginContext) {
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const session = getClientSession();
+  if (session?.user.offline) {
+    throw new TypeError(
+      "Offline PIN sessions can access saved data only. Sign in online to synchronize.",
+    );
+  }
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
   if (session?.token) headers.set("Authorization", `Bearer ${session.token}`);

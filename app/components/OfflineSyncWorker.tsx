@@ -43,6 +43,31 @@ export default function OfflineSyncWorker({ enabled }: { enabled: boolean }) {
         }
         return
       }
+      if (session.user.offline || !session.token) {
+        try {
+          const status = await getOfflineSaleSyncStatus(businessId)
+          if (cancelled) return
+          window.dispatchEvent(
+            new CustomEvent<OfflineSyncStatusEvent>(
+              "mobiduka-offline-sync-status",
+              {
+                detail: {
+                  ...status,
+                  syncError: status.pending > 0
+                    ? "Sign in online to synchronize pending offline sales."
+                    : null,
+                },
+              },
+            ),
+          )
+        } catch (error) {
+          console.error(
+            "Unable to read offline sale synchronization status.",
+            error,
+          )
+        }
+        return
+      }
       let syncError: string | null = null
       try {
         await syncPendingOfflineSales(businessId, userId)

@@ -6,6 +6,7 @@ import {
   SQLiteConnection,
   type SQLiteDBConnection,
 } from "@capacitor-community/sqlite"
+import bcrypt from "bcryptjs"
 import { apiFetch, ApiResponseError } from "./client-api"
 
 const databaseName = "mobiduka_offline"
@@ -19,6 +20,179 @@ function isNativeApp() {
 
 export function isNativeOfflineApp() {
   return isNativeApp()
+}
+
+const offlinePinRosterMaxAgeMs = 7 * 24 * 60 * 60 * 1000
+const offlinePinMaxAttempts = 5
+const offlinePinLockoutMs = 5 * 60 * 1000
+
+type OfflinePinRosterEmployee = {
+  id: string
+  fullName: string
+  role: string
+  status: string
+  pinHash: string
+}
+
+function isSupportedPinHash(value: string) {
+  return /^\$2[aby]\$/.test(value) || /^[a-f\d]{64}$/i.test(value)
+}
+
+async function matchesPinHash(pin: string, pinHash: string) {
+  if (pinHash.startsWith("$2")) return bcrypt.compare(pin, pinHash)
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pin))
+  const candidate = Array.from(new Uint8Array(digest), byte =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")
+  if (candidate.length !== pinHash.length) return false
+  let difference = 0
+  for (let index = 0; index < candidate.length; index++) {
+    difference |= candidate.charCodeAt(index) ^ pinHash.charCodeAt(index)
+  }
+  return difference === 0
+}
+
+export async function refreshOfflinePinRoster(businessId: string) {
+  if (!isNativeApp()) return
+  const response = await apiFetch<{
+    success: boolean
+    employees: OfflinePinRosterEmployee[]
+  }>(`/api/employees?businessId=${encodeURIComponent(businessId)}&includePinHashes=true`)
+  if (!response.success || !Array.isArray(response.employees)) {
+    throw new Error("The employee PIN roster response was invalid.")
+  }
+
+  const database = await getDatabase()
+  if (!database) throw new Error("Native SQLite is unavailable for PIN roster caching.")
+  const employees = response.employees.filter(employee =>
+    typeof employee.id === "string" &&
+    typeof employee.fullName === "string" &&
+    typeof employee.role === "string" &&
+    employee.status === "ACTIVE" &&
+    typeof employee.pinHash === "string" &&
+    isSupportedPinHash(employee.pinHash),
+  )
+  const now = new Date().toISOString()
+  await database.execute("BEGIN IMMEDIATE;", false)
+  try {
+    await database.run(
+      "DELETE FROM offline_pin_roster WHERE business_id = ?",
+      [businessId],
+    )
+    for (const employee of employees) {
+      await database.run(
+        `INSERT INTO offline_pin_roster
+          (business_id, employee_id, full_name, role, pin_hash)
+         VALUES (?, ?, ?, ?, ?)`,
+        [businessId, employee.id, employee.fullName, employee.role, employee.pinHash],
+      )
+    }
+    await database.run(
+      `INSERT INTO offline_pin_roster_state
+        (business_id, updated_at, failed_attempts, locked_until)
+       VALUES (?, ?, 0, NULL)
+       ON CONFLICT (business_id) DO UPDATE SET
+         updated_at = excluded.updated_at,
+         failed_attempts = 0,
+         locked_until = NULL`,
+      [businessId, now],
+    )
+    await database.execute("COMMIT;", false)
+  } catch (error) {
+    await database.execute("ROLLBACK;", false)
+    throw error
+  }
+}
+
+export async function authenticateOfflinePin(
+  businessId: string,
+  pin: string,
+): Promise<
+  | { success: true; user: { id: string; name: string; role: string; businessId: string } }
+  | { success: false; message: string }
+> {
+  if (!isNativeApp()) {
+    return { success: false, message: "Offline PIN login is only available in the native app." }
+  }
+  if (!/^\d{4}$/.test(pin)) {
+    return { success: false, message: "Enter a valid 4-digit PIN." }
+  }
+  const database = await getDatabase()
+  if (!database) {
+    return { success: false, message: "Offline PIN login is not available on this device." }
+  }
+  const stateResult = await database.query(
+    `SELECT updated_at, failed_attempts, locked_until
+     FROM offline_pin_roster_state WHERE business_id = ?`,
+    [businessId],
+  )
+  const state = stateResult.values?.[0]
+  if (!state || typeof state.updated_at !== "string") {
+    return { success: false, message: "Connect and sign in online once to enable business PIN login offline." }
+  }
+  const rosterAge = Date.now() - new Date(state.updated_at).getTime()
+  if (!Number.isFinite(rosterAge) || rosterAge < 0 || rosterAge > offlinePinRosterMaxAgeMs) {
+    return { success: false, message: "The offline PIN roster is over 7 days old. Connect and sign in online to refresh it." }
+  }
+  const now = Date.now()
+  const lockedUntil = typeof state.locked_until === "string"
+    ? new Date(state.locked_until).getTime()
+    : 0
+  if (Number.isFinite(lockedUntil) && lockedUntil > now) {
+    const minutes = Math.ceil((lockedUntil - now) / 60_000)
+    return { success: false, message: `Offline PIN login is locked. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.` }
+  }
+
+  const employeeResult = await database.query(
+    `SELECT employee_id, full_name, role, pin_hash
+     FROM offline_pin_roster WHERE business_id = ?`,
+    [businessId],
+  )
+  const matches: Array<{ id: string; name: string; role: string }> = []
+  for (const employee of employeeResult.values ?? []) {
+    const pinHash = employee.pin_hash
+    if (typeof pinHash !== "string") continue
+    if (await matchesPinHash(pin, pinHash)) {
+      matches.push({
+        id: String(employee.employee_id),
+        name: String(employee.full_name),
+        role: String(employee.role),
+      })
+    }
+  }
+
+  if (matches.length === 1) {
+    await database.run(
+      `UPDATE offline_pin_roster_state
+       SET failed_attempts = 0, locked_until = NULL WHERE business_id = ?`,
+      [businessId],
+    )
+    return { success: true, user: { ...matches[0], businessId } }
+  }
+  if (matches.length > 1) {
+    return {
+      success: false,
+      message: "This PIN is assigned to multiple employees. Assign unique business PINs online.",
+    }
+  }
+
+  const lockExpired = Number.isFinite(lockedUntil) && lockedUntil > 0
+  const priorAttempts = lockExpired
+    ? 0
+    : Number(state.failed_attempts ?? 0)
+  const attempts = priorAttempts + 1
+  const lockUntil = attempts >= offlinePinMaxAttempts
+    ? new Date(now + offlinePinLockoutMs).toISOString()
+    : null
+  await database.run(
+    `UPDATE offline_pin_roster_state
+     SET failed_attempts = ?, locked_until = ? WHERE business_id = ?`,
+    [lockUntil ? 0 : attempts, lockUntil, businessId],
+  )
+  if (lockUntil) {
+    return { success: false, message: "Too many incorrect PIN attempts. Offline login is locked for 5 minutes." }
+  }
+  return { success: false, message: `Incorrect PIN. ${offlinePinMaxAttempts - attempts} attempt${offlinePinMaxAttempts - attempts === 1 ? "" : "s"} remaining.` }
 }
 
 async function getDatabase() {
@@ -64,6 +238,20 @@ async function getDatabase() {
         );
         CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending
           ON sync_outbox (business_id, status, created_at);
+        CREATE TABLE IF NOT EXISTS offline_pin_roster (
+          business_id TEXT NOT NULL,
+          employee_id TEXT NOT NULL,
+          full_name TEXT NOT NULL,
+          role TEXT NOT NULL,
+          pin_hash TEXT NOT NULL,
+          PRIMARY KEY (business_id, employee_id)
+        );
+        CREATE TABLE IF NOT EXISTS offline_pin_roster_state (
+          business_id TEXT PRIMARY KEY,
+          updated_at TEXT NOT NULL,
+          failed_attempts INTEGER NOT NULL DEFAULT 0,
+          locked_until TEXT
+        );
       `)
       return database
     })().catch((error: unknown) => {

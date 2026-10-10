@@ -27,7 +27,7 @@ MobiDuka uses business-scoped authentication and five role tiers:
 | `CASHIER` | POS sales, permitted expenses, and cash-session workflows. |
 | `ACCOUNTANT` | Sales, expenses, cash sessions, and financial review. |
 
-Employee PINs are hashed before database storage. PIN validation and roster access are scoped to the active business, and the mobile app can use a securely cached roster for supported offline authentication flows. Never commit PINs, tokens, payment credentials, or database connection strings.
+Employee PINs are hashed before database storage. PIN validation and roster access are scoped to the active business. The Capacitor app may cache PIN hashes in its app-private SQLite database for business-scoped offline login; offline PIN access expires after seven days and is protected by a local five-attempt lockout. An offline login is local-only and must be followed by an online sign-in before queued sales synchronize. Staff changes and PIN revocations cannot be enforced on disconnected devices until roster refresh. Never commit PINs, tokens, payment credentials, or database connection strings.
 
 ## Project overview
 
