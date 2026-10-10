@@ -9,7 +9,9 @@ import {
   fetchCachedCollection,
   getOfflineSaleSyncStatus,
   isNativeOfflineApp,
+  readOfflineCollection,
   retryFailedOfflineSales,
+  writeOfflineCollection,
 } from "../../lib/offline-store"
 
 type ProductItem = {
@@ -436,6 +438,57 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     const loadActiveShifts = async () => {
       if (loading) return
       loading = true
+      let localShiftId: string | null = null
+      try {
+        localShiftId = window.localStorage.getItem(
+          deviceShiftStorageKey(currentBusinessId),
+        )
+        const localRoster = window.localStorage.getItem(
+          deviceShiftRosterKey(currentBusinessId),
+        )
+        const parsedRoster = localRoster
+          ? (JSON.parse(localRoster) as ActiveOperator[])
+          : []
+        const cachedOperators = parsedRoster.filter(
+          (operator) =>
+            typeof operator.id === "string" &&
+            typeof operator.sessionId === "string" &&
+            typeof operator.name === "string" &&
+            typeof operator.shift === "string",
+        )
+        if (cachedOperators.length > 0) {
+          setActiveOperators(cachedOperators)
+          const selected = cachedOperators.find(
+            (operator) => operator.sessionId === localShiftId,
+          )
+          if (selected) {
+            setCurrentDeviceShiftId(selected.sessionId)
+            setSelectedOperatorId(selected.id)
+          }
+        }
+      } catch (error) {
+        console.error("Unable to restore the locally saved shift roster.", error)
+      }
+      if (isNativeOfflineApp()) {
+        void readOfflineCollection<ActiveOperator[]>(
+          currentBusinessId,
+          "pos.shift_roster.v1",
+        ).then((cachedOperators) => {
+          if (cancelled || !cachedOperators?.length) return
+          setActiveOperators((current) =>
+            current.length > 0 ? current : cachedOperators,
+          )
+          const selected = cachedOperators.find(
+            (operator) => operator.sessionId === localShiftId,
+          )
+          if (selected) {
+            setCurrentDeviceShiftId((current) => current || selected.sessionId)
+            setSelectedOperatorId((current) => current || selected.id)
+          }
+        }).catch((error: unknown) => {
+          console.error("Unable to restore the SQLite shift roster.", error)
+        })
+      }
       try {
         const uuidKey = deviceUuidStorageKey(currentBusinessId)
         let registeredDeviceUuid = window.localStorage.getItem(uuidKey)
@@ -494,6 +547,15 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           deviceShiftRosterKey(currentBusinessId),
           JSON.stringify(operators),
         )
+        try {
+          await writeOfflineCollection(
+            currentBusinessId,
+            "pos.shift_roster.v1",
+            operators,
+          )
+        } catch (error) {
+          console.error("Unable to cache the active shift roster.", error)
+        }
 
         const locallySelectedShiftId = window.localStorage.getItem(
           deviceShiftStorageKey(currentBusinessId),
@@ -543,15 +605,20 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       } catch (reason) {
         if (!cancelled) {
           if (reason instanceof TypeError && isNativeOfflineApp()) {
-            const cachedRoster = window.localStorage.getItem(
-              deviceShiftRosterKey(currentBusinessId),
-            )
-            const localShiftId = window.localStorage.getItem(
-              deviceShiftStorageKey(currentBusinessId),
-            )
             try {
-              const parsedRoster = cachedRoster
-                ? (JSON.parse(cachedRoster) as ActiveOperator[])
+              const sqliteRoster = await readOfflineCollection<ActiveOperator[]>(
+                currentBusinessId,
+                "pos.shift_roster.v1",
+              )
+              const cachedRoster =
+                sqliteRoster ??
+                JSON.parse(
+                  window.localStorage.getItem(
+                    deviceShiftRosterKey(currentBusinessId),
+                  ) ?? "[]",
+                )
+              const parsedRoster = Array.isArray(cachedRoster)
+                ? cachedRoster
                 : []
               const cachedOperators = parsedRoster.filter(
                 (operator) =>

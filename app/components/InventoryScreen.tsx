@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import { fetchCachedCollection } from '../../lib/offline-store'
 import { Html5Qrcode } from 'html5-qrcode'
 import { DEFAULT_INVENTORY_EMOJI, INVENTORY_EMOJIS } from '../utils/inventory-emojis'
 import { composeProductDisplayName } from '../../lib/product-display-name'
@@ -237,10 +238,23 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     const requestId = ++inventoryRequestId.current
     setIsInventoryLoading(true)
     setDataError('')
+    const businessId = session.user.businessId
     Promise.all([
-      apiFetch<ProductApiRow[]>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<CategoryItem[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<ProductApiRow[]>(`/api/products?businessId=${encodeURIComponent(session.user.businessId)}&includeDeleted=true`),
+      fetchCachedCollection<ProductApiRow[]>(
+        businessId,
+        'inventory.products.v1',
+        `/api/products?businessId=${encodeURIComponent(businessId)}`,
+      ),
+      fetchCachedCollection<CategoryItem[]>(
+        businessId,
+        'inventory.categories.v1',
+        `/api/categories?businessId=${encodeURIComponent(businessId)}`,
+      ),
+      fetchCachedCollection<ProductApiRow[]>(
+        businessId,
+        'inventory.deleted_products.v1',
+        `/api/products?businessId=${encodeURIComponent(businessId)}&includeDeleted=true`,
+      ),
     ]).then(([productRows, categoryRows, deletedRows]) => {
       if (requestId !== inventoryRequestId.current) return
       setDeletedProductCount(deletedRows.length)

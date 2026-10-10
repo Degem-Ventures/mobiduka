@@ -89,6 +89,20 @@ export async function readOfflineCollection<T>(
   return JSON.parse(payload) as T
 }
 
+export async function readOfflineCollectionUpdatedAt(
+  businessId: string,
+  cacheKey: string,
+): Promise<string | null> {
+  const database = await getDatabase()
+  if (!database) return null
+  const result = await database.query(
+    "SELECT updated_at FROM offline_collection_cache WHERE business_id = ? AND cache_key = ?",
+    [businessId, cacheKey],
+  )
+  const updatedAt = result.values?.[0]?.updated_at
+  return typeof updatedAt === "string" ? updatedAt : null
+}
+
 export async function writeOfflineCollection(
   businessId: string,
   cacheKey: string,
