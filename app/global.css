@@ -33,7 +33,15 @@ body {
   justify-content: center;
 }
 
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
 .app-shell {
+  width: 100%;
   min-height: 100vh;
   min-height: 100dvh;
   background: linear-gradient(135deg, #0D1B3D 0%, #123A8F 100%);
