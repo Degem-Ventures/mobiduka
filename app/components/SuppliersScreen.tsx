@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Supplier = { id: string; name: string; category: string | null; contactPerson: string | null; phone: string | null; email: string | null; location: string | null; notes: string | null; paymentTerms: string; rating: number; outstandingBalance: number; _count: { purchaseOrders: number; products: number } }
@@ -18,6 +24,8 @@ export default function SuppliersScreen({ onNavigate }: Props) {
   const c = useColors()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([])
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Supplier | null>(null)
   const [showAdd, setShowAdd] = useState(false)
@@ -72,12 +80,58 @@ export default function SuppliersScreen({ onNavigate }: Props) {
 
   useEffect(() => {
     if (!session) { setDataError('Please sign in to load suppliers.'); return }
-    apiFetch<Supplier[]>(`/api/suppliers?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(setSuppliers)
-      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load suppliers.'))
-    apiFetch<ProductCategory[]>(`/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(categories => setProductCategories(categories.sort((left, right) => left.name.localeCompare(right.name))))
-      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load product categories.'))
+    let cancelled = false
+    const businessId = session.user.businessId
+    const cacheKey = 'suppliers.list.v1'
+    const loadSuppliers = async () => {
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the supplier snapshot timestamp.', reason)
+      }
+      try {
+        const [supplierRows, categories] = await Promise.all([
+          fetchCachedCollection<Supplier[]>(
+            businessId,
+            cacheKey,
+            `/api/suppliers?businessId=${encodeURIComponent(businessId)}`,
+          ),
+          fetchCachedCollection<ProductCategory[]>(
+            businessId,
+            'suppliers.categories.v1',
+            `/api/categories?businessId=${encodeURIComponent(businessId)}`,
+          ),
+        ])
+        if (cancelled) return
+        setSuppliers(supplierRows)
+        setProductCategories(categories.sort((left, right) => left.name.localeCompare(right.name)))
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+        } catch (reason) {
+          console.error('Unable to read the supplier snapshot timestamp.', reason)
+        }
+        if (cancelled) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(
+          isNativeOfflineApp() &&
+          (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+        )
+        setDataError('')
+      } catch (reason) {
+        if (!cancelled) {
+          setDataError(reason instanceof Error ? reason.message : 'Unable to load suppliers.')
+        }
+      }
+    }
+    const handleOnline = () => void loadSuppliers()
+    void loadSuppliers()
+    window.addEventListener('online', handleOnline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', handleOnline)
+    }
   }, [session?.user.businessId])
 
   const filtered = suppliers.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || (s.category ?? '').toLowerCase().includes(search.toLowerCase()))
@@ -113,7 +167,13 @@ export default function SuppliersScreen({ onNavigate }: Props) {
     setSaving(true); setDataError('')
     try {
       await apiFetch(`/api/suppliers?id=${encodeURIComponent(target.id)}&businessId=${encodeURIComponent(session.user.businessId)}`, { method: 'DELETE' })
-      setSuppliers(previous => previous.filter(supplier => supplier.id !== target.id))
+      const updatedSuppliers = suppliers.filter(supplier => supplier.id !== target.id)
+      setSuppliers(updatedSuppliers)
+      try {
+        await writeOfflineCollection(session.user.businessId, 'suppliers.list.v1', updatedSuppliers)
+      } catch (error) {
+        console.error('Unable to update the cached supplier directory.', error)
+      }
       setSelected(null)
       notify(`${target.name} deleted.`, 'success')
     } catch (reason) {
@@ -137,6 +197,11 @@ export default function SuppliersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ paddingTop: '20px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 100 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Offline · editing suppliers requires internet.
+            </div>
+          )}
           {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
             {[
@@ -229,7 +294,15 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             setSaving(true)
             try {
               const supplier = await apiFetch<Supplier>('/api/suppliers', { method: editingSupplier ? 'PATCH' : 'POST', body: JSON.stringify({ businessId: session.user.businessId, ...(editingSupplier ? { id: editingSupplier.id } : {}), name: form.name, category: form.category, contactPerson: form.contact, phone: form.phone, email: form.email, location: form.location, notes: form.notes, paymentTerms: form.paymentTerms, rating: Number(form.rating), outstandingBalance: Number(form.outstandingBalance) }) })
-              setSuppliers(previous => editingSupplier ? previous.map(item => item.id === supplier.id ? supplier : item) : [...previous, supplier])
+              const updatedSuppliers = editingSupplier
+                ? suppliers.map(item => item.id === supplier.id ? supplier : item)
+                : [...suppliers, supplier]
+              setSuppliers(updatedSuppliers)
+              try {
+                await writeOfflineCollection(session.user.businessId, 'suppliers.list.v1', updatedSuppliers)
+              } catch (error) {
+                console.error('Unable to update the cached supplier directory.', error)
+              }
               notify(editingSupplier ? `${supplier.name} updated.` : `${supplier.name} added.`, 'success')
               setForm(emptySupplierForm)
               setShowAdd(false); setEditingSupplier(null)
@@ -271,6 +344,12 @@ export default function SuppliersScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ paddingTop: '16px', paddingRight: '16px', paddingLeft: '16px', paddingBottom: 80 }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Offline · showing saved supplier data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Supplier changes require internet.
+            </div>
+          )}
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
             {[['Total Orders', selected._count.purchaseOrders, '#123A8F'], ['Outstanding', selected.outstandingBalance > 0 ? `KSh ${selected.outstandingBalance.toLocaleString()}` : 'Settled', selected.outstandingBalance > 0 ? '#D32F2F' : '#2E7D32']].map(([l, v, col], i) => (
               <div key={i} className="card" style={{ padding: '14px', textAlign: 'center' }}>
@@ -333,6 +412,11 @@ export default function SuppliersScreen({ onNavigate }: Props) {
         </div>
       </div>
       <div className="scroll-area" style={{ paddingTop: '12px', paddingRight: '12px', paddingLeft: '12px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
+            Offline · showing saved supplier data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Supplier changes require internet.
+          </div>
+        )}
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {supplierToDelete && <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid #EF9A9A', background: c.errorBg }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete {supplierToDelete.name}?</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setSupplierToDelete(null)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.card, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteSupplier()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div></div>}
         {filtered.map(s => (

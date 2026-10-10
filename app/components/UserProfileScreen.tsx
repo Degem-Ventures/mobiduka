@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { formatPhoneForDisplay } from '../utils/format-phone'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props { onNavigate: (s: string) => void }
@@ -9,6 +15,7 @@ type Profile = { id: string; name: string; phone: string | null; email: string |
 
 export default function UserProfileScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [editing, setEditing] = useState(false)
   const [changingPin, setChangingPin] = useState(false)
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -18,25 +25,76 @@ export default function UserProfileScreen({ onNavigate }: Props) {
   const [pinDone, setPinDone] = useState(false)
   const [saved, setSaved] = useState(false)
   const [dataError, setDataError] = useAutoDismissMessage()
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const initials = (profile?.name ?? 'User').split(' ').map(word => word[0]).join('').slice(0, 2).toUpperCase()
 
   useEffect(() => {
-    const session = getClientSession()
     if (!session) { setDataError('Please sign in to load your profile.'); return }
-    apiFetch<{ profile: Profile }>(`/api/profile?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(response => {
+    let cancelled = false
+    const cacheKey = `profile.v1:${session.user.id}`
+    const loadProfile = async () => {
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the profile snapshot timestamp.', reason)
+      }
+      try {
+        const response = await fetchCachedCollection<{ profile: Profile }>(
+          session.user.businessId,
+          cacheKey,
+          `/api/profile?businessId=${encodeURIComponent(session.user.businessId)}`,
+        )
+        if (cancelled) return
         setProfile(response.profile)
         setForm({ name: response.profile.name, phone: response.profile.phone ?? '', email: response.profile.email ?? '', store: response.profile.business.name, branch: response.profile.business.branch ?? '' })
-      })
-      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load profile.'))
-  }, [])
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+        } catch (reason) {
+          console.error('Unable to read the profile snapshot timestamp.', reason)
+        }
+        if (cancelled) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(
+          isNativeOfflineApp() &&
+          (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+        )
+        setDataError('')
+      } catch (reason) {
+        if (!cancelled) setDataError(reason instanceof Error ? reason.message : 'Unable to load profile.')
+      }
+    }
+    const handleOnline = () => void loadProfile()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(true)
+        setEditing(false)
+      }
+    }
+    void loadProfile()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.id, session?.user.businessId])
 
   const handleSave = async () => {
-    const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     try {
       const response = await apiFetch<{ profile: Profile }>('/api/profile', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, name: form.name, phone: form.phone, email: form.email, businessName: form.store, businessBranch: form.branch }) })
       setProfile(response.profile)
+      try {
+        const cacheKey = `profile.v1:${session.user.id}`
+        await writeOfflineCollection(session.user.businessId, cacheKey, response)
+        setSnapshotUpdatedAt(await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey))
+      } catch (error) {
+        console.error('Unable to update the cached profile.', error)
+      }
       setEditing(false)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -44,8 +102,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
   }
 
   const updatePin = async () => {
-    const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     if (profile?.pinConfigured && !pinForm.current) { setPinError('Enter your current PIN'); return }
     if (pinForm.newPin.length !== 4) { setPinError('New PIN must be 4 digits'); return }
     if (pinForm.newPin !== pinForm.confirm) { setPinError('New PINs do not match'); return }
@@ -97,7 +154,8 @@ export default function UserProfileScreen({ onNavigate }: Props) {
                 {pinError && (
                   <div style={{ background: c.errorBg, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>⚠️ {pinError}</div>
                 )}
-                <button className="btn" onClick={() => void updatePin()} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+                {isOfflineSnapshot && <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>PIN changes require an internet connection.</div>}
+                <button className="btn" disabled={isOfflineSnapshot} onClick={() => void updatePin()} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)', opacity: isOfflineSnapshot ? 0.7 : 1 }}>
                   Update PIN
                 </button>
               </>
@@ -116,7 +174,7 @@ export default function UserProfileScreen({ onNavigate }: Props) {
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
           </button>
           <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>User Profile</div>
-          <button className="btn" onClick={() => setEditing(!editing)} style={{ marginLeft: 'auto', background: editing ? '#D4AF37' : 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 13, fontWeight: 600, color: editing ? '#0D1B3D' : 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" disabled={isOfflineSnapshot} onClick={() => setEditing(!editing)} style={{ marginLeft: 'auto', background: editing ? '#D4AF37' : 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 13, fontWeight: 600, color: editing ? '#0D1B3D' :  'white', cursor: 'pointer', fontFamily: 'inherit' }}>
             {editing ? 'Cancel' : 'Edit'}
           </button>
         </div>
@@ -137,6 +195,11 @@ export default function UserProfileScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+            Showing saved profile{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Profile and PIN changes require internet.
+          </div>
+        )}
         {dataError && <div style={{ background: c.errorBg, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>{dataError}</div>}
         {saved && (
           <div style={{ background: c.successBg, border: '1px solid #C8E6C9', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>

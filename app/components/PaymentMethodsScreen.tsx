@@ -1,6 +1,12 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useColors } from "../utils/theme"
-import { apiFetch, getClientSession } from "../../lib/client-api"
+import { ApiResponseError, apiFetch, getClientSession } from "../../lib/client-api"
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from "../../lib/offline-store"
 import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
 
 
@@ -41,6 +47,7 @@ type SettingsResponse = {
     mpesaEnabled: boolean
   }
 }
+type PaymentMethodsSnapshot = { methods: Record<string, boolean> }
 
 type MpesaIntegration = {
   configured: boolean
@@ -150,6 +157,10 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
+  const [isOffline, setIsOffline] = useState(false)
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const hasPaymentMethodsSnapshot = useRef(false)
   const activeMpesaCredentials = mpesaCredentialDrafts[mpesaForm.environment]
   const hasStoredCredentialsForSelectedEnvironment =
     mpesaIntegration.configured &&
@@ -196,23 +207,104 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   useEffect(() => {
     const session = getClientSession()
     if (!session) return
-    apiFetch<SettingsResponse>(
-      `/api/settings?businessId=${encodeURIComponent(session.user.businessId)}`,
-    )
-      .then((response) => {
-        if (response.preferences.paymentConfig)
-          applyPaymentConfig(
-            response.preferences.paymentConfig,
-            response.preferences.mpesaEnabled,
-          )
-      })
-      .catch((reason) =>
-        setSaveError(
-          reason instanceof Error
-            ? reason.message
-            : "Unable to load payment settings.",
-        ),
-      )
+    let active = true
+    let requestId = 0
+    const businessId = session.user.businessId
+    const cacheKey = "payments.methods.v1"
+    const loadPaymentMethods = async () => {
+      const thisRequestId = ++requestId
+      try {
+        const response = await apiFetch<SettingsResponse>(
+          `/api/settings?businessId=${encodeURIComponent(businessId)}`,
+        )
+        if (!active || thisRequestId !== requestId) return
+        const config = response.preferences.paymentConfig
+        if (config) {
+          applyPaymentConfig(config, response.preferences.mpesaEnabled)
+          const snapshot: PaymentMethodsSnapshot = {
+            methods: {
+              ...config.methods,
+              mpesa: Boolean(config.methods.mpesa && response.preferences.mpesaEnabled),
+            },
+          }
+          try {
+            await writeOfflineCollection(businessId, cacheKey, snapshot)
+            hasPaymentMethodsSnapshot.current = true
+          } catch (reason) {
+            console.error("Unable to cache payment method summaries for offline use.", reason)
+          }
+        }
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+        } catch (reason) {
+          console.error("Unable to read the payment methods snapshot timestamp.", reason)
+        }
+        if (!active || thisRequestId !== requestId) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOffline(isNativeOfflineApp() && !navigator.onLine)
+        setIsOfflineSnapshot(isNativeOfflineApp() && !navigator.onLine)
+        setSaveError("")
+      } catch (reason) {
+        const canUseCache =
+          reason instanceof TypeError ||
+          (reason instanceof ApiResponseError && reason.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) {
+          if (active && thisRequestId === requestId) {
+            setIsOffline(isNativeOfflineApp() && !navigator.onLine)
+            setSaveError(reason instanceof Error ? reason.message : "Unable to load payment settings.")
+          }
+          return
+        }
+        try {
+          const cached = await readOfflineCollection<PaymentMethodsSnapshot>(businessId, cacheKey)
+          if (active && thisRequestId === requestId && isNativeOfflineApp()) {
+            setIsOffline(true)
+          }
+          if (!active || thisRequestId !== requestId) return
+          if (!cached) {
+            throw new Error("Payment method settings are not available offline yet. Connect to the internet once to load them.")
+          }
+          setMethods(current => current.map(method => ({
+            ...method,
+            enabled: cached.methods[method.id] ?? method.enabled,
+          })))
+          hasPaymentMethodsSnapshot.current = true
+          setShowMpesaConfig(false)
+          setShowBankConfig(false)
+          setShowCashConfig(false)
+          setShowCreditConfig(false)
+          const updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+          if (!active || thisRequestId !== requestId) return
+          setSnapshotUpdatedAt(updatedAt)
+          setIsOfflineSnapshot(true)
+          setSaveError("")
+        } catch (cacheReason) {
+          if (active && thisRequestId === requestId) {
+            setSaveError(cacheReason instanceof Error ? cacheReason.message : "Unable to load saved payment settings.")
+          }
+        }
+      }
+    }
+    const handleOnline = () => void loadPaymentMethods()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOffline(true)
+        setIsOfflineSnapshot(hasPaymentMethodsSnapshot.current)
+        setShowMpesaConfig(false)
+        setShowBankConfig(false)
+        setShowCashConfig(false)
+        setShowCreditConfig(false)
+      }
+    }
+    void loadPaymentMethods()
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+    return () => {
+      active = false
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
   }, [])
 
   const applyMpesaIntegration = (integration: MpesaIntegration) => {
@@ -235,22 +327,29 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   useEffect(() => {
     const session = getClientSession()
     if (!session) return
-    setMpesaLoading(true)
-    apiFetch<MpesaIntegrationResponse>(
-      `/api/payments/mpesa-integration?businessId=${encodeURIComponent(session.user.businessId)}`,
-    )
-      .then((response) => applyMpesaIntegration(response.integration))
-      .catch((reason) =>
-        setSaveError(
-          reason instanceof Error
-            ? reason.message
-            : "Unable to load M-Pesa configuration.",
-        ),
+    const loadMpesaIntegration = () => {
+      setMpesaLoading(true)
+      apiFetch<MpesaIntegrationResponse>(
+        `/api/payments/mpesa-integration?businessId=${encodeURIComponent(session.user.businessId)}`,
       )
-      .finally(() => setMpesaLoading(false))
+        .then((response) => applyMpesaIntegration(response.integration))
+        .catch((reason) => {
+          if (isNativeOfflineApp() && !navigator.onLine) return
+          setSaveError(
+            reason instanceof Error
+              ? reason.message
+              : "Unable to load M-Pesa configuration.",
+          )
+        })
+        .finally(() => setMpesaLoading(false))
+    }
+    if (!isNativeOfflineApp() || navigator.onLine) loadMpesaIntegration()
+    window.addEventListener("online", loadMpesaIntegration)
+    return () => window.removeEventListener("online", loadMpesaIntegration)
   }, [])
 
   const toggle = (id: string) => {
+    if (isOffline) return
     setMethods((ms) =>
       ms.map((m) => (m.id === id ? { ...m, enabled: !m.enabled } : m)),
     )
@@ -298,6 +397,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   }
 
   const handleSave = async () => {
+    if (isOffline) return
     const session = getClientSession()
     if (!session) return
     const mpesaEnabled = methods.some(
@@ -453,6 +553,11 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
             {saveError}
           </div>
         )}
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: c.cardAlt, color: c.muted, borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 12, lineHeight: 1.5 }}>
+            Showing saved payment method status{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Payment settings and account details are not editable or stored in this offline view.
+          </div>
+        )}
 
         <div
           style={{
@@ -513,14 +618,16 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {(m.id === "mpesa" ||
+                  {!isOffline && (m.id === "mpesa" ||
                     (m.enabled &&
                       (m.id === "bank" ||
                         m.id === "cash" ||
                         m.id === "credit"))) && (
                     <button
                       className="btn"
+                      disabled={isOffline}
                       onClick={() => {
+                        if (isOffline) return
                         if (m.id === "mpesa") setShowMpesaConfig((v) => !v)
                         if (m.id === "bank") setShowBankConfig((v) => !v)
                         if (m.id === "cash") setShowCashConfig((v) => !v)
@@ -543,6 +650,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                   )}
                   <button
                     className="btn"
+                    disabled={isOffline}
                     onClick={() => toggle(m.id)}
                     style={{
                       width: 48,
@@ -555,7 +663,8 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                           ? "#1A3366"
                           : "#D0D7E8",
                       border: "none",
-                      cursor: "pointer",
+                      cursor: isOffline ? "default" : "pointer",
+                      opacity: isOffline ? 0.6 : 1,
                       position: "relative",
                       transition: "background 0.2s",
                     }}
@@ -578,7 +687,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
               </div>
 
               {/* Inline config panels */}
-              {m.id === "mpesa" && showMpesaConfig && (
+              {!isOffline && m.id === "mpesa" && showMpesaConfig && (
                 <div
                   aria-busy={mpesaLoading}
                   style={{
@@ -984,7 +1093,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                 </div>
               )}
 
-              {m.id === "bank" && m.enabled && showBankConfig && (
+              {!isOffline && m.id === "bank" && m.enabled && showBankConfig && (
                 <div
                   style={{
                     background: c.cardAlt,
@@ -1047,7 +1156,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                 </div>
               )}
 
-              {m.id === "cash" && m.enabled && showCashConfig && (
+              {!isOffline && m.id === "cash" && m.enabled && showCashConfig && (
                 <div
                   style={{
                     background: c.cardAlt,
@@ -1106,7 +1215,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                 </div>
               )}
 
-              {m.id === "credit" && m.enabled && showCreditConfig && (
+              {!isOffline && m.id === "credit" && m.enabled && showCreditConfig && (
                 <div
                   style={{
                     background: c.cardAlt,
@@ -1227,7 +1336,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
         <button
           className="btn"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || isOffline}
           style={{
             width: "100%",
             padding: "16px",
@@ -1237,8 +1346,8 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
             fontSize: 15,
             fontWeight: 700,
             color: "white",
-            cursor: saving ? "wait" : "pointer",
-            opacity: saving ? 0.72 : 1,
+            cursor: saving ? "wait" : isOffline ? "default" : "pointer",
+            opacity: saving ? 0.72 : isOffline ? 0.6 : 1,
             fontFamily: "inherit",
             boxShadow: "0 4px 16px rgba(18,58,143,0.35)",
           }}

@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession, startCreditorSale as saveCreditorSaleIntent } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type Transaction = { id: string; date: string; desc: string; amount: number; type: 'credit' | 'payment' }
@@ -15,6 +20,10 @@ export default function CreditBookScreen({ onNavigate }: Props) {
   const session = getClientSession()
   const [credits, setCredits] = useState<Credit[]>([])
   const [selected, setSelected] = useState<Credit | null>(null)
+  const [listOfflineSnapshot, setListOfflineSnapshot] = useState(false)
+  const [listSnapshotUpdatedAt, setListSnapshotUpdatedAt] = useState<string | null>(null)
+  const [detailOfflineSnapshot, setDetailOfflineSnapshot] = useState(false)
+  const [detailSnapshotUpdatedAt, setDetailSnapshotUpdatedAt] = useState<string | null>(null)
   const [showRecord, setShowRecord] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState<'cash' | 'mpesa'>('cash')
@@ -48,25 +57,85 @@ export default function CreditBookScreen({ onNavigate }: Props) {
 
   const loadCredits = async () => {
     if (!session) { setDataError('Please sign in to load credit accounts.'); return }
+    const cacheKey = 'customers.list.v1'
+    let previousUpdatedAt: string | null = null
     try {
-      setDataError('')
-      const rows = await apiFetch<CustomerSummary[]>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`)
+      previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+    } catch (reason) {
+      console.error('Unable to read the credit-account snapshot timestamp.', reason)
+    }
+    try {
+      const rows = await fetchCachedCollection<CustomerSummary[]>(
+        session.user.businessId,
+        cacheKey,
+        `/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`,
+      )
       setCredits(rows.filter(row => Number(row.creditAccount?.balance ?? 0) > 0).map((row, index) => mapCredit(row, index, toTransactions(row))))
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the credit-account snapshot timestamp.', reason)
+      }
+      setListSnapshotUpdatedAt(updatedAt)
+      setListOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
+      setDataError('')
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load credit accounts.') }
   }
 
-  useEffect(() => { void loadCredits() }, [session?.user.businessId])
+  useEffect(() => {
+    void loadCredits()
+    const handleOnline = () => void loadCredits()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setListOfflineSnapshot(true)
+        setDetailOfflineSnapshot(true)
+      }
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.businessId])
 
   const handleSelect = async (credit: Credit) => {
     if (!session) return
     try {
-      const details = await apiFetch<CustomerSummary>(`/api/customers?businessId=${encodeURIComponent(session.user.businessId)}&customerId=${encodeURIComponent(credit.id)}`)
+      const cacheKey = `customers.details.v1:${credit.id}`
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the credit history snapshot timestamp.', reason)
+      }
+      const details = await fetchCachedCollection<CustomerSummary>(
+        session.user.businessId,
+        cacheKey,
+        `/api/customers?businessId=${encodeURIComponent(session.user.businessId)}&customerId=${encodeURIComponent(credit.id)}`,
+      )
       setSelected(mapCredit(details, credits.indexOf(credit), toTransactions(details)))
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the credit history snapshot timestamp.', reason)
+      }
+      setDetailSnapshotUpdatedAt(updatedAt)
+      setDetailOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
+      setDataError('')
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load credit history.') }
   }
 
   const recordPayment = async () => {
-    if (!session || !selected) return
+    if (!session || !selected || detailOfflineSnapshot) return
     const amount = Number(payAmount)
     if (!Number.isFinite(amount) || amount <= 0 || amount > selected.balance) {
       setDataError('Enter a payment amount within the outstanding balance.')
@@ -84,7 +153,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
   }
 
   const startCreditorSale = () => {
-    if (!session || !selected) return
+    if (!session || !selected || detailOfflineSnapshot) return
     saveCreditorSaleIntent(selected.id)
     onNavigate('pos')
   }
@@ -108,6 +177,11 @@ export default function CreditBookScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
+          {detailOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              This is saved credit data. Payments require an internet connection.
+            </div>
+          )}
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ marginBottom: 18 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Payment Amount (KSh)</label>
@@ -130,7 +204,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
               </div>
             </div>
           </div>
-          <button className="btn" disabled={saving} onClick={() => void recordPayment()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)', opacity: saving ? 0.7 : 1 }}>
+          <button className="btn" disabled={saving || detailOfflineSnapshot} onClick={() => void recordPayment()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving || detailOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)', opacity: saving || detailOfflineSnapshot ? 0.7 : 1 }}>
             Confirm Payment
           </button>
         </div>
@@ -157,15 +231,21 @@ export default function CreditBookScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+          {detailOfflineSnapshot && (
+            <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+              Showing saved credit history{detailSnapshotUpdatedAt ? ` from ${new Date(detailSnapshotUpdatedAt).toLocaleString()}` : ''}. Payments and credit sales require internet.
+            </div>
+          )}
+          {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
           <div style={{ background: 'linear-gradient(135deg, #FFEBEE, #FFCDD2)', border: '1px solid #EF9A9A', borderRadius: 16, padding: '16px 20px', marginBottom: 16, textAlign: 'center' }}>
             <div style={{ fontSize: 12, color: '#B71C1C', marginBottom: 4 }}>Outstanding Balance</div>
             <div style={{ fontSize: 34, fontWeight: 900, color: '#D32F2F' }}>KSh {selected.balance.toLocaleString()}</div>
             <div style={{ fontSize: 11, color: '#EF5350', marginTop: 4 }}>{selected.daysOld === 0 ? 'Added today' : `${selected.daysOld} day${selected.daysOld > 1 ? 's' : ''} outstanding`}</div>
           </div>
-          <button className="btn" onClick={() => setShowRecord(true)} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(46,125,50,0.3)' }}>
+          <button className="btn" disabled={detailOfflineSnapshot} onClick={() => setShowRecord(true)} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: detailOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(46,125,50,0.3)', opacity: detailOfflineSnapshot ? 0.7 : 1 }}>
             💰 Record Payment
           </button>
-          <button className="btn" onClick={startCreditorSale} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(18,58,143,0.3)' }}>
+          <button className="btn" disabled={detailOfflineSnapshot} onClick={startCreditorSale} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: detailOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(18,58,143,0.3)', opacity: detailOfflineSnapshot ? 0.7 : 1 }}>
             🛒 Make Sale · Charge to Credit
           </button>
           <div className="card" style={{ padding: '16px' }}>
@@ -208,6 +288,11 @@ export default function CreditBookScreen({ onNavigate }: Props) {
       </div>
       {dataError && <div style={{ margin: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+        {listOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
+            Showing saved credit accounts{listSnapshotUpdatedAt ? ` from ${new Date(listSnapshotUpdatedAt).toLocaleString()}` : ''}. Payments and credit sales require internet.
+          </div>
+        )}
         {credits.map(cr => (
           <button key={cr.id} className="btn card" onClick={() => void handleSelect(cr)} style={{ width: '100%', marginBottom: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
             <div style={{ width: 46, height: 46, borderRadius: '50%', background: cr.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: 'white', flexShrink: 0 }}>{cr.initials}</div>

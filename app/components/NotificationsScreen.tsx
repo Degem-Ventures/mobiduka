@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type NotificationItem = { id: string; type: string; title: string; body: string; createdAt: string; read: boolean; icon: string }
@@ -24,55 +30,130 @@ interface Props { onNavigate: (s: string) => void }
 
 export default function NotificationsScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [items, setItems] = useState<NotificationItem[]>([])
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [dataError, setDataError] = useAutoDismissMessage()
   const [confirmClear, setConfirmClear] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
-    const session = getClientSession()
     if (!session) { setDataError('Please sign in to load notifications.'); return }
-    apiFetch<{ notifications: NotificationItem[] }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(response => setItems(response.notifications))
-      .catch(reason => setDataError(reason instanceof Error ? reason.message : 'Unable to load notifications.'))
-  }, [])
+    let cancelled = false
+    const businessId = session.user.businessId
+    const cacheKey = 'notifications.list.v1'
+    const loadNotifications = async () => {
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the notification snapshot timestamp.', reason)
+      }
+      try {
+        const response = await fetchCachedCollection<{ notifications: NotificationItem[] }>(
+          businessId,
+          cacheKey,
+          `/api/notifications?businessId=${encodeURIComponent(businessId)}`,
+        )
+        if (cancelled) return
+        setItems(response.notifications)
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+        } catch (reason) {
+          console.error('Unable to read the notification snapshot timestamp.', reason)
+        }
+        if (cancelled) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(
+          isNativeOfflineApp() &&
+          (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+        )
+        setDataError('')
+      } catch (reason) {
+        if (!cancelled) {
+          setDataError(reason instanceof Error ? reason.message : 'Unable to load notifications.')
+        }
+      }
+    }
+    const handleOnline = () => void loadNotifications()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setIsOfflineSnapshot(true)
+    }
+    void loadNotifications()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.businessId])
+
+  const saveNotificationSnapshot = async (notifications: NotificationItem[]) => {
+    const session = getClientSession()
+    if (!session) return
+    try {
+      await writeOfflineCollection(
+        session.user.businessId,
+        'notifications.list.v1',
+        { notifications },
+      )
+      setSnapshotUpdatedAt(await readOfflineCollectionUpdatedAt(session.user.businessId, 'notifications.list.v1'))
+    } catch (error) {
+      console.error('Unable to update the cached notifications.', error)
+    }
+  }
 
   const unreadCount = items.filter(n => !n.read).length
   const markAllRead = async () => {
     const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     try {
       await apiFetch('/api/notifications', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, markAllRead: true }) })
-      setItems(i => i.map(n => ({ ...n, read: true })))
+      const updatedItems = items.map(n => ({ ...n, read: true }))
+      setItems(updatedItems)
+      await saveNotificationSnapshot(updatedItems)
     } catch (reason) {
       setDataError(reason instanceof Error ? reason.message : 'Unable to mark notifications as read.')
     }
   }
   const markRead = async (id: string) => {
     const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     try {
       await apiFetch('/api/notifications', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, id }) })
-      setItems(i => i.map(n => n.id === id ? { ...n, read: true } : n))
+      const updatedItems = items.map(n => n.id === id ? { ...n, read: true } : n)
+      setItems(updatedItems)
+      await saveNotificationSnapshot(updatedItems)
     } catch (reason) {
       setDataError(reason instanceof Error ? reason.message : 'Unable to mark notification as read.')
     }
   }
   const deleteNotification = async (id: string) => {
     const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     try {
       await apiFetch('/api/notifications', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, id }) })
-      setItems(i => i.filter(n => n.id !== id)); setDeletingId(null)
+      const updatedItems = items.filter(n => n.id !== id)
+      setItems(updatedItems)
+      await saveNotificationSnapshot(updatedItems)
+      setDeletingId(null)
     } catch (reason) {
       setDataError(reason instanceof Error ? reason.message : 'Unable to delete notification.')
     }
   }
   const clearAll = async () => {
     const session = getClientSession()
-    if (!session) return
-    try { await apiFetch('/api/notifications', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, clearAll: true }) }); setItems([]); setConfirmClear(false) }
+    if (!session || isOfflineSnapshot) return
+    try {
+      await apiFetch('/api/notifications', { method: 'DELETE', body: JSON.stringify({ businessId: session.user.businessId, clearAll: true }) })
+      setItems([])
+      await saveNotificationSnapshot([])
+      setConfirmClear(false)
+    }
     catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to clear notifications.') }
   }
 
@@ -105,8 +186,8 @@ export default function NotificationsScreen({ onNavigate }: Props) {
       <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{title}</div>
       {data.map(n => (
         <div key={n.id} style={{ position: 'relative', marginBottom: 8 }}>
-        <button className="btn" onClick={() => { if (!n.read) void markRead(n.id) }} aria-label={n.read ? n.title : `Mark ${n.title} as read`} style={{
-          width: '100%', padding: '14px 48px 14px 16px', textAlign: 'left', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+        <button className="btn" disabled={isOfflineSnapshot} onClick={() => { if (!n.read) void markRead(n.id) }} aria-label={n.read ? n.title : `Mark ${n.title} as read`} style={{
+          width: '100%', padding: '14px 48px 14px 16px', textAlign: 'left', border: 'none', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit',
           background: n.read ? c.card : (typeColors[n.type] ?? typeColors.info).bg,
           borderRadius: 14, borderLeft: `3px solid ${n.read ? 'transparent' : (typeColors[n.type] ?? typeColors.info).dot}`,
           boxShadow: n.read ? '0 1px 4px rgba(0,0,0,0.06)' : `0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px ${(typeColors[n.type] ?? typeColors.info).border}`
@@ -127,7 +208,7 @@ export default function NotificationsScreen({ onNavigate }: Props) {
             </div>
           </div>
         </button>
-        <button className="btn" aria-label="Delete notification" onClick={() => deletingId === n.id ? void deleteNotification(n.id) : setDeletingId(n.id)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', minWidth: deletingId === n.id ? 62 : 28, height: 28, padding: deletingId === n.id ? '0 8px' : 0, borderRadius: 8, border: 'none', background: c.isDark ? 'rgba(211,47,47,0.2)' : 'rgba(211,47,47,0.09)', color: '#D32F2F', cursor: 'pointer', fontSize: deletingId === n.id ? 11 : 18, fontWeight: 700, fontFamily: 'inherit' }}>{deletingId === n.id ? 'Delete?' : '×'}</button>
+        <button className="btn" disabled={isOfflineSnapshot} aria-label="Delete notification" onClick={() => deletingId === n.id ? void deleteNotification(n.id) : setDeletingId(n.id)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', minWidth: deletingId === n.id ? 62 : 28, height: 28, padding: deletingId === n.id ? '0 8px' : 0, borderRadius: 8, border: 'none', background: c.isDark ? 'rgba(211,47,47,0.2)' : 'rgba(211,47,47,0.09)', color: '#D32F2F', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontSize: deletingId === n.id ? 11 : 18, fontWeight: 700, fontFamily: 'inherit' }}>{deletingId === n.id ? 'Delete?' : '×'}</button>
         </div>
       ))}
     </div>
@@ -152,12 +233,12 @@ export default function NotificationsScreen({ onNavigate }: Props) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 20, marginBottom: 16 }}>
           {unreadCount > 0 && (
-            <button className="btn" onClick={markAllRead} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: 11, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.94)', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={markAllRead} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: 11, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.94)', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit' }}>
               <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4L19 6" /><path d="M19 12v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-2" /></svg>
               Mark all read
             </button>
           )}
-          {items.length > 0 && <button className="btn" onClick={() => confirmClear ? void clearAll() : setConfirmClear(true)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38, background: confirmClear ? '#D32F2F' : 'rgba(211,47,47,0.17)', border: '1px solid rgba(255,138,128,0.3)', borderRadius: 11, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
+          {items.length > 0 && <button className="btn" disabled={isOfflineSnapshot} onClick={() => confirmClear ? void clearAll() : setConfirmClear(true)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38, background: confirmClear ? '#D32F2F' : 'rgba(211,47,47,0.17)', border: '1px solid rgba(255,138,128,0.3)', borderRadius: 11, padding: '8px 13px', fontSize: 12, fontWeight: 600, color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit' }}>
             <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2m3 0-.9 14H5.9L5 6m4 4v6m6-6v6" /></svg>
             {confirmClear ? 'Confirm clear' : 'Clear all'}
           </button>}
@@ -170,6 +251,11 @@ export default function NotificationsScreen({ onNavigate }: Props) {
         </div>
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
+            Showing saved notifications{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Notification changes require internet.
+          </div>
+        )}
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {today.length === 0 && yesterday.length === 0 && older.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: c.faint }}>

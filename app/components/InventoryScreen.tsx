@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
-import { fetchCachedCollection } from '../../lib/offline-store'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
 import { Html5Qrcode } from 'html5-qrcode'
 import { DEFAULT_INVENTORY_EMOJI, INVENTORY_EMOJIS } from '../utils/inventory-emojis'
 import { composeProductDisplayName } from '../../lib/product-display-name'
@@ -160,18 +164,25 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const [toast, setToast] = useState<Toast | null>(null)
   const [showBarcodeCamera, setShowBarcodeCamera] = useState(false)
   const [cameraError, setCameraError] = useAutoDismissMessage()
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  )
   const [fabPosition, setFabPosition] = useState<{ x: number; y: number } | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   // const toastTimeout = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const toastTimeout = useRef<number | null>(null);
 
-  const inventoryRequestId = useRef(0)
   const barcodeScannerRef = useRef<Html5Qrcode | null>(null)
   const inventoryScreenRef = useRef<HTMLDivElement | null>(null)
   const fabDragStart = useRef<{ pointerId: number; pointerX: number; pointerY: number; x: number; y: number } | null>(null)
   const fabWasDragged = useRef(false)
   const c = useColors()
   const session = getClientSession()
+  const isOfflineReadOnly = isNativeOfflineApp() && (
+    isOfflineSnapshot || session?.user.offline === true || !isOnline
+  )
 
   const notify = (message: string, tone: Toast['tone'] = 'success') => {
     if (toastTimeout.current) window.clearTimeout(toastTimeout.current)
@@ -235,59 +246,104 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
       setIsInventoryLoading(false)
       return
     }
-    const requestId = ++inventoryRequestId.current
-    setIsInventoryLoading(true)
-    setDataError('')
     const businessId = session.user.businessId
-    Promise.all([
-      fetchCachedCollection<ProductApiRow[]>(
-        businessId,
-        'inventory.products.v1',
-        `/api/products?businessId=${encodeURIComponent(businessId)}`,
-      ),
-      fetchCachedCollection<CategoryItem[]>(
-        businessId,
-        'inventory.categories.v1',
-        `/api/categories?businessId=${encodeURIComponent(businessId)}`,
-      ),
-      fetchCachedCollection<ProductApiRow[]>(
-        businessId,
-        'inventory.deleted_products.v1',
-        `/api/products?businessId=${encodeURIComponent(businessId)}&includeDeleted=true`,
-      ),
-    ]).then(([productRows, categoryRows, deletedRows]) => {
-      if (requestId !== inventoryRequestId.current) return
-      setDeletedProductCount(deletedRows.length)
-      setCategories([...categoryRows].sort((left, right) => left.name.localeCompare(right.name)))
-      const mapProduct = (product: typeof productRows[number]): ProductItem => {
-        const stock = Number(product.inventory?.quantity ?? 0)
-        const reorder = Number(product.minimumStock ?? 0)
-        return {
-          id: product.id,
-          name: product.name,
-          brand: product.brand ?? '',
-          productType: product.productType ?? '',
-          packSize: product.packSize ?? '',
-          categoryId: product.category?.id ?? null,
-          category: product.category?.name ?? 'Uncategorized',
-          cost: Number(product.costPrice ?? 0),
-          price: Number(product.sellingPrice ?? 0),
-          stock,
-          reorder,
-          emoji: product.emoji ?? product.category?.emoji ?? DEFAULT_INVENTORY_EMOJI,
-          status: getStatus(stock, reorder),
-          barcode: product.barcode,
-          deletedAt: product.deletedAt,
-        }
+    let active = true
+    let requestId = 0
+    const loadInventory = async () => {
+      const thisRequestId = ++requestId
+      const wasOffline = isNativeOfflineApp() &&
+        (!navigator.onLine || session.user.offline === true)
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(businessId, 'inventory.products.v1')
+      } catch (reason) {
+        console.error('Unable to read the inventory snapshot timestamp.', reason)
       }
-      setProducts(productRows.map(mapProduct).sort(sortProductsByCategoryThenName))
-      setDeletedProducts(deletedRows.map(mapProduct).sort(sortProductsByCategoryThenName))
-    }).catch(reason => {
-      if (requestId !== inventoryRequestId.current) return
-      setDataError(reason instanceof Error ? reason.message : 'Unable to load inventory.')
-    }).finally(() => {
-      if (requestId === inventoryRequestId.current) setIsInventoryLoading(false)
-    })
+      if (!active || thisRequestId !== requestId) return
+      setIsInventoryLoading(true)
+      setDataError('')
+      try {
+        const [productRows, categoryRows, deletedRows] = await Promise.all([
+          fetchCachedCollection<ProductApiRow[]>(
+            businessId,
+            'inventory.products.v1',
+            `/api/products?businessId=${encodeURIComponent(businessId)}`,
+          ),
+          fetchCachedCollection<CategoryItem[]>(
+            businessId,
+            'inventory.categories.v1',
+            `/api/categories?businessId=${encodeURIComponent(businessId)}`,
+          ),
+          fetchCachedCollection<ProductApiRow[]>(
+            businessId,
+            'inventory.deleted_products.v1',
+            `/api/products?businessId=${encodeURIComponent(businessId)}&includeDeleted=true`,
+          ),
+        ])
+        if (!active || thisRequestId !== requestId) return
+        setDeletedProductCount(deletedRows.length)
+        setCategories([...categoryRows].sort((left, right) => left.name.localeCompare(right.name)))
+        const mapProduct = (product: typeof productRows[number]): ProductItem => {
+          const stock = Number(product.inventory?.quantity ?? 0)
+          const reorder = Number(product.minimumStock ?? 0)
+          return {
+            id: product.id,
+            name: product.name,
+            brand: product.brand ?? '',
+            productType: product.productType ?? '',
+            packSize: product.packSize ?? '',
+            categoryId: product.category?.id ?? null,
+            category: product.category?.name ?? 'Uncategorized',
+            cost: Number(product.costPrice ?? 0),
+            price: Number(product.sellingPrice ?? 0),
+            stock,
+            reorder,
+            emoji: product.emoji ?? product.category?.emoji ?? DEFAULT_INVENTORY_EMOJI,
+            status: getStatus(stock, reorder),
+            barcode: product.barcode,
+            deletedAt: product.deletedAt,
+          }
+        }
+        setProducts(productRows.map(mapProduct).sort(sortProductsByCategoryThenName))
+        setDeletedProducts(deletedRows.map(mapProduct).sort(sortProductsByCategoryThenName))
+        const updatedAt = await readOfflineCollectionUpdatedAt(businessId, 'inventory.products.v1')
+        if (!active || thisRequestId !== requestId) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(
+          wasOffline ||
+          (isNativeOfflineApp() && updatedAt !== null && updatedAt === previousUpdatedAt),
+        )
+      } catch (reason) {
+        if (!active || thisRequestId !== requestId) return
+        setDataError(reason instanceof Error ? reason.message : 'Unable to load inventory.')
+      } finally {
+        if (active && thisRequestId === requestId) setIsInventoryLoading(false)
+      }
+    }
+    const handleOffline = () => {
+      setIsOnline(false)
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(true)
+        setShowAddProduct(false)
+        setShowAddCategory(false)
+        setShowManageCategories(false)
+        setShowManageProductTypes(false)
+        setPermanentDeleteTarget(null)
+      }
+      void loadInventory()
+    }
+    const handleConnectionRestored = () => {
+      setIsOnline(true)
+      void loadInventory()
+    }
+    void loadInventory()
+    window.addEventListener('online', handleConnectionRestored)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      active = false
+      window.removeEventListener('online', handleConnectionRestored)
+      window.removeEventListener('offline', handleOffline)
+    }
   }, [session?.user.businessId])
 
   useEffect(() => {
@@ -326,10 +382,16 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
 
   useEffect(() => {
     if (!initialBarcode) return
+    if (isOfflineReadOnly || !isOnline) {
+      const message = 'Inventory is read-only offline. Connect to the internet to add a scanned product.'
+      setDataError(message)
+      notify(message, 'error')
+      return
+    }
     setProductForm(createProductForm(categories[0]?.id ?? '', initialBarcode))
     setEditProduct(null)
     setShowAddProduct(true)
-  }, [initialBarcode, categories])
+  }, [initialBarcode, categories, isOfflineReadOnly, isOnline])
 
   useEffect(() => {
     if (!initialProductId || showAddProduct || selected) return
@@ -345,7 +407,16 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
 
   const toggleDeletedProducts = () => setShowDeleted(previous => !previous)
 
+  const requireOnlineInventoryWrite = () => {
+    if (!isOfflineReadOnly && isOnline && !session?.user.offline) return true
+    const message = 'Inventory is read-only offline. Connect and sign in online to make changes.'
+    setDataError(message)
+    notify(message, 'error')
+    return false
+  }
+
   const openEditProduct = (product: ProductItem) => {
+    if (!requireOnlineInventoryWrite()) return
     setProductForm({
       name: product.productType || product.name,
       brand: product.brand,
@@ -367,6 +438,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const deleteProduct = async (product: ProductItem) => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session || !window.confirm(`Move "${product.name}" to deleted items? You can restore it later.`)) return
     setSaving(true)
     setDataError('')
@@ -387,6 +459,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const restoreProduct = async (product: ProductItem) => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session) return
     setSaving(true)
     setDataError('')
@@ -406,6 +479,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const permanentlyDeleteItem = async () => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session || !permanentDeleteTarget) return
     setSaving(true)
     setPermanentDeleteError('')
@@ -433,6 +507,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const saveCategoryName = async (category: CategoryItem) => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session) return
     const name = editingCategoryName.trim()
     if (!name || name === category.name) {
@@ -462,6 +537,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const saveCategoryEmoji = async (category: CategoryItem, emoji: string) => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session) return
     setSaving(true)
     setDataError('')
@@ -479,6 +555,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const deleteCategory = async (category: CategoryItem) => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session || !window.confirm(`Move category "${category.name}" to deleted items? Categories with products cannot be deleted.`)) return
     setSaving(true)
     setDataError('')
@@ -496,6 +573,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const restoreCategory = async (category: CategoryItem) => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session) return
     setSaving(true)
     setDataError('')
@@ -514,6 +592,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   }
 
   const createInlineCategory = async () => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session || !newCat.name.trim()) return
     setSaving(true)
     setDataError('')
@@ -631,6 +710,11 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           className="scroll-area"
           style={{ padding: "16px", paddingBottom: 80 }}
         >
+          {isOfflineReadOnly && (
+            <div role="status" style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 10, background: '#FFF8E1', color: '#795548', fontSize: 11, lineHeight: 1.5 }}>
+              Offline · showing saved inventory{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Inventory changes require internet.
+            </div>
+          )}
           <div
             style={{
               display: "grid",
@@ -718,7 +802,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: 10 }}>
+          {!isOfflineReadOnly && <div style={{ display: "flex", gap: 10 }}>
             <button
               className="btn"
               onClick={() => openEditProduct(selected)}
@@ -773,7 +857,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
             >
               Purchase Order
             </button>
-          </div>
+          </div>}
         </div>
       </div>
     );
@@ -787,6 +871,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
   const formatStockValue = (value: number) => `KSh ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`
 
   const saveProduct = async () => {
+    if (!requireOnlineInventoryWrite()) return
     if (!session || !productForm.name.trim() || !productForm.categoryId) return
     const p = productForm
     setSaving(true)
@@ -856,6 +941,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
     })
   }
   const startNewProduct = () => {
+    if (!requireOnlineInventoryWrite()) return
     setProductForm(createProductForm(categories[0]?.id ?? ''))
     setBulkPurchase({ boxPrice: '', unitsPerBox: '', boxes: '1' })
     setShowBulkCalculator(false)
@@ -1328,17 +1414,22 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
       <div ref={inventoryScreenRef} className="screen" style={{ background: c.bg, position: 'relative' }}>
         {toastNode}
         {permanentDeleteTarget && <PermanentDeleteDialog target={permanentDeleteTarget} saving={saving} error={permanentDeleteError} onCancel={() => setPermanentDeleteTarget(null)} onConfirm={() => void permanentlyDeleteItem()} />}
+      {isOfflineReadOnly && (
+        <div role="status" style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: '#FFF8E1', color: '#795548', fontSize: 11, lineHeight: 1.5 }}>
+          Offline · showing saved inventory{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Inventory changes require internet.
+        </div>
+      )}
       {dataError && <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
       <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 16px 16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Inventory</div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          {!isOfflineReadOnly && <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={() => setShowManageCategories(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Categories</button>
             <button className="btn" onClick={startNewProduct} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
               <span style={{ fontSize: 16, color: '#0D1B3D', lineHeight: 1 }}>+</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Product</span>
             </button>
-          </div>
+          </div>}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
@@ -1414,12 +1505,10 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
                 {p.stock} units
               </span>
             </div>
-            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              <>
+            {!isOfflineReadOnly && <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                 <button className="btn" onClick={() => openEditProduct(p)} aria-label={`Edit ${p.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2 2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg></button>
                 <button className="btn" onClick={() => void deleteProduct(p)} disabled={saving} aria-label={`Delete ${p.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg></button>
-              </>
-            </div>
+            </div>}
           </div>
         ))}
         <div style={{ marginTop: 8, paddingTop: 12, borderTop: c.divider, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1438,7 +1527,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           {deletedProducts.length === 0 ? <div style={{ padding: '12px 0', fontSize: 12, color: c.muted, textAlign: 'center' }}>Your deleted products will appear here.</div> : deletedProducts.map(product => <div key={product.id} className="card deleted-item-row" style={{ marginBottom: 8, padding: '12px 14px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, border: '1px solid transparent' }}>
             <div style={{ width: 42, height: 42, borderRadius: 12, background: c.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 21 }}>{product.emoji}</div>
             <div style={{ flex: '1 1 130px', minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{product.name}</div><div style={{ fontSize: 11, color: c.faint }}>{product.category} · KSh {product.price}</div></div>
-            <div style={{ display: 'flex', gap: 7, marginLeft: 'auto' }}>
+            {!isOfflineReadOnly && <div style={{ display: 'flex', gap: 7, marginLeft: 'auto' }}>
               <button className="btn" onClick={() => void restoreProduct(product)} disabled={saving} style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, background: c.successBg, border: 'none', color: '#2E7D32', cursor: saving ? 'wait' : 'pointer', fontWeight: 700, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" /><path d="M3 3v5h5" /></svg>
                 Restore
@@ -1446,17 +1535,19 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
               <button className="btn deleted-item-permanent-action" onClick={() => { setPermanentDeleteError(''); setPermanentDeleteTarget({ kind: 'product', item: product }) }} disabled={saving} aria-label={`Permanently delete product ${product.name}`} title="Delete permanently" style={{ width: 36, height: 36, padding: 0, borderRadius: 10, background: c.errorBg, border: 'none', color: '#B71C1C', cursor: saving ? 'wait' : 'pointer', display: 'grid', placeItems: 'center' }}>
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>
               </button>
-            </div>
+            </div>}
           </div>)}
         </div>}
-        <button className="btn" onClick={() => setShowManageCategories(true)} style={{ width: '100%', marginTop: 10, padding: '12px', background: c.cardAlt, border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>
-          Manage Categories
-        </button>
+        {!isOfflineReadOnly && (
+          <button className="btn" onClick={() => setShowManageCategories(true)} style={{ width: '100%', marginTop: 10, padding: '12px', background: c.cardAlt, border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 12, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>
+            Manage Categories
+          </button>
+        )}
       </div>
 
       {/* FAB */}
-      <div style={{ position: 'absolute', ...(fabPosition ? { left: fabPosition.x, top: fabPosition.y } : { bottom: 80, right: 16 }) }}>
+      {!isOfflineReadOnly && <div style={{ position: 'absolute', ...(fabPosition ? { left: fabPosition.x, top: fabPosition.y } : { bottom: 80, right: 16 }) }}>
         <button
           className="btn"
           aria-label="Add product (drag to reposition)"
@@ -1474,7 +1565,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           touchAction: 'none', userSelect: 'none',
         }}>+</button>
-      </div>
+      </div>}
     </div>
   )
 }

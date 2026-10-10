@@ -192,11 +192,16 @@ export default function Dashboard({ onNavigate }: Props) {
       }
     }
     const handleOnline = () => void loadDashboard()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setIsOfflineSnapshot(true)
+    }
     void loadDashboard()
     window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
     return () => {
       cancelled = true
       window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
     }
   }, [])
 
@@ -215,7 +220,7 @@ export default function Dashboard({ onNavigate }: Props) {
         `/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`,
       )
         .then(response => setUnreadNotifications(response.unreadCount))
-        .catch(() => undefined)
+        .catch(reason => console.error('Unable to load the dashboard notification count.', reason))
     }
     refreshUnreadCount()
     window.addEventListener('mobiduka-notification', refreshUnreadCount)

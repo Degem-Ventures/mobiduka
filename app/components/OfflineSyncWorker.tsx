@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import {
   getOfflineSaleSyncStatus,
   isNativeOfflineApp,
+  refreshOfflinePinRosterIfNeeded,
   syncPendingOfflineSales,
 } from "../../lib/offline-store"
 import { getClientSession } from "../../lib/client-api"
@@ -23,6 +24,7 @@ export default function OfflineSyncWorker({ enabled }: { enabled: boolean }) {
     const userId = session?.user.id
     if (!businessId || !userId) return
     let cancelled = false
+    let lastRosterRefreshAttemptAt = 0
 
     const runSync = async () => {
       if (!navigator.onLine) {
@@ -67,6 +69,17 @@ export default function OfflineSyncWorker({ enabled }: { enabled: boolean }) {
           )
         }
         return
+      }
+      if (Date.now() - lastRosterRefreshAttemptAt >= 5 * 60 * 1000) {
+        lastRosterRefreshAttemptAt = Date.now()
+        try {
+          await refreshOfflinePinRosterIfNeeded(businessId)
+        } catch (error) {
+          console.error(
+            "Unable to refresh the offline business PIN roster.",
+            error,
+          )
+        }
       }
       let syncError: string | null = null
       try {

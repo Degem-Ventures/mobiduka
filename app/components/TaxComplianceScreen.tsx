@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props { onNavigate: (s: string) => void }
@@ -22,6 +28,7 @@ const defaultTaxConfig: TaxConfig = { vatEnabled: true, defaultRate: 'standard',
 
 export default function TaxComplianceScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [vatPin, setVatPin] = useState('')
   const [editingPin, setEditingPin] = useState(false)
   const [pinDraft, setPinDraft] = useState(vatPin)
@@ -31,21 +38,91 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useAutoDismissMessage()
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
-    const session = getClientSession()
     if (!session) { setError('Please sign in to load tax settings.'); setLoading(false); return }
-    void Promise.all([
-      apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}&includeTaxConfig=true`),
-    ]).then(([businessData, settingsData]) => {
+    let cancelled = false
+    const businessId = session.user.businessId
+    const cacheKey = 'settings.tax-compliance.v1'
+    const loadTaxSettings = async () => {
+      try {
+        const [businessData, settingsData] = await Promise.all([
+          apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(businessId)}`),
+          apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(businessId)}&includeTaxConfig=true`),
+        ])
         const pin = businessData.business.kraPin ?? ''
-        setVatPin(pin); setPinDraft(pin)
-        if (settingsData.preferences.taxConfig) setTaxConfig(settingsData.preferences.taxConfig)
-      })
-      .catch(reason => setError(reason instanceof Error ? reason.message : 'Tax preferences could not be loaded; defaults are ready to use.'))
-      .finally(() => setLoading(false))
-  }, [])
+        const config = settingsData.preferences.taxConfig ?? defaultTaxConfig
+        try {
+          await writeOfflineCollection(businessId, cacheKey, config)
+        } catch (reason) {
+          console.error('Unable to cache tax settings for offline use.', reason)
+        }
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+        } catch (reason) {
+          console.error('Unable to read the tax settings snapshot timestamp.', reason)
+        }
+        if (cancelled) return
+        setVatPin(pin)
+        setPinDraft(pin)
+        setTaxConfig(config)
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(isNativeOfflineApp() && !navigator.onLine)
+        setError('')
+      } catch (reason) {
+        const canUseCache =
+          reason instanceof TypeError ||
+          (reason instanceof ApiResponseError && reason.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) {
+          if (!cancelled) setError(reason instanceof Error ? reason.message : 'Tax preferences could not be loaded.')
+          return
+        }
+        try {
+          const cached = await readOfflineCollection<TaxConfig>(businessId, cacheKey)
+          if (cached === null) {
+            throw new Error('Tax settings are not available offline yet. Connect to the internet once to load them.')
+          }
+          let updatedAt: string | null = null
+          try {
+            updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+          } catch (error) {
+            console.error('Unable to read the tax settings snapshot timestamp.', error)
+          }
+          if (cancelled) return
+          setVatPin('')
+          setPinDraft('')
+          setTaxConfig(cached)
+          setSnapshotUpdatedAt(updatedAt)
+          setIsOfflineSnapshot(true)
+          setError('')
+        } catch (cacheError) {
+          if (!cancelled) setError(cacheError instanceof Error ? cacheError.message : 'Unable to load saved tax settings.')
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    const handleOnline = () => void loadTaxSettings()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(true)
+        setEditingPin(false)
+        setVatPin('')
+        setPinDraft('')
+      }
+    }
+    void loadTaxSettings()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.businessId])
 
   const savePin = () => {
     if (pinDraft.trim().length < 10) { setPinError('KRA PIN must be at least 10 characters'); return }
@@ -55,14 +132,19 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
   }
 
   const handleSave = async () => {
-    const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     setSaving(true); setError('')
     try {
       await Promise.all([
         apiFetch('/api/business', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, taxPin: vatPin || null }) }),
         apiFetch('/api/settings', { method: 'PATCH', body: JSON.stringify({ businessId: session.user.businessId, taxConfig }) }),
       ])
+      try {
+        await writeOfflineCollection(session.user.businessId, 'settings.tax-compliance.v1', taxConfig)
+        setSnapshotUpdatedAt(await readOfflineCollectionUpdatedAt(session.user.businessId, 'settings.tax-compliance.v1'))
+      } catch (reason) {
+        console.error('Unable to update the cached tax settings.', reason)
+      }
       setSaved(true); window.setTimeout(() => setSaved(false), 2000)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save tax settings.') }
     finally { setSaving(false) }
@@ -80,6 +162,11 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 100 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+            Showing saved tax settings{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. KRA PIN is not stored offline; tax changes require internet.
+          </div>
+        )}
         {error && <div style={{ background: c.tint('#D32F2F'), border: '1px solid rgba(211,47,47,0.25)', borderRadius: 12, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#D32F2F' }}>{error}</div>}
         {saved && (
           <div style={{ background: c.successBg, border: `1px solid ${c.isDark ? 'rgba(46,125,50,0.4)' : '#C8E6C9'}`, borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -94,7 +181,8 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>KRA PIN</label>
               <input
-                className="input"
+              disabled={isOfflineSnapshot}
+              className="input"
                 value={pinDraft}
                 onChange={e => { setPinDraft(e.target.value.toUpperCase()); setPinError('') }}
                 placeholder="e.g. A123456789B"
@@ -103,17 +191,17 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
               />
               {pinError && <div style={{ fontSize: 12, color: '#D32F2F', marginBottom: 10 }}>⚠️ {pinError}</div>}
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={() => { setEditingPin(false); setPinDraft(vatPin); setPinError('') }} style={{ flex: 1, padding: '10px', background: 'none', border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: c.muted, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-                <button className="btn" onClick={savePin} style={{ flex: 2, padding: '10px', background: '#123A8F', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>Save PIN</button>
+                <button className="btn" disabled={isOfflineSnapshot} onClick={() => { setEditingPin(false); setPinDraft(vatPin); setPinError('') }} style={{ flex: 1, padding: '10px', background: 'none', border: `1px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: c.muted, cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                <button className="btn" disabled={isOfflineSnapshot} onClick={savePin} style={{ flex: 2, padding: '10px', background: '#123A8F', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit' }}>Save PIN</button>
               </div>
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, color: c.muted, marginBottom: 4 }}>KRA PIN</div>
-                <div style={{ fontSize: 17, fontWeight: 800, color: c.text, fontFamily: 'monospace', letterSpacing: 2 }}>{vatPin}</div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: c.text, fontFamily: 'monospace', letterSpacing: 2 }}>{isOfflineSnapshot ? 'Not available offline' : vatPin}</div>
               </div>
-              <button className="btn" onClick={() => { setEditingPin(true); setPinDraft(vatPin) }} style={{ background: c.iconBg, border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button className="btn" disabled={isOfflineSnapshot} onClick={() => { setEditingPin(true); setPinDraft(vatPin) }} style={{ background: c.iconBg, border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#123A8F', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 Edit
               </button>
@@ -129,7 +217,7 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>Enable VAT</div>
               <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>Apply VAT to applicable sales</div>
             </div>
-            <button className="btn" onClick={() => setTaxConfig(config => ({ ...config, vatEnabled: !config.vatEnabled }))} style={{ width: 48, height: 27, borderRadius: 14, border: 'none', cursor: 'pointer', background: taxConfig.vatEnabled ? '#123A8F' : (c.isDark ? '#1A3366' : '#D0D7E8'), position: 'relative', transition: 'background 0.2s' }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => setTaxConfig(config => ({ ...config, vatEnabled: !config.vatEnabled }))} style={{ width: 48, height: 27, borderRadius: 14, border: 'none', cursor: isOfflineSnapshot ? 'default' : 'pointer', background: taxConfig.vatEnabled ? '#123A8F' : (c.isDark ? '#1A3366' : '#D0D7E8'), position: 'relative', transition: 'background 0.2s' }}>
               <div style={{ position: 'absolute', top: 3, left: taxConfig.vatEnabled ? 24 : 3, width: 21, height: 21, borderRadius: '50%', background: 'white', transition: 'left 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.25)' }} />
             </button>
           </div>
@@ -137,11 +225,11 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
             <div style={{ fontSize: 12, fontWeight: 600, color: c.muted, marginBottom: 10 }}>Default Tax Rate</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {taxCategories.map(tc => (
-                <button key={tc.id} className="btn" onClick={() => setTaxConfig(config => ({ ...config, defaultRate: tc.id as TaxRate }))} style={{
+                <button key={tc.id} className="btn" disabled={isOfflineSnapshot} onClick={() => setTaxConfig(config => ({ ...config, defaultRate: tc.id as TaxRate }))} style={{
                   display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 12, border: 'none',
                   background: taxConfig.defaultRate === tc.id ? (c.isDark ? 'rgba(18,58,143,0.25)' : 'rgba(18,58,143,0.07)') : c.cardAlt,
                   outline: taxConfig.defaultRate === tc.id ? '2px solid #123A8F' : 'none',
-                  cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                  cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', textAlign: 'left',
                 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: tc.rate > 8 ? c.tint('#D32F2F') : tc.rate > 0 ? c.tint('#F57C00') : c.tint('#2E7D32'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: tc.rate > 8 ? '#D32F2F' : tc.rate > 0 ? '#F57C00' : '#2E7D32', flexShrink: 0 }}>
                     {tc.rate}%
@@ -162,7 +250,7 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
         <div className="card" style={{ padding: '12px', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 8 }}>
             {filingPeriods.map(p => (
-              <button key={p} className="btn" onClick={() => setTaxConfig(config => ({ ...config, filingPeriod: p as FilingPeriod }))} style={{ flex: 1, padding: '11px 6px', borderRadius: 10, border: taxConfig.filingPeriod === p ? '2px solid #123A8F' : `1.5px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, background: taxConfig.filingPeriod === p ? (c.isDark ? 'rgba(18,58,143,0.25)' : 'rgba(18,58,143,0.08)') : c.card, color: taxConfig.filingPeriod === p ? '#123A8F' : c.muted, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{p}</button>
+              <button key={p} className="btn" disabled={isOfflineSnapshot} onClick={() => setTaxConfig(config => ({ ...config, filingPeriod: p as FilingPeriod }))} style={{ flex: 1, padding: '11px 6px', borderRadius: 10, border: taxConfig.filingPeriod === p ? '2px solid #123A8F' : `1.5px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`, background: taxConfig.filingPeriod === p ? (c.isDark ? 'rgba(18,58,143,0.25)' : 'rgba(18,58,143,0.08)') : c.card, color: taxConfig.filingPeriod === p ? '#123A8F' : c.muted, fontSize: 13, fontWeight: 600, cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit' }}>{p}</button>
             ))}
           </div>
         </div>
@@ -175,19 +263,19 @@ export default function TaxComplianceScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>Enable eTIMS</div>
               <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>KRA electronic tax invoice system</div>
             </div>
-            <button className="btn" onClick={() => setTaxConfig(config => ({ ...config, etimsEnabled: !config.etimsEnabled }))} style={{ width: 48, height: 27, borderRadius: 14, border: 'none', cursor: 'pointer', background: taxConfig.etimsEnabled ? '#123A8F' : (c.isDark ? '#1A3366' : '#D0D7E8'), position: 'relative', transition: 'background 0.2s' }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => setTaxConfig(config => ({ ...config, etimsEnabled: !config.etimsEnabled }))} style={{ width: 48, height: 27, borderRadius: 14, border: 'none', cursor: isOfflineSnapshot ? 'default' : 'pointer', background: taxConfig.etimsEnabled ? '#123A8F' : (c.isDark ? '#1A3366' : '#D0D7E8'), position: 'relative', transition: 'background 0.2s' }}>
               <div style={{ position: 'absolute', top: 3, left: taxConfig.etimsEnabled ? 24 : 3, width: 21, height: 21, borderRadius: '50%', background: 'white', transition: 'left 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.25)' }} />
             </button>
           </div>
           {taxConfig.etimsEnabled && (
             <div style={{ padding: '13px 0' }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 8 }}>Device Serial Number</label>
-              <input className="input" placeholder="e.g. KRA-ETIMS-0001234" value={taxConfig.etimsDevice} onChange={e => setTaxConfig(config => ({ ...config, etimsDevice: e.target.value }))} style={{ fontFamily: 'monospace' }} />
+              <input className="input" disabled={isOfflineSnapshot} placeholder="e.g. KRA-ETIMS-0001234" value={taxConfig.etimsDevice} onChange={e => setTaxConfig(config => ({ ...config, etimsDevice: e.target.value }))} style={{ fontFamily: 'monospace' }} />
             </div>
           )}
         </div>
 
-        <button className="btn" onClick={handleSave} disabled={loading || saving} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: loading || saving ? 'wait' : 'pointer', opacity: loading || saving ? 0.7 : 1, fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+        <button className="btn" onClick={handleSave} disabled={loading || saving || isOfflineSnapshot} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: loading || saving || isOfflineSnapshot ? 'default' : 'pointer', opacity: loading || saving || isOfflineSnapshot ? 0.7 : 1, fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
           {saving ? 'Saving…' : 'Save Tax Settings'}
         </button>
       </div>

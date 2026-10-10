@@ -7,11 +7,14 @@ import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
 import {
   commitOfflineCashSale,
   fetchCachedCollection,
+  getQueuedOfflineCashSales,
   getOfflineSaleSyncStatus,
   isNativeOfflineApp,
   readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
   retryFailedOfflineSales,
   writeOfflineCollection,
+  type QueuedOfflineCashSale,
 } from "../../lib/offline-store"
 
 type ProductItem = {
@@ -60,6 +63,7 @@ type HistoricalReceipt = {
   cashier: string
   customer: string | null
   paymentMethod: string
+  syncState?: "PENDING" | "FAILED"
   items: Array<{
     id: string
     name: string
@@ -99,6 +103,7 @@ type PosDraft = {
 const cartDraftKey = (businessId: string, userId: string) =>
   `mobiduka.pos_draft.v1:${businessId}:${userId}`
 const receiptPageSize = 10
+const receiptHistoryCacheKey = "pos.receipt_history.v1"
 const deviceUuidStorageKey = (businessId: string) =>
   `mobiduka.registered_device.v1:${businessId}`
 const deviceShiftStorageKey = (businessId: string) =>
@@ -107,6 +112,37 @@ const deviceShiftRosterKey = (businessId: string) =>
   `mobiduka.shift_roster.v1:${businessId}`
 const normalizePaymentMethod = (value: string) =>
   value.toLowerCase().replace(/[^a-z]/g, "")
+const mapQueuedSalesToReceipts = (
+  sales: QueuedOfflineCashSale[],
+  products: ProductItem[],
+  operators: ActiveOperator[],
+  fallbackCashier: string,
+): HistoricalReceipt[] =>
+  sales.map(sale => ({
+    id: sale.id,
+    saleNumber: sale.payload.saleNumber,
+    createdAt: sale.createdAt,
+    businessName: "This business",
+    businessBranch: null,
+    subtotal: Number(sale.payload.subtotal),
+    discountAmount: Number(sale.payload.discount),
+    total: Number(sale.payload.total),
+    cashier: operators.find(operator => operator.id === sale.payload.cashierId)?.name ?? fallbackCashier,
+    customer: null,
+    paymentMethod: "CASH",
+    syncState: sale.status,
+    items: sale.payload.items.map(item => {
+      const product = products.find(row => row.id === item.productId)
+      return {
+        id: item.productId,
+        name: product?.name ?? "Product",
+        price: Number(item.unitPrice),
+        quantity: Number(item.quantity),
+        total: Number(item.total),
+        emoji: product?.emoji ?? "📦",
+      }
+    }),
+  }))
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -167,10 +203,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [receiptHistoryLoadingMore, setReceiptHistoryLoadingMore] = useState(false)
   const [receiptHistoryError, setReceiptHistoryError] = useAutoDismissMessage()
   const [receiptHistoryRefresh, setReceiptHistoryRefresh] = useState(0)
+  const [receiptHistoryIsSnapshot, setReceiptHistoryIsSnapshot] = useState(false)
+  const [receiptHistoryUpdatedAt, setReceiptHistoryUpdatedAt] = useState<string | null>(null)
   const [historicalReceipt, setHistoricalReceipt] = useState<HistoricalReceipt | null>(null)
   const [viewingPastReceipt, setViewingPastReceipt] = useState(false)
   const [isCartDraftReady, setIsCartDraftReady] = useState(false)
   const [hasLoadedPOSData, setHasLoadedPOSData] = useState(false)
+  const [isPOSDataSnapshot, setIsPOSDataSnapshot] = useState(false)
+  const [posProductsUpdatedAt, setPosProductsUpdatedAt] = useState<string | null>(null)
   const [pendingOfflineSales, setPendingOfflineSales] = useState(0)
   const [failedOfflineSales, setFailedOfflineSales] = useState(0)
   const [offlineSyncError, setOfflineSyncError] = useState("")
@@ -308,67 +348,149 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     let cancelled = false
     setReceiptHistoryLoading(true)
     setReceiptHistoryError("")
-    apiFetch<ReceiptHistoryResponse>(
-      `/api/sales?businessId=${encodeURIComponent(currentBusinessId)}&limit=${receiptPageSize}`,
-    )
-      .then((response) => {
+    const loadHistory = async () => {
+      try {
+        const wasOffline = isNativeOfflineApp() &&
+          (!navigator.onLine || session?.user.offline === true)
+        const previousUpdatedAt = await readOfflineCollectionUpdatedAt(
+          currentBusinessId,
+          receiptHistoryCacheKey,
+        )
+        let response: ReceiptHistoryResponse | null
+        if (wasOffline) {
+          response = await readOfflineCollection<ReceiptHistoryResponse>(
+            currentBusinessId,
+            receiptHistoryCacheKey,
+          )
+          if (!response) {
+            setReceiptHistoryError("Server receipt history is not saved on this device yet.")
+          }
+        } else {
+          response = await fetchCachedCollection<ReceiptHistoryResponse>(
+            currentBusinessId,
+            receiptHistoryCacheKey,
+            `/api/sales?businessId=${encodeURIComponent(currentBusinessId)}&limit=${receiptPageSize}`,
+          )
+        }
+        const queuedSales = isNativeOfflineApp()
+          ? await getQueuedOfflineCashSales(currentBusinessId)
+          : []
         if (cancelled) return
-        setReceiptHistory(response.receipts)
-        setReceiptHistoryCursor(response.nextCursor)
-      })
-      .catch((reason) => {
+        const savedAt = await readOfflineCollectionUpdatedAt(
+          currentBusinessId,
+          receiptHistoryCacheKey,
+        )
+        if (cancelled) return
+        setReceiptHistoryUpdatedAt(savedAt)
+        setReceiptHistoryIsSnapshot(
+          wasOffline ||
+          (isNativeOfflineApp() && savedAt !== null && previousUpdatedAt === savedAt),
+        )
+        const serverReceipts = response?.receipts ?? []
+        const serverReceiptIds = new Set(serverReceipts.map(receipt => receipt.id))
+        const serverReceiptNumbers = new Set(serverReceipts.map(receipt => receipt.saleNumber))
+        const localReceipts = mapQueuedSalesToReceipts(
+          queuedSales.filter(sale =>
+            !serverReceiptIds.has(sale.id) &&
+            !serverReceiptNumbers.has(sale.payload.saleNumber),
+          ),
+          products,
+          activeOperators,
+          session?.user.name ?? "Cashier",
+        )
+        setReceiptHistory(
+          [...localReceipts, ...serverReceipts].sort(
+            (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+          ),
+        )
+        setReceiptHistoryCursor(wasOffline ? null : response?.nextCursor ?? null)
+        if (response || queuedSales.length > 0) setReceiptHistoryError("")
+      } catch (reason) {
         if (cancelled) return
         setReceiptHistoryError(
-          reason instanceof Error
-            ? reason.message
-            : "Unable to load receipt history.",
+          reason instanceof Error ? reason.message : "Unable to load receipt history.",
         )
-      })
-      .finally(() => {
+        try {
+          const queuedSales = isNativeOfflineApp()
+            ? await getQueuedOfflineCashSales(currentBusinessId)
+            : []
+          if (!cancelled && queuedSales.length > 0) {
+            setReceiptHistory(
+              mapQueuedSalesToReceipts(
+                queuedSales,
+                products,
+                activeOperators,
+                session?.user.name ?? "Cashier",
+              ),
+            )
+          }
+        } catch (queueError) {
+          console.error("Unable to read locally queued receipts.", queueError)
+        }
+      } finally {
         if (!cancelled) setReceiptHistoryLoading(false)
-      })
+      }
+    }
+    void loadHistory()
+    const handleOnline = () => setReceiptHistoryRefresh(value => value + 1)
+    window.addEventListener("online", handleOnline)
     return () => {
       cancelled = true
+      window.removeEventListener("online", handleOnline)
     }
-  }, [currentBusinessId, receiptHistoryRefresh, view])
+  }, [currentBusinessId, receiptHistoryRefresh, view, products, activeOperators, session?.user.name, session?.user.offline])
 
   useEffect(() => {
     if (!session) {
       setDataError("Please sign in to load products and customers.")
       return
     }
-    Promise.all([
-      fetchCachedCollection<Array<{
-        id: string
-        name: string
-        emoji: string | null
-        barcode: string | null
-        sellingPrice: number | null
-        recentUnitsSold: number
-        category: { id: string; name: string; emoji: string | null } | null
-        inventory: { quantity: number } | null
-      }>>(
-        session.user.businessId,
-        "pos.products.v1",
-        `/api/products?businessId=${encodeURIComponent(session.user.businessId)}`,
-      ),
-      fetchCachedCollection<Array<{ id: string; name: string; emoji: string | null }>>(
-        session.user.businessId,
-        "pos.categories.v1",
-        `/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`,
-      ),
-      fetchCachedCollection<Array<{
-        id: string
-        name: string
-        phone: string | null
-        creditAccount: { balance: number } | null
-      }>>(
-        session.user.businessId,
-        "pos.customers.v1",
-        `/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`,
-      ),
-    ])
-      .then(([productRows, categoryRows, customerRows]) => {
+    const businessId = session.user.businessId
+    let active = true
+    let requestId = 0
+    const loadPOSData = async () => {
+      const thisRequestId = ++requestId
+      const wasOffline = isNativeOfflineApp() &&
+        (!navigator.onLine || session.user.offline === true)
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(businessId, "pos.products.v1")
+      } catch (reason) {
+        console.error("Unable to read the POS product snapshot timestamp.", reason)
+      }
+      try {
+        const [productRows, categoryRows, customerRows] = await Promise.all([
+          fetchCachedCollection<Array<{
+            id: string
+            name: string
+            emoji: string | null
+            barcode: string | null
+            sellingPrice: number | null
+            recentUnitsSold: number
+            category: { id: string; name: string; emoji: string | null } | null
+            inventory: { quantity: number } | null
+          }>>(
+            businessId,
+            "pos.products.v1",
+            `/api/products?businessId=${encodeURIComponent(businessId)}`,
+          ),
+          fetchCachedCollection<Array<{ id: string; name: string; emoji: string | null }>>(
+            businessId,
+            "pos.categories.v1",
+            `/api/categories?businessId=${encodeURIComponent(businessId)}`,
+          ),
+          fetchCachedCollection<Array<{
+            id: string
+            name: string
+            phone: string | null
+            creditAccount: { balance: number } | null
+          }>>(
+            businessId,
+            "pos.customers.v1",
+            `/api/customers?businessId=${encodeURIComponent(businessId)}`,
+          ),
+        ])
+        if (!active || thisRequestId !== requestId) return
         setCategoryRows(categoryRows)
         setProducts(
           productRows.map((product) => ({
@@ -390,16 +512,33 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             balance: Number(customer.creditAccount?.balance ?? 0),
           })),
         )
+        const updatedAt = await readOfflineCollectionUpdatedAt(businessId, "pos.products.v1")
+        if (!active || thisRequestId !== requestId) return
+        setPosProductsUpdatedAt(updatedAt)
+        setIsPOSDataSnapshot(
+          isNativeOfflineApp() &&
+          (wasOffline || (updatedAt !== null && updatedAt === previousUpdatedAt)),
+        )
+        setDataError("")
         setHasLoadedPOSData(true)
-      })
-      .catch((reason) =>
-        {
+      } catch (reason) {
+        if (!active || thisRequestId !== requestId) return
           setHasLoadedPOSData(true)
           setDataError(
             reason instanceof Error ? reason.message : "Unable to load POS data.",
           )
-        },
-      )
+      }
+    }
+    const handleOnline = () => void loadPOSData()
+    const handleOffline = () => void loadPOSData()
+    void loadPOSData()
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+    return () => {
+      active = false
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
   }, [session?.user.businessId])
 
   useEffect(() => {
@@ -1126,6 +1265,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
 
   const loadMoreReceiptHistory = async () => {
     if (!receiptHistoryCursor || receiptHistoryLoadingMore) return
+    if (!navigator.onLine || session?.user.offline) {
+      setReceiptHistoryError("Loading older server receipts requires an online sign-in.")
+      return
+    }
     setReceiptHistoryLoadingMore(true)
     setReceiptHistoryError("")
     try {
@@ -1249,6 +1392,21 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               >
                 Saved on this device · {pendingOfflineSales} sale
                 {pendingOfflineSales === 1 ? "" : "s"} waiting to sync
+              </div>
+            )}
+            {viewingPastReceipt && pastReceipt?.syncState && (
+              <div
+                role="status"
+                style={{
+                  color: "white",
+                  fontSize: 12,
+                  marginTop: 8,
+                  opacity: 0.9,
+                }}
+              >
+                {pastReceipt.syncState === "FAILED"
+                  ? "Saved on this device · sync failed; retry from On-device Sync"
+                  : "Saved on this device · waiting to sync"}
               </div>
             )}
             {!viewingPastReceipt && receiptInfo?.syncState === "PENDING" &&
@@ -1673,6 +1831,24 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: "16px", paddingBottom: 90 }}>
+          {receiptHistoryIsSnapshot && (
+            <div
+              role="status"
+              style={{
+                padding: "10px 12px",
+                marginBottom: 14,
+                borderRadius: 10,
+                background: c.warningBg,
+                color: c.isDark ? "#F0D060" : "#795548",
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              {receiptHistoryUpdatedAt
+                ? `Showing saved receipt history · saved ${new Date(receiptHistoryUpdatedAt).toLocaleString()}. Device-queued receipts are shown separately until synchronized.`
+                : "Offline receipt history is not cached yet; only device-queued sales are available."}
+            </div>
+          )}
           {receiptHistoryError && (
             <div
               role="alert"
@@ -1887,6 +2063,18 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                           Latest
                         </span>
                       )}
+                      {receipt.syncState && (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: 9,
+                            background: receipt.syncState === "FAILED" ? c.errorBg : c.warningBg,
+                            color: receipt.syncState === "FAILED" ? "#C62828" : "#8B6914",
+                          }}
+                        >
+                          {receipt.syncState === "FAILED" ? "Sync failed" : "Pending sync"}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 11, color: c.muted }}>
                       {new Date(receipt.createdAt).toLocaleDateString("en-GB", {
@@ -1942,7 +2130,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               )
             })
           )}
-          {receiptHistoryCursor && (
+          {receiptHistoryCursor && !receiptHistoryIsSnapshot && navigator.onLine && !session?.user.offline && (
             <button
               className="btn"
               onClick={() => void loadMoreReceiptHistory()}
@@ -3590,6 +3778,12 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             <button className="btn" onClick={() => { setSelectedCreditor(null); setPaymentMethod("cash") }} style={{ marginLeft: "auto", border: "none", background: "transparent", color: "#B71C1C", font: "inherit", cursor: "pointer" }}>
               Change
             </button>
+          </div>
+        )}
+
+        {isPOSDataSnapshot && (
+          <div role="status" style={{ marginBottom: 10, padding: "8px 11px", borderRadius: 10, background: c.warningBg, color: c.isDark ? "#F0D060" : "#795548", fontSize: 11, lineHeight: 1.45 }}>
+            Offline · using saved POS catalog{posProductsUpdatedAt ? ` from ${new Date(posProductsUpdatedAt).toLocaleString()}` : ''}. Stock availability is based on the last saved snapshot.
           </div>
         )}
 

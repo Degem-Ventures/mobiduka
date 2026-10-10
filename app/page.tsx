@@ -28,8 +28,12 @@ import ManageRolesScreen from "./components/ManageRolesScreen";
 import OfflineSyncWorker from "./components/OfflineSyncWorker";
 import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen";
 import TaxComplianceScreen from "./components/TaxComplianceScreen";
-import { apiFetch, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
-import { isNativeOfflineApp } from "../lib/offline-store";
+import { ApiResponseError, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from "../lib/offline-store";
 
 type Screen =
   | "login"
@@ -166,6 +170,8 @@ function AppInner() {
   const [isHydratingSession, setIsHydratingSession] = useState(true);
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
+  const [activeShiftsAreSnapshot, setActiveShiftsAreSnapshot] = useState(false);
+  const [activeShiftsUpdatedAt, setActiveShiftsUpdatedAt] = useState<string | null>(null);
   const [openActiveShift, setOpenActiveShift] = useState(false);
   const [shiftBannerPosition, setShiftBannerPosition] = useState({ y: 0 });
   const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null);
@@ -231,13 +237,20 @@ function AppInner() {
     }
 
     let cancelled = false;
+    const cacheKey = "shifts.active-summary.v1";
     const loadActiveShifts = async () => {
       const clientSession = getClientSession();
       if (!clientSession) return;
+      let previousUpdatedAt: string | null = null;
       try {
-        const response = await apiFetch<{
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(clientSession.user.businessId, cacheKey);
+      } catch (error) {
+        console.error("Unable to read the active-shift snapshot timestamp.", error);
+      }
+      try {
+        const response = await fetchCachedCollection<{
           sessions: Array<{ closedAt: string | null; cashier: { fullName: string; role: { name: string } | null } | null }>;
-        }>(`/api/cash/session?businessId=${encodeURIComponent(clientSession.user.businessId)}`);
+        }>(clientSession.user.businessId, cacheKey, `/api/cash/session?businessId=${encodeURIComponent(clientSession.user.businessId)}`);
         if (cancelled) return;
         const active = response.sessions.filter((session) =>
           !session.closedAt &&
@@ -245,10 +258,26 @@ function AppInner() {
         );
         setActiveShiftCount(active.length);
         setActiveShiftNames(active.map((session) => session.cashier?.fullName ?? "Unassigned"));
-      } catch {
-        if (!cancelled) {
+        let updatedAt: string | null = null;
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(clientSession.user.businessId, cacheKey);
+        } catch (error) {
+          console.error("Unable to read the active-shift snapshot timestamp.", error);
+        }
+        if (cancelled) return;
+        setActiveShiftsUpdatedAt(updatedAt);
+        setActiveShiftsAreSnapshot(
+          isNativeOfflineApp() &&
+          (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+        );
+      } catch (error) {
+        if (!cancelled && error instanceof ApiResponseError && [401, 403].includes(error.status)) {
           setActiveShiftCount(0);
           setActiveShiftNames([]);
+          setActiveShiftsAreSnapshot(false);
+          setActiveShiftsUpdatedAt(null);
+        } else if (!cancelled) {
+          console.error("Unable to load active shifts.", error);
         }
       }
     };
@@ -256,10 +285,18 @@ function AppInner() {
     void loadActiveShifts();
     const refreshTimer = window.setInterval(() => void loadActiveShifts(), 30000);
     window.addEventListener('mobiduka:shift-changed', loadActiveShifts);
+    const handleOnline = () => void loadActiveShifts();
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setActiveShiftsAreSnapshot(true);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     return () => {
       cancelled = true;
       window.clearInterval(refreshTimer);
       window.removeEventListener('mobiduka:shift-changed', loadActiveShifts);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, [loggedIn, screen]);
 
@@ -561,15 +598,17 @@ function AppInner() {
             )}
           </div>
         )}
-        {loggedIn && screen !== "login" && activeShiftCount > 0 && (
+        {loggedIn && screen !== "login" && !offlineSession && activeShiftCount > 0 && (
           <button
             className="btn"
             onPointerDown={(event) => {
+              if (activeShiftsAreSnapshot) return;
               shiftBannerDrag.current = { x: event.clientX, y: event.clientY };
               shiftBannerWasDragged.current = false;
               event.currentTarget.setPointerCapture(event.pointerId);
             }}
             onPointerMove={(event) => {
+              if (activeShiftsAreSnapshot) return;
               const start = shiftBannerDrag.current;
               if (!start) return;
               const deltaY = event.clientY - start.y;
@@ -582,6 +621,7 @@ function AppInner() {
             onPointerUp={() => { shiftBannerDrag.current = null; }}
             onPointerCancel={() => { shiftBannerDrag.current = null; }}
             onClick={() => {
+              if (activeShiftsAreSnapshot) return;
               if (shiftBannerWasDragged.current) {
                 shiftBannerWasDragged.current = false;
                 return;
@@ -606,8 +646,8 @@ function AppInner() {
               alignItems: "center",
               gap: 8,
               textAlign: "left",
-              cursor: "grab",
-              touchAction: "none",
+              cursor: activeShiftsAreSnapshot ? "default" : "grab",
+              touchAction: activeShiftsAreSnapshot ? "auto" : "none",
               userSelect: "none",
               fontFamily: "inherit",
               fontSize: 12,
@@ -622,10 +662,12 @@ function AppInner() {
               ◷
             </span>
             <span style={{ flex: 1 }}>
-              {activeShiftCount} shift{activeShiftCount === 1 ? "" : "s"} in progress
+              {activeShiftsAreSnapshot
+                ? `Saved shift status${activeShiftsUpdatedAt ? ` · ${new Date(activeShiftsUpdatedAt).toLocaleString()}` : ""}`
+                : `${activeShiftCount} shift${activeShiftCount === 1 ? "" : "s"} in progress`}
               {activeShiftNames.length > 0 ? ` · ${activeShiftNames.join(", ")}` : ""}
             </span>
-            <span style={{ color: "#A5D6A7" }}>Manage ›</span>
+            {!activeShiftsAreSnapshot && <span style={{ color: "#A5D6A7" }}>Manage ›</span>}
           </button>
         )}
       </div>

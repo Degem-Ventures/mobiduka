@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props { onNavigate: (s: string) => void }
@@ -22,9 +28,12 @@ const defaultReceiptConfig: ReceiptConfig = {
 
 export default function ReceiptSettingsScreen({ onNavigate }: Props) {
   const c = useColors()
+  const session = getClientSession()
   const [form, setForm] = useState<ReceiptConfig>(defaultReceiptConfig)
   const [business, setBusiness] = useState({ name: '', branch: '', country: '', phone: '', email: '' })
   const [loading, setLoading] = useState(true)
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [error, setError] = useAutoDismissMessage()
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -33,25 +42,94 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
   const set = <K extends keyof ReceiptConfig>(k: K, v: ReceiptConfig[K]) => setForm(f => ({ ...f, [k]: v }))
 
   useEffect(() => {
-    const session = getClientSession()
     if (!session) { setError('Please sign in to load receipt settings.'); setLoading(false); return }
-    void Promise.allSettled([
-      apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(session.user.businessId)}`),
-      apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(session.user.businessId)}&includeReceiptConfig=true`),
-    ]).then(([profileResult, settingsResult]) => {
-      if (profileResult.status === 'fulfilled') {
-        const loadedBusiness = profileResult.value.business
-        setBusiness({ name: loadedBusiness.name, branch: loadedBusiness.branch ?? '', country: loadedBusiness.country ?? '', phone: loadedBusiness.phone ?? '', email: loadedBusiness.email ?? '' })
+    let cancelled = false
+    const businessId = session.user.businessId
+    const cacheKey = 'settings.receipt-preview.v1'
+    const loadReceiptSettings = async () => {
+      try {
+        const [businessResponse, settingsResponse] = await Promise.all([
+          apiFetch<BusinessResponse>(`/api/business?businessId=${encodeURIComponent(businessId)}`),
+          apiFetch<SettingsResponse>(`/api/settings?businessId=${encodeURIComponent(businessId)}&includeReceiptConfig=true`),
+        ])
+        const receiptSnapshot = {
+          business: {
+            name: businessResponse.business.name,
+            branch: businessResponse.business.branch ?? '',
+            country: businessResponse.business.country ?? '',
+          },
+          receiptConfig: settingsResponse.preferences.receiptConfig ?? defaultReceiptConfig,
+        }
+        let updatedAt: string | null = null
+        try {
+          await writeOfflineCollection(businessId, cacheKey, receiptSnapshot)
+        } catch (error) {
+          console.error('Unable to cache receipt settings for offline use.', error)
+        }
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+        } catch (error) {
+          console.error('Unable to read the receipt settings snapshot timestamp.', error)
+        }
+        if (cancelled) return
+        setBusiness({
+          ...receiptSnapshot.business,
+          phone: businessResponse.business.phone ?? '',
+          email: businessResponse.business.email ?? '',
+        })
+        setForm(receiptSnapshot.receiptConfig)
+        setIsOfflineSnapshot(isNativeOfflineApp() && !navigator.onLine)
+        setSnapshotUpdatedAt(updatedAt)
+        setError('')
+      } catch (error) {
+        const canUseCache =
+          error instanceof TypeError ||
+          (error instanceof ApiResponseError && error.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) {
+          if (!cancelled) setError(error instanceof Error ? error.message : 'Unable to load receipt settings.')
+          return
+        }
+        try {
+          const cached = await readOfflineCollection<{
+            business: { name: string; branch: string; country: string }
+            receiptConfig: ReceiptConfig
+          }>(businessId, cacheKey)
+          if (cached === null) throw new Error('Receipt settings are not available offline yet. Connect to the internet once to load them.')
+          if (cancelled) return
+          setBusiness({ ...cached.business, phone: '', email: '' })
+          setForm(cached.receiptConfig)
+          let updatedAt: string | null = null
+          try {
+            updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+          } catch (reason) {
+            console.error('Unable to read the receipt settings snapshot timestamp.', reason)
+          }
+          setSnapshotUpdatedAt(updatedAt)
+          setIsOfflineSnapshot(true)
+          setError('')
+        } catch (cacheError) {
+          if (!cancelled) setError(cacheError instanceof Error ? cacheError.message : 'Unable to load saved receipt settings.')
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-      if (settingsResult.status === 'fulfilled' && settingsResult.value.preferences.receiptConfig) setForm(settingsResult.value.preferences.receiptConfig)
-      if (profileResult.status === 'rejected') setError(profileResult.reason instanceof Error ? profileResult.reason.message : 'Unable to load business information.')
-      else if (settingsResult.status === 'rejected') setError('Receipt preferences could not be loaded; defaults are ready to use.')
-    }).finally(() => setLoading(false))
-  }, [])
+    }
+    const handleOnline = () => void loadReceiptSettings()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setIsOfflineSnapshot(true)
+    }
+    void loadReceiptSettings()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.businessId])
 
   const handleSave = async () => {
-    const session = getClientSession()
-    if (!session) return
+    if (!session || isOfflineSnapshot) return
     setSaving(true); setError('')
     try {
       await Promise.all([
@@ -69,8 +147,8 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
         <div style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{label}</div>
         {sub && <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{sub}</div>}
       </div>
-      <button className="btn" onClick={() => set(field, !form[field])} style={{
-        width: 48, height: 27, borderRadius: 14, border: 'none', cursor: 'pointer',
+      <button className="btn" disabled={isOfflineSnapshot} onClick={() => set(field, !form[field])} style={{
+        width: 48, height: 27, borderRadius: 14, border: 'none', cursor: isOfflineSnapshot ? 'default' : 'pointer',
         background: form[field] ? '#123A8F' : (c.isDark ? '#1A3366' : '#D0D7E8'),
         position: 'relative', transition: 'background 0.2s', flexShrink: 0,
       }}>
@@ -91,6 +169,11 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
           </div>
         </div>
         <div className="scroll-area" style={{ padding: '20px 24px 80px', display: 'flex', justifyContent: 'center' }}>
+          {isOfflineSnapshot && (
+            <div role="status" style={{ position: 'absolute', top: 104, left: 16, right: 16, zIndex: 1, background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', fontSize: 12, textAlign: 'center' }}>
+              Offline preview · saved {snapshotUpdatedAt ? new Date(snapshotUpdatedAt).toLocaleString() : 'receipt settings'}. Business contact information is not stored offline.
+            </div>
+          )}
           {/* Mock receipt */}
           <div style={{ width: '100%', maxWidth: 280, background: 'white', borderRadius: 4, padding: '20px 16px', fontFamily: 'monospace', boxShadow: '0 4px 24px rgba(0,0,0,0.15)', color: '#111' }}>
             {form.showLogo && <div style={{ textAlign: 'center', marginBottom: 8 }}>
@@ -136,13 +219,18 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
           <div style={{ flex: 1 }}>
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Receipt Settings</div>
           </div>
-          <button className="btn" onClick={() => setPreview(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" disabled={loading || !business.name} onClick={() => setPreview(true)} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: 'white', cursor: loading || !business.name ? 'default' : 'pointer', fontFamily: 'inherit' }}>
             Preview
           </button>
         </div>
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 100 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+            Showing saved receipt settings{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Business contact information is not stored offline; receipt changes require internet.
+          </div>
+        )}
         {loading && <div style={{ color: c.muted, fontSize: 13, padding: '12px 4px' }}>Loading receipt settings…</div>}
         {error && <div style={{ background: c.errorBg, color: '#C62828', borderRadius: 10, padding: '10px 12px', marginBottom: 14, fontSize: 12 }}>{error}</div>}
         {saved && (
@@ -162,7 +250,7 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
           ].map(f => (
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>{f.label}</label>
-              <input className="input" type={f.type || 'text'} placeholder={f.placeholder} value={business[f.key as 'name' | 'branch' | 'phone' | 'email']} onChange={event => setBusiness(value => ({ ...value, [f.key]: event.target.value }))} />
+              <input className="input" disabled={isOfflineSnapshot} type={f.type || 'text'} placeholder={f.placeholder} value={business[f.key as 'name' | 'branch' | 'phone' | 'email']} onChange={event => setBusiness(value => ({ ...value, [f.key]: event.target.value }))} />
             </div>
           ))}
           <div style={{ fontSize: 11, color: c.muted, marginTop: -3 }}>These details are saved to your business profile and printed automatically on receipts.</div>
@@ -173,11 +261,11 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
         <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
           <div style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Header Message</label>
-            <input className="input" placeholder="Shown above items" value={form.headerText} onChange={e => set('headerText', e.target.value)} />
+            <input className="input" disabled={isOfflineSnapshot} placeholder="Shown above items" value={form.headerText} onChange={e => set('headerText', e.target.value)} />
           </div>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Footer Message</label>
-            <input className="input" placeholder="Return/refund policy etc." value={form.footerText} onChange={e => set('footerText', e.target.value)} />
+            <input className="input" disabled={isOfflineSnapshot} placeholder="Return/refund policy etc." value={form.footerText} onChange={e => set('footerText', e.target.value)} />
           </div>
         </div>
 
@@ -186,8 +274,8 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
         <div className="card" style={{ padding: '12px', marginBottom: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             {formats.map(f => (
-              <button key={f.id} className="btn" onClick={() => set('format', f.id)} style={{
-                padding: '12px 10px', borderRadius: 12, textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+              <button key={f.id} className="btn" disabled={isOfflineSnapshot} onClick={() => set('format', f.id)} style={{
+                padding: '12px 10px', borderRadius: 12, textAlign: 'left', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit',
                 background: form.format === f.id ? (c.isDark ? 'rgba(18,58,143,0.35)' : 'rgba(18,58,143,0.08)') : c.cardAlt,
                 border: form.format === f.id ? '2px solid #123A8F' : `1.5px solid ${c.isDark ? '#1A3366' : '#E8ECF4'}`,
               }}>
@@ -204,11 +292,11 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
           <div style={{ display: 'flex', gap: 12 }}>
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Prefix</label>
-              <input className="input" placeholder="RCP" value={form.receiptPrefix} onChange={e => set('receiptPrefix', e.target.value.toUpperCase())} style={{ fontFamily: 'monospace', fontWeight: 700 }} />
+              <input className="input" disabled={isOfflineSnapshot} placeholder="RCP" value={form.receiptPrefix} onChange={e => set('receiptPrefix', e.target.value.toUpperCase())} style={{ fontFamily: 'monospace', fontWeight: 700 }} />
             </div>
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Next Number</label>
-              <input className="input" type="number" value={form.nextNumber} onChange={e => set('nextNumber', e.target.value)} style={{ fontFamily: 'monospace', fontWeight: 700 }} />
+              <input className="input" disabled={isOfflineSnapshot} type="number" value={form.nextNumber} onChange={e => set('nextNumber', e.target.value)} style={{ fontFamily: 'monospace', fontWeight: 700 }} />
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 12, color: c.muted }}>
@@ -227,7 +315,7 @@ export default function ReceiptSettingsScreen({ onNavigate }: Props) {
           <Toggle label="Barcode" sub="Receipt number as barcode" field="showBarcode" />
         </div>
 
-        <button className="btn" disabled={loading || saving} onClick={() => void handleSave()} style={{ width: '100%', padding: '16px', background: loading || saving ? c.cardAlt : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: loading || saving ? c.faint : 'white', cursor: loading || saving ? 'wait' : 'pointer', fontFamily: 'inherit', boxShadow: loading || saving ? 'none' : '0 4px 16px rgba(18,58,143,0.35)' }}>
+        <button className="btn" disabled={loading || saving || isOfflineSnapshot} onClick={() => void handleSave()} style={{ width: '100%', padding: '16px', background: loading || saving || isOfflineSnapshot ? c.cardAlt : 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: loading || saving || isOfflineSnapshot ? c.faint : 'white', cursor: loading || saving || isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: loading || saving || isOfflineSnapshot ? 'none' : '0 4px 16px rgba(18,58,143,0.35)' }}>
           {saving ? 'Saving…' : 'Save Receipt Settings'}
         </button>
       </div>

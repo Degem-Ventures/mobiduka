@@ -1,10 +1,27 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import { ApiResponseError, apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  isNativeOfflineApp,
+  readOfflineCollection,
+  readOfflineCollectionUpdatedAt,
+  writeOfflineCollection,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 type ShiftType = { id: string; code: string; name: string; scheduledStart: string; scheduledEnd: string; icon: string | null; color: string | null }
 type ShiftIcon = { value: string; label: string }
+type EmployeeRosterRow = { id: string; fullName: string; role: string; isActive: boolean }
+type CashSessionRow = {
+  id: string
+  shiftType: string
+  shift: ShiftType | null
+  openedAt: string
+  closedAt: string | null
+  sales: number
+  amount: number
+  cashier: { id: string; fullName: string; role: { name: string } | null } | null
+}
 
 const SHIFT_TYPE_ICONS: ShiftIcon[] = [
   { value: '🌅', label: 'Sunrise' },
@@ -183,6 +200,8 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   const [activeShift, setActiveShift] = useState<ShiftRecord | null>(null)
   const [dataError, setDataError] = useAutoDismissMessage()
   const [clockNow, setClockNow] = useState(() => Date.now())
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockNow(Date.now()), 60_000)
@@ -232,18 +251,79 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   const loadShiftData = async () => {
     if (!session) { setDataError('Please sign in to load shifts.'); return }
     try {
-      const [employeeResponse, shiftResponse, shiftTypeResponse] = await Promise.all([
-        apiFetch<{ employees: Array<{ id: string; fullName: string; role: string; isActive: boolean }> }>(`/api/employees?businessId=${encodeURIComponent(session.user.businessId)}`),
-        apiFetch<{ sessions: Array<{ id: string; shiftType: string; shift: ShiftType | null; openedAt: string; closedAt: string | null; sales: number; amount: number; cashier: { id: string; fullName: string; role: { name: string } | null } | null }> }>(`/api/cash/session?businessId=${encodeURIComponent(session.user.businessId)}`),
-        apiFetch<{ shiftTypes: ShiftType[] }>(`/api/shift-types?businessId=${encodeURIComponent(session.user.businessId)}`),
-      ])
-      const orderedShiftTypes = orderShiftTypes(shiftTypeResponse.shiftTypes ?? [])
+      const businessId = session.user.businessId
+      const cacheKeys = {
+        employees: 'shifts.employees.v1',
+        sessions: 'shifts.sessions.v1',
+        types: 'shifts.types.v1',
+      }
+      let employeeRows: EmployeeRosterRow[]
+      let sessionRows: CashSessionRow[]
+      let shiftTypeRows: ShiftType[]
+      let usedSnapshot = false
+      try {
+        const [employeeResponse, shiftResponse, shiftTypeResponse] = await Promise.all([
+          apiFetch<{ employees: EmployeeRosterRow[] }>(`/api/employees?businessId=${encodeURIComponent(businessId)}`),
+          apiFetch<{ sessions: CashSessionRow[] }>(`/api/cash/session?businessId=${encodeURIComponent(businessId)}`),
+          apiFetch<{ shiftTypes: ShiftType[] }>(`/api/shift-types?businessId=${encodeURIComponent(businessId)}`),
+        ])
+        employeeRows = employeeResponse.employees
+        sessionRows = shiftResponse.sessions
+        shiftTypeRows = shiftTypeResponse.shiftTypes ?? []
+        const cachedSessions = sessionRows.map(item => ({
+          ...item,
+          cashier: item.cashier ? {
+            id: item.cashier.id,
+            fullName: item.cashier.fullName,
+            role: item.cashier.role ? { name: item.cashier.role.name } : null,
+          } : null,
+          shift: item.shift ? {
+            id: item.shift.id,
+            code: item.shift.code,
+            name: item.shift.name,
+            scheduledStart: item.shift.scheduledStart,
+            scheduledEnd: item.shift.scheduledEnd,
+            icon: item.shift.icon,
+            color: item.shift.color,
+          } : null,
+        }))
+        for (const [cacheKey, value] of [
+          [cacheKeys.employees, employeeRows.map(({ id, fullName, role, isActive }) => ({ id, fullName, role, isActive }))],
+          [cacheKeys.sessions, cachedSessions],
+          [cacheKeys.types, shiftTypeRows],
+        ] as const) {
+          try {
+            await writeOfflineCollection(businessId, cacheKey, value)
+          } catch (error) {
+            console.error(`Unable to cache ${cacheKey} for offline use.`, error)
+          }
+        }
+      } catch (error) {
+        const canUseCache =
+          error instanceof TypeError ||
+          (error instanceof ApiResponseError && error.status >= 500)
+        if (!canUseCache || !isNativeOfflineApp()) throw error
+        const [cachedEmployees, cachedSessions, cachedShiftTypes] = await Promise.all([
+          readOfflineCollection<EmployeeRosterRow[]>(businessId, cacheKeys.employees),
+          readOfflineCollection<CashSessionRow[]>(businessId, cacheKeys.sessions),
+          readOfflineCollection<ShiftType[]>(businessId, cacheKeys.types),
+        ])
+        if (cachedEmployees === null || cachedSessions === null || cachedShiftTypes === null) {
+          throw new Error('Shift history is not available offline yet. Connect to the internet once to load it.')
+        }
+        employeeRows = cachedEmployees
+        sessionRows = cachedSessions
+        shiftTypeRows = cachedShiftTypes
+        usedSnapshot = true
+      }
+
+      const orderedShiftTypes = orderShiftTypes(shiftTypeRows)
       setShiftTypes(orderedShiftTypes)
       const availableShift = orderedShiftTypes.find(shiftType => isShiftTypeAvailableNow(shiftType))
       if (availableShift) setSelectedShift(availableShift.id)
-      const operationalSessions = shiftResponse.sessions.filter(item => ['CASHIER', 'SUPERVISOR'].includes(item.cashier?.role?.name?.toUpperCase() ?? ''))
+      const operationalSessions = sessionRows.filter(item => ['CASHIER', 'SUPERVISOR'].includes(item.cashier?.role?.name?.toUpperCase() ?? ''))
       const activeCashierIds = new Set(operationalSessions.filter(item => !item.closedAt && item.cashier?.id).map(item => item.cashier?.id as string))
-      const staff = employeeResponse.employees
+      const staff = employeeRows
         .filter(employee => {
           const role = employee.role.trim().toUpperCase()
           return employee.isActive && (role === 'CASHIER' || role === 'SUPERVISOR') && !activeCashierIds.has(employee.id)
@@ -252,7 +332,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
       setStaffList(staff)
       if (!selectedStaff && staff[0]) setSelectedStaff(staff[0].id)
       const mappedSessions = operationalSessions.map(item => {
-        const type = item.shift ?? shiftTypeResponse.shiftTypes.find(shift => shift.code === item.shiftType) ?? shiftTypeResponse.shiftTypes[0]
+        const type = item.shift ?? shiftTypeRows.find(shift => shift.code === item.shiftType) ?? shiftTypeRows[0]
         const startDate = new Date(item.openedAt)
         const endDate = item.closedAt ? new Date(item.closedAt) : null
         return {
@@ -276,18 +356,46 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
         }
       }).sort((left, right) => new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime())
       setPastShifts(mappedSessions)
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKeys.sessions)
+      } catch (error) {
+        console.error('Unable to read the shift history snapshot timestamp.', error)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (usedSnapshot || !navigator.onLine),
+      )
+      setDataError('')
       const active = operationalSessions.find(item => !item.closedAt)
       if (active) {
         setActiveShift(mappedSessions.find(shift => shift.id === active.id) ?? null)
-        if (openActiveShift) setView('active')
-      }
+        if (openActiveShift && !usedSnapshot) setView('active')
+      } else setActiveShift(null)
     } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load shifts.') }
   }
 
-  useEffect(() => { void loadShiftData() }, [session?.user.businessId, openActiveShift])
+  useEffect(() => {
+    void loadShiftData()
+    const handleOnline = () => void loadShiftData()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) {
+        setIsOfflineSnapshot(true)
+        setView('list')
+        setEditingShiftTypeId(null)
+      }
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [session?.user.businessId, openActiveShift])
 
   const startShift = async () => {
-    if (!session || !selectedStaff) return
+    if (!session || !selectedStaff || isOfflineSnapshot) return
     const member = staffList.find(s => s.id === selectedStaff)
     const sType = shiftTypes.find(s => s.id === selectedShift)
     if (!sType || !isShiftTypeAvailableNow(sType)) {
@@ -303,14 +411,15 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   }
 
   const openStartView = async () => {
+    if (isOfflineSnapshot) return
     await loadShiftData()
     setView('start')
   }
 
   const saveShiftType = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!session) {
-      setDataError('Please sign in to create shift types.')
+    if (!session || isOfflineSnapshot) {
+      setDataError(session ? 'Connect to the internet to manage shift types.' : 'Please sign in to create shift types.')
       return
     }
 
@@ -359,7 +468,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
 
   const saveShiftTypeEdit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!session || !editingShiftTypeId) {
+    if (!session || !editingShiftTypeId || isOfflineSnapshot) {
       setDataError('Select a shift type to edit.')
       return
     }
@@ -395,7 +504,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   }
 
   const deleteShiftType = async (shiftType: ShiftType) => {
-    if (!session || !window.confirm(`Remove "${shiftType.name}" from available shift types? Past shift history will be preserved.`)) return
+    if (!session || isOfflineSnapshot || !window.confirm(`Remove "${shiftType.name}" from available shift types? Past shift history will be preserved.`)) return
 
     setDeletingShiftTypeId(shiftType.id)
     setDataError('')
@@ -414,7 +523,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
   }
 
   const endShift = async () => {
-    if (!session || !activeShift) return
+    if (!session || !activeShift || isOfflineSnapshot) return
     try {
       await apiFetch('/api/cash/session', { method: 'POST', body: JSON.stringify({ action: 'CLOSE', businessId: session.user.businessId, userId: activeShift.cashierId ?? session.user.id, sessionId: activeShift.id, closingCash: 0 }) })
       window.dispatchEvent(new Event('mobiduka:shift-changed'))
@@ -710,16 +819,21 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
             <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Shift Management</div>
             <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>{pastShifts.length} shifts logged this week</div>
           </div>
-          <button className="btn" aria-label="Manage shift types" onClick={() => { setDataError(''); setShiftTypeMessage(''); setView('types') }} style={{ width: 38, height: 38, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', flexShrink: 0 }}>
+          <button className="btn" aria-label="Manage shift types" disabled={isOfflineSnapshot} onClick={() => { setDataError(''); setShiftTypeMessage(''); setView('types') }} style={{ width: 38, height: 38, background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', flexShrink: 0, opacity: isOfflineSnapshot ? 0.6 : 1 }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.1 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2v-4h.4A1.7 1.7 0 0 0 4.1 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.5 4.1a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2h4v.4A1.7 1.7 0 0 0 15 4.1a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8.5a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.9v4h-.9A1.7 1.7 0 0 0 19.4 15Z" /></svg>
           </button>
-          <button className="btn" onClick={() => void openStartView()} style={{ marginLeft: 'auto', background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" disabled={isOfflineSnapshot} onClick={() => void openStartView()} style={{ marginLeft: 'auto', background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, color: '#0D1B3D', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', opacity: isOfflineSnapshot ? 0.6 : 1 }}>
             + Start
           </button>
         </div>
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+            Showing saved shift history{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Starting, ending, and managing shifts require internet.
+          </div>
+        )}
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         {/* No active shift notice */}
         {!activeShift && (
@@ -729,7 +843,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
               <div style={{ fontSize: 13, fontWeight: 700, color: c.isDark ? '#FFD54F' : '#5D4037' }}>No Active Shift</div>
               <div style={{ fontSize: 12, color: c.isDark ? '#F9A825' : '#8D6E63', marginTop: 2 }}>Start a shift to track cashier performance</div>
             </div>
-            <button className="btn" onClick={() => void openStartView()} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#0D1B3D', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => void openStartView()} style={{ background: '#D4AF37', border: 'none', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#0D1B3D', cursor: isOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', flexShrink: 0, opacity: isOfflineSnapshot ? 0.6 : 1 }}>
               Start
             </button>
           </div>
@@ -759,7 +873,7 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
                 ? formatShiftDuration(s.openedAt, s.closedAt)
                 : formatElapsedShiftDuration(s.openedAt, clockNow)
               return (
-              <div key={s.id} className="card" onClick={() => { if (!s.end) { setActiveShift(s); setView('active') } }} style={{ padding: '14px 16px', marginBottom: 10, cursor: s.end ? 'default' : 'pointer', border: isOvertime ? '1px solid #C62828' : undefined, boxShadow: isOvertime ? '0 0 0 1px rgba(198,40,40,0.14)' : undefined }}>
+              <div key={s.id} className="card" onClick={() => { if (!isOfflineSnapshot && !s.end) { setActiveShift(s); setView('active') } }} style={{ padding: '14px 16px', marginBottom: 10, cursor: s.end || isOfflineSnapshot ? 'default' : 'pointer', border: isOvertime ? '1px solid #C62828' : undefined, boxShadow: isOvertime ? '0 0 0 1px rgba(198,40,40,0.14)' : undefined }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: 'white', flexShrink: 0 }}>
                     {s.initials}

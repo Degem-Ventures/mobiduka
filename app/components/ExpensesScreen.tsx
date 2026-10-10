@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  commitOfflineCashExpense,
+  fetchCachedCollection,
+  getOfflineExpenseSyncStatus,
+  getQueuedOfflineExpenses,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+  retryFailedOfflineRecords,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
-type Expense = { id: string; description: string; category: string | null; amount: number; createdAt: string; paymentMethod: string | null; icon: string | null; recurring: boolean }
+type Expense = { id: string; description: string; category: string | null; amount: number; createdAt: string; paymentMethod: string | null; icon: string | null; recurring: boolean; isPendingSync?: boolean; syncStatus?: 'PENDING' | 'FAILED'; syncError?: string | null }
 type ExpenseToast = { message: string; tone: 'success' | 'error' }
+type ExpenseSyncStatus = { pending: number; failed: number; lastError: string | null }
 
 const categoryColors: Record<string, string> = {
   Utilities: '#0288D1', Payroll: '#5E35B1', Rent: '#2E7D32', Supplies: '#F57C00', Logistics: '#D32F2F'
@@ -48,6 +58,8 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   const c = useColors()
   const session = getClientSession()
   const [expenses, setExpenses] = useState<Expense[]>([])
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [cat, setCat] = useState('All')
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
@@ -56,6 +68,10 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [toast, setToast] = useState<ExpenseToast | null>(null)
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  )
+  const [expenseSyncStatus, setExpenseSyncStatus] = useState<ExpenseSyncStatus>({ pending: 0, failed: 0, lastError: null })
   const [fabPosition, setFabPosition] = useState<{ x: number; y: number } | null>(null)
   const expenseScreenRef = useRef<HTMLDivElement | null>(null)
   const toastTimeout = useRef<number | null>(null)
@@ -63,6 +79,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   const fabWasDragged = useRef(false)
   const fabClickReset = useRef<number | null>(null)
   const emptyExpenseForm = () => ({ desc: '', amount: '', category: 'Utilities', categoryOther: '', method: 'Cash', date: new Date().toISOString().slice(0, 10), recurring: false })
+  const offlineReadOnly = isNativeOfflineApp() && (!isOnline || session?.user.offline === true)
 
   const notify = (message: string, tone: ExpenseToast['tone']) => {
     if (toastTimeout.current !== null) window.clearTimeout(toastTimeout.current)
@@ -163,17 +180,126 @@ export default function ExpensesScreen({ onNavigate }: Props) {
 
   const loadExpenses = async () => {
     if (!session) { setDataError('Please sign in to load expenses.'); return }
+    const cacheKey = 'expenses.list.v1'
+    let previousUpdatedAt: string | null = null
     try {
+      previousUpdatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+    } catch (reason) {
+      console.error('Unable to read the expense snapshot timestamp.', reason)
+    }
+    try {
+      const rows = await fetchCachedCollection<Expense[]>(
+        session.user.businessId,
+        cacheKey,
+        `/api/expenses?businessId=${encodeURIComponent(session.user.businessId)}`,
+      )
+      const [queued, syncStatus] = isNativeOfflineApp()
+        ? await Promise.all([
+            getQueuedOfflineExpenses(session.user.businessId),
+            getOfflineExpenseSyncStatus(session.user.businessId),
+          ])
+        : [[], { pending: 0, failed: 0, lastError: null }]
+      setExpenseSyncStatus(syncStatus)
+      const queuedById = new Map(queued.map(record => [record.id, record]))
+      const merged = rows.map(expense => {
+        const record = queuedById.get(expense.id)
+        if (!record) return { ...expense, isPendingSync: false, syncStatus: undefined, syncError: null }
+        queuedById.delete(expense.id)
+        return { ...expense, isPendingSync: true, syncStatus: record.status, syncError: record.lastError }
+      })
+      for (const record of queuedById.values()) {
+        merged.unshift({
+          id: record.id,
+          description: record.payload.description,
+          category: record.payload.category,
+          amount: record.payload.amount,
+          createdAt: record.payload.date,
+          paymentMethod: 'Cash',
+          icon: null,
+          recurring: record.payload.recurring,
+          isPendingSync: true,
+          syncStatus: record.status,
+          syncError: record.lastError,
+        })
+      }
+      setExpenses(merged)
+      let updatedAt: string | null = null
+      try {
+        updatedAt = await readOfflineCollectionUpdatedAt(session.user.businessId, cacheKey)
+      } catch (reason) {
+        console.error('Unable to read the expense snapshot timestamp.', reason)
+      }
+      setSnapshotUpdatedAt(updatedAt)
+      setIsOfflineSnapshot(
+        isNativeOfflineApp() &&
+        (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
+      )
       setDataError('')
-      const rows = await apiFetch<Expense[]>(`/api/expenses?businessId=${encodeURIComponent(session.user.businessId)}`)
-      setExpenses(rows)
-    } catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Unable to load expenses.') }
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to load expenses.')
+    }
   }
 
-  useEffect(() => { void loadExpenses() }, [session?.user.businessId])
+  useEffect(() => {
+    void loadExpenses()
+    const handleOnline = () => {
+      setIsOnline(true)
+      void loadExpenses()
+    }
+    const handleOffline = () => {
+      setIsOnline(false)
+      setForm(current => ({ ...current, method: 'Cash' }))
+      if (editingExpense) {
+        setEditingExpense(null)
+        setShowAdd(false)
+      }
+    }
+    const handleSyncStatus = () => {
+      if (navigator.onLine) void loadExpenses()
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('mobiduka-offline-sync-status', handleSyncStatus)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('mobiduka-offline-sync-status', handleSyncStatus)
+    }
+  }, [session?.user.businessId, editingExpense])
 
   const saveExpense = async () => {
     if (!session || !form.desc.trim() || !form.amount) return
+    const category = form.category === 'Other' ? form.categoryOther.trim() : form.category
+    if (offlineReadOnly) {
+      if (editingExpense || form.method !== 'Cash') {
+        setDataError('Only new cash expenses can be saved offline. Edits and other payment methods require an online sign-in.')
+        return
+      }
+      setSaving(true)
+      setDataError('')
+      try {
+        await commitOfflineCashExpense(session.user.businessId, {
+          description: form.desc.trim(),
+          amount: Number(form.amount),
+          category,
+          recurring: form.recurring,
+          date: form.date,
+          userId: session.user.id,
+        })
+        await loadExpenses()
+        setForm(emptyExpenseForm())
+        setShowAdd(false)
+        setEditingExpense(null)
+        notify('Cash expense saved on this device and queued to sync.', 'success')
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : 'Unable to save cash expense offline.'
+        setDataError(message)
+        notify(message, 'error')
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
     setSaving(true)
     setDataError('')
     try {
@@ -185,7 +311,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
           userId: session.user.id,
           description: form.desc.trim(),
           amount: Number(form.amount),
-          category: form.category === 'Other' ? form.categoryOther.trim() : form.category,
+          category,
           paymentMethod: form.method,
           recurring: form.recurring,
           date: form.date,
@@ -205,6 +331,10 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   }
 
   const startEdit = (expense: Expense) => {
+    if (offlineReadOnly) {
+      setDataError('Expense changes require an online sign-in. Only new cash expenses can be saved offline.')
+      return
+    }
     const category = normalizeCategory(expense.category)
     const standard = ['Utilities', 'Payroll', 'Rent', 'Supplies', 'Logistics']
     setForm({ desc: expense.description, amount: String(expense.amount), category: standard.includes(category) ? category : 'Other', categoryOther: standard.includes(category) ? '' : category, method: getExpenseMethod(expense), date: new Date(expense.createdAt).toISOString().slice(0, 10), recurring: expense.recurring })
@@ -212,6 +342,12 @@ export default function ExpensesScreen({ onNavigate }: Props) {
   }
 
   const deleteExpense = async (expense: Expense) => {
+    if (offlineReadOnly || expense.isPendingSync) {
+      setDataError(expense.isPendingSync
+        ? 'This expense is still waiting to sync and cannot be deleted yet.'
+        : 'Expense changes require an online sign-in.')
+      return
+    }
     if (!session) return
     setSaving(true); setDataError('')
     try {
@@ -224,6 +360,19 @@ export default function ExpensesScreen({ onNavigate }: Props) {
       notify(message, 'error')
     }
     finally { setSaving(false); setConfirmDeleteId(null) }
+  }
+
+  const retryFailedExpenses = async () => {
+    if (!session || !isOnline || session.user.offline) {
+      setDataError('Sign in online and connect to the internet before retrying queued expenses.')
+      return
+    }
+    try {
+      await retryFailedOfflineRecords(session.user.businessId, 'Expense')
+      window.dispatchEvent(new Event('online'))
+    } catch (reason) {
+      setDataError(reason instanceof Error ? reason.message : 'Unable to retry queued expenses.')
+    }
   }
 
   const categories = ['All', ...Array.from(new Set(expenses.map(expense => normalizeCategory(expense.category))))]
@@ -251,6 +400,11 @@ export default function ExpensesScreen({ onNavigate }: Props) {
         </div>
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           {dataError && <div style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
+          {offlineReadOnly && !editingExpense && (
+            <div role="status" style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 10, background: '#FFF8E1', color: '#795548', fontSize: 12, lineHeight: 1.5 }}>
+              Offline expense entry is available for cash only. New expenses are saved on this device and queued for synchronization; edits require an online sign-in.
+            </div>
+          )}
           <div className="card" style={{ padding: '20px' }}>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Description *</label>
@@ -276,7 +430,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: c.muted, display: 'block', marginBottom: 6 }}>Payment Method</label>
               <div style={{ display: 'flex', gap: 8 }}>
-                {['Cash', 'M-Pesa', 'Bank'].map(m => (
+                {['Cash', 'M-Pesa', 'Bank'].filter(method => !offlineReadOnly || method === 'Cash').map(m => (
                   <button key={m} className="btn" onClick={() => setForm(f => ({ ...f, method: m }))} style={{ flex: 1, padding: '10px', borderRadius: 10, border: form.method === m ? '2px solid #123A8F' : '1.5px solid #E8ECF4', background: form.method === m ? 'rgba(18,58,143,0.08)' : c.card, color: form.method === m ? '#123A8F' : c.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{m}</button>
                 ))}
               </div>
@@ -331,7 +485,28 @@ export default function ExpensesScreen({ onNavigate }: Props) {
         </div>
       </div>
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
-          {dataError && <div style={{ margin: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
+            Offline · showing saved expense data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Only new cash expenses can be saved offline; edits require internet.
+          </div>
+        )}
+        {(expenseSyncStatus.pending > 0 || expenseSyncStatus.failed > 0) && (
+          <div role="status" style={{ background: c.warningBg, color: c.isDark ? '#F0D060' : '#795548', borderRadius: 10, padding: '10px 12px', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
+            {expenseSyncStatus.pending} cash expense{expenseSyncStatus.pending === 1 ? '' : 's'} waiting to sync
+            {expenseSyncStatus.failed > 0 && ` · ${expenseSyncStatus.failed} failed`}
+            {expenseSyncStatus.failed > 0 && (
+              <>
+                {expenseSyncStatus.lastError && <div style={{ marginTop: 4 }}>{expenseSyncStatus.lastError}</div>}
+                {isOnline && !session?.user.offline && (
+                  <button className="btn" onClick={() => void retryFailedExpenses()} style={{ marginTop: 6, border: 0, padding: 0, background: 'transparent', color: 'inherit', font: 'inherit', fontWeight: 700, textDecoration: 'underline' }}>
+                    Retry failed expenses
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+        {dataError && <div style={{ margin: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
         <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 8, letterSpacing: 0.4 }}>
           {cat === 'All' ? 'All Expenses' : cat} · KSh {total.toLocaleString()}
         </div>
@@ -343,6 +518,7 @@ export default function ExpensesScreen({ onNavigate }: Props) {
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
                   <div style={{ minWidth: 0, overflowWrap: 'anywhere', fontSize: 13, fontWeight: 700, color: c.text }}>{e.description}</div>
                   {e.recurring && <span style={{ fontSize: 9, background: c.iconBg, color: '#123A8F', padding: '2px 6px', borderRadius: 6, fontWeight: 700, flexShrink: 0 }}>RECURRING</span>}
+                  {e.isPendingSync && <span style={{ fontSize: 9, background: e.syncStatus === 'FAILED' ? c.errorBg : c.warningBg, color: e.syncStatus === 'FAILED' ? '#B71C1C' : '#795548', padding: '2px 6px', borderRadius: 6, fontWeight: 700, flexShrink: 0 }}>{e.syncStatus === 'FAILED' ? 'SYNC FAILED' : 'PENDING SYNC'}</span>}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 4, minWidth: 0 }}>
                   <span style={{ minWidth: 0, overflowWrap: 'anywhere', fontSize: 11, color: c.muted }}>{normalizeCategory(e.category)}</span>
@@ -362,11 +538,16 @@ export default function ExpensesScreen({ onNavigate }: Props) {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0, marginTop: 10 }}>
               <div style={{ minWidth: 0, overflowWrap: 'anywhere', fontSize: 11, color: c.muted }}>{formatExpenseDate(e.createdAt)}</div>
-              {confirmDeleteId !== e.id && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexShrink: 0 }}>
+              {confirmDeleteId !== e.id && !offlineReadOnly && !e.isPendingSync && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexShrink: 0 }}>
                 <button className="btn" onClick={() => startEdit(e)} aria-label={`Edit ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
                 <button className="btn" onClick={() => setConfirmDeleteId(e.id)} aria-label={`Delete ${e.description}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
               </div>}
             </div>
+            {e.syncStatus === 'FAILED' && e.syncError && (
+              <div role="note" style={{ marginTop: 8, color: '#B71C1C', fontSize: 11, lineHeight: 1.4 }}>
+                Sync failed: {e.syncError}
+              </div>
+            )}
             {confirmDeleteId === e.id ? (
               <div role="alert" style={{ marginTop: 12, paddingTop: 12, borderTop: c.divider }}>
                 <div style={{ fontSize: 12, color: '#B71C1C', fontWeight: 700, marginBottom: 9 }}>Delete &quot;{e.description}&quot;?</div>
