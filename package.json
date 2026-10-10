@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "build:capacitor": "vite build --config vite.capacitor.config.ts",
     "start": "next start",
     "seed:customers": "node --import tsx prisma/seed-customers.ts",
     "seed:expenses": "node --import tsx prisma/seed-expenses.ts",
@@ -20,8 +21,8 @@
     "seed:lifecare": "node --import tsx prisma/seed-lifecare.ts --force-seed-lifecare",
     "test:mpesa-credentials": "node --import tsx --test tests/mpesa-credentials.test.ts",
     "test:sync-collision": "JWT_SECRET=mobiduka-dev-secret-change-me node --import tsx --test app/__tests__/sync_collision.test.ts",
-    "cap:sync": "pnpm run build && cap sync android",
-    "cap:sync:ios": "pnpm run build && cap sync ios",
+    "cap:sync": "pnpm run build:capacitor && cap sync android",
+    "cap:sync:ios": "pnpm run build:capacitor && cap sync ios",
     "cap:open": "cap open android",
     "android:debug": "pnpm run cap:sync && cd android && ./gradlew assembleDebug"
   },
@@ -29,6 +30,7 @@
     "seed": "node --import tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@capacitor-community/sqlite": "^7.0.3",
     "@capacitor/android": "^7.4.3",
     "@capacitor/core": "^7.4.3",
     "@capacitor/haptics": "7.0.5",

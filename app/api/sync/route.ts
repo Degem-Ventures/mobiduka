@@ -254,8 +254,19 @@ export async function POST(request: Request) {
               const existingSale = await tx.sale.findUnique({
                 where: { id: saleId },
               })
+              const matchingInvoice = existingSale
+                ? null
+                : dataPayload.saleNumber
+                  ? await tx.sale.findFirst({
+                      where: {
+                        businessId: resolvedBusinessId,
+                        saleNumber: String(dataPayload.saleNumber),
+                      },
+                      select: { id: true },
+                    })
+                  : null
 
-              if (!existingSale) {
+              if (!existingSale && !matchingInvoice) {
                 const cashSessionId = dataPayload.cashSessionId
                   ? String(dataPayload.cashSessionId)
                   : null
@@ -340,6 +351,24 @@ export async function POST(request: Request) {
                       },
                     })
                   }
+                }
+                if (dataPayload.paymentMethod) {
+                  const paymentMethodName = String(
+                    dataPayload.paymentMethod,
+                  ).trim().toUpperCase();
+                  const paymentMethod = await tx.paymentMethod.upsert({
+                    where: { name: paymentMethodName },
+                    update: {},
+                    create: { name: paymentMethodName },
+                  });
+                  await tx.payment.create({
+                    data: {
+                      saleId: createdSale.id,
+                      paymentMethodId: paymentMethod.id,
+                      amount: Number(dataPayload.total ?? 0),
+                      receivedAt: createdSale.createdAt,
+                    },
+                  });
                 }
                 if (createdSale.saleStatus === "COMPLETED") {
                   syncedSales.push({

@@ -31,7 +31,7 @@ Use **Build Flutter Android APK (Flutter UI)**, then download the
 `flutter-apk-build-info.txt`, which records the exact commit, branch, and run
 that produced the APK.
 
-Do not use **Build Capacitor Android APK (Next.js UI)** when verifying the
+Do not use **Build Capacitor Android APK (Locally Bundled UI)** when verifying the
 Flutter application. It packages the separate Next.js/Capacitor application.
 
 ## One-click Linux fix
