@@ -1,4 +1,4 @@
-name: Build Capacitor iOS App (Next.js UI)
+name: Build Capacitor iOS App (Locally Bundled UI)
 
 on:
   workflow_dispatch:
@@ -30,8 +30,10 @@ jobs:
 
       - name: Build and sync Capacitor iOS
         env:
-          CAPACITOR_SERVER_URL: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
-        run: pnpm exec cap sync ios
+          MOBIDUKA_API_ORIGIN: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
+        run: |
+          pnpm run build:capacitor
+          pnpm exec cap sync ios
 
       - name: Install CocoaPods dependencies
         run: pod install --project-directory=ios/App

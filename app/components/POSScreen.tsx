@@ -4,6 +4,13 @@ import { createPortal } from "react-dom"
 import { useColors } from "../utils/theme"
 import { apiFetch, getClientSession, takeCreditorSaleIntent } from "../../lib/client-api"
 import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
+import {
+  commitOfflineCashSale,
+  fetchCachedCollection,
+  getOfflineSaleSyncStatus,
+  isNativeOfflineApp,
+  retryFailedOfflineSales,
+} from "../../lib/offline-store"
 
 type ProductItem = {
   id: string
@@ -37,6 +44,7 @@ type ReceiptInfo = {
   cashierName: string
   businessName: string
   businessBranch: string | null
+  syncState?: "PENDING" | "SYNCED"
 }
 type HistoricalReceipt = {
   id: string
@@ -93,6 +101,8 @@ const deviceUuidStorageKey = (businessId: string) =>
   `mobiduka.registered_device.v1:${businessId}`
 const deviceShiftStorageKey = (businessId: string) =>
   `mobiduka.current_shift.v1:${businessId}`
+const deviceShiftRosterKey = (businessId: string) =>
+  `mobiduka.shift_roster.v1:${businessId}`
 const normalizePaymentMethod = (value: string) =>
   value.toLowerCase().replace(/[^a-z]/g, "")
 
@@ -159,6 +169,9 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [viewingPastReceipt, setViewingPastReceipt] = useState(false)
   const [isCartDraftReady, setIsCartDraftReady] = useState(false)
   const [hasLoadedPOSData, setHasLoadedPOSData] = useState(false)
+  const [pendingOfflineSales, setPendingOfflineSales] = useState(0)
+  const [failedOfflineSales, setFailedOfflineSales] = useState(0)
+  const [offlineSyncError, setOfflineSyncError] = useState("")
   // Measured from the lower-left edge of the POS phone frame.
   const [cartBannerPosition, setCartBannerPosition] = useState({ x: 0, y: 68 })
   const cartBannerDrag = useRef<{ x: number; y: number } | null>(null)
@@ -322,7 +335,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       return
     }
     Promise.all([
-      apiFetch<Array<{
+      fetchCachedCollection<Array<{
         id: string
         name: string
         emoji: string | null
@@ -332,17 +345,23 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         category: { id: string; name: string; emoji: string | null } | null
         inventory: { quantity: number } | null
       }>>(
+        session.user.businessId,
+        "pos.products.v1",
         `/api/products?businessId=${encodeURIComponent(session.user.businessId)}`,
       ),
-      apiFetch<Array<{ id: string; name: string; emoji: string | null }>>(
+      fetchCachedCollection<Array<{ id: string; name: string; emoji: string | null }>>(
+        session.user.businessId,
+        "pos.categories.v1",
         `/api/categories?businessId=${encodeURIComponent(session.user.businessId)}`,
       ),
-      apiFetch<Array<{
+      fetchCachedCollection<Array<{
         id: string
         name: string
         phone: string | null
         creditAccount: { balance: number } | null
       }>>(
+        session.user.businessId,
+        "pos.customers.v1",
         `/api/customers?businessId=${encodeURIComponent(session.user.businessId)}`,
       ),
     ])
@@ -471,6 +490,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             openedAt: item.openedAt,
           }))
         setActiveOperators(operators)
+        window.localStorage.setItem(
+          deviceShiftRosterKey(currentBusinessId),
+          JSON.stringify(operators),
+        )
 
         const locallySelectedShiftId = window.localStorage.getItem(
           deviceShiftStorageKey(currentBusinessId),
@@ -519,6 +542,42 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         setDataError("")
       } catch (reason) {
         if (!cancelled) {
+          if (reason instanceof TypeError && isNativeOfflineApp()) {
+            const cachedRoster = window.localStorage.getItem(
+              deviceShiftRosterKey(currentBusinessId),
+            )
+            const localShiftId = window.localStorage.getItem(
+              deviceShiftStorageKey(currentBusinessId),
+            )
+            try {
+              const parsedRoster = cachedRoster
+                ? (JSON.parse(cachedRoster) as ActiveOperator[])
+                : []
+              const cachedOperators = parsedRoster.filter(
+                (operator) =>
+                  typeof operator.id === "string" &&
+                  typeof operator.sessionId === "string" &&
+                  typeof operator.name === "string" &&
+                  typeof operator.shift === "string",
+              )
+              setActiveOperators(cachedOperators)
+              const selected = cachedOperators.find(
+                (operator) => operator.sessionId === localShiftId,
+              )
+              setCurrentDeviceShiftId(selected?.sessionId ?? "")
+              setSelectedOperatorId(selected?.id ?? "")
+              setDataError(
+                selected
+                  ? "Offline mode: using the last loaded shift. Cash sales will sync when connected."
+                  : "Offline mode: reconnect and load an active shift before making sales.",
+              )
+            } catch {
+              setDataError(
+                "Offline mode: reconnect and load an active shift before making sales.",
+              )
+            }
+            return
+          }
           setDataError(
             reason instanceof Error
               ? reason.message
@@ -539,6 +598,49 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       window.removeEventListener("mobiduka:shift-changed", loadActiveShifts)
     }
   }, [currentBusinessId])
+
+  useEffect(() => {
+    if (!isNativeOfflineApp() || !currentBusinessId) return;
+    const applySyncStatus = (status: {
+      pending: number;
+      failed: number;
+      lastError: string | null;
+      syncError: string | null;
+    }) => {
+      setPendingOfflineSales(status.pending);
+      setFailedOfflineSales(status.failed);
+      setOfflineSyncError(status.syncError ?? status.lastError ?? "");
+      if (status.pending === 0 && status.failed === 0) {
+        setReceiptInfo((receipt) =>
+          receipt?.syncState === "PENDING"
+            ? { ...receipt, syncState: "SYNCED" }
+            : receipt,
+        );
+      }
+    };
+    const handleSyncStatus = (event: Event) => {
+      const status = (event as CustomEvent<{
+        pending: number;
+        failed: number;
+        lastError: string | null;
+        syncError: string | null;
+      }>).detail;
+      applySyncStatus(status);
+    };
+    const loadSyncStatus = async () => {
+      try {
+        const status = await getOfflineSaleSyncStatus(currentBusinessId);
+        applySyncStatus({ ...status, syncError: null });
+      } catch (error) {
+        console.error("Unable to read the offline sales queue.", error);
+      }
+    };
+    void loadSyncStatus();
+    window.addEventListener("mobiduka-offline-sync-status", handleSyncStatus);
+    return () => {
+      window.removeEventListener("mobiduka-offline-sync-status", handleSyncStatus);
+    };
+  }, [currentBusinessId]);
 
   const selectDeviceShift = async (operator: ActiveOperator) => {
     if (!deviceUuid || isAssigningShift) return
@@ -752,8 +854,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       return
     setIsCompletingSale(true)
     setMpesaStatus("")
+    let mpesaReceipt: string | undefined
     try {
-      let mpesaReceipt: string | undefined
       if (paymentMethod === "mpesa" && confirmMpesaQr) {
         setMpesaStatus("Cashier confirmed M-PESA QR payment. Completing sale…")
       } else if (paymentMethod === "mpesa") {
@@ -821,44 +923,98 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         }
       }
 
-      const response = await apiFetch<{
+      const saleNumber = `POS-${Date.now()}-${window.crypto.randomUUID()}`
+      let receipt: {
         saleNumber: string
         createdAt: string
         cashier: { name: string }
         business: { name: string; branch: string | null }
-      }>("/api/sales", {
-        method: "POST",
-        body: JSON.stringify({
+      }
+      let syncState: ReceiptInfo["syncState"] = "SYNCED"
+      try {
+        receipt = await apiFetch("/api/sales", {
+          method: "POST",
+          body: JSON.stringify({
+            businessId: currentBusinessId,
+            cashierId: selectedOperatorId,
+            cashSessionId: currentDeviceShiftId,
+            invoiceNo: saleNumber,
+            totalAmount: total,
+            subtotal,
+            discountAmount: discountAmt,
+            paymentMode:
+              paymentMethod === "mpesa"
+                ? "MPESA"
+                : paymentMethod === "credit"
+                  ? "CREDIT"
+                  : "CASH",
+            mpesaRef: mpesaReceipt,
+            customerId:
+              paymentMethod === "credit" ? selectedCreditor?.id : null,
+            items: cart.map((item) => ({
+              productId: item.id,
+              quantity: item.qty,
+              unitPrice: item.price,
+              total: item.price * item.qty,
+            })),
+          }),
+        })
+      } catch (error) {
+        if (
+          !(error instanceof TypeError) ||
+          !isNativeOfflineApp() ||
+          paymentMethod !== "cash"
+        ) {
+          throw error
+        }
+        const savedSale = await commitOfflineCashSale({
           businessId: currentBusinessId,
           cashierId: selectedOperatorId,
           cashSessionId: currentDeviceShiftId,
-          invoiceNo: `POS-${Date.now()}`,
-          totalAmount: total,
+          saleNumber,
           subtotal,
-          discountAmount: discountAmt,
-          paymentMode:
-            paymentMethod === "mpesa"
-              ? "MPESA"
-              : paymentMethod === "credit"
-                ? "CREDIT"
-                : "CASH",
-          mpesaRef: mpesaReceipt,
-          customerId: paymentMethod === "credit" ? selectedCreditor?.id : null,
+          discount: discountAmt,
+          total,
           items: cart.map((item) => ({
             productId: item.id,
+            name: item.name,
             quantity: item.qty,
             unitPrice: item.price,
             total: item.price * item.qty,
           })),
-        }),
-      })
+        })
+        receipt = {
+          saleNumber: savedSale.saleNumber,
+          createdAt: savedSale.createdAt,
+          cashier: {
+            name:
+              activeOperators.find(
+                (operator) => operator.id === selectedOperatorId,
+              )?.name ?? session.user.name,
+          },
+          business: { name: "", branch: null },
+        }
+        syncState = "PENDING"
+        setProducts((previous) =>
+          previous.map((product) => {
+            const soldQuantity = cart
+              .filter((item) => item.id === product.id)
+              .reduce((sum, item) => sum + item.qty, 0)
+            return soldQuantity
+              ? { ...product, stock: Math.max(0, product.stock - soldQuantity) }
+              : product
+          }),
+        )
+        setPendingOfflineSales((count) => count + 1)
+      }
       window.dispatchEvent(new Event("mobiduka-notification"))
       setReceiptInfo({
-        saleNumber: response.saleNumber,
-        createdAt: response.createdAt,
-        cashierName: response.cashier.name,
-        businessName: response.business.name,
-        businessBranch: response.business.branch,
+        saleNumber: receipt.saleNumber,
+        createdAt: receipt.createdAt,
+        cashierName: receipt.cashier.name,
+        businessName: receipt.business.name,
+        businessBranch: receipt.business.branch,
+        syncState,
       })
       setViewingPastReceipt(false)
       setHistoricalReceipt(null)
@@ -867,7 +1023,15 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       setView("receipt")
     } catch (reason) {
       const message =
-        reason instanceof Error ? reason.message : "Unable to complete sale."
+        reason instanceof TypeError &&
+        isNativeOfflineApp() &&
+        paymentMethod !== "cash"
+          ? mpesaReceipt
+            ? "M-Pesa payment was verified, but the sale confirmation could not be received. Reconnect and check receipt history before retrying."
+            : "M-Pesa and credit sales require an internet connection. Select cash to record a sale offline."
+          : reason instanceof Error
+            ? reason.message
+            : "Unable to complete sale."
       setDataError(message)
       if (confirmMpesaQr) setMpesaQrError(message)
       setMpesaStatus("")
@@ -993,6 +1157,48 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             >
               Receipt #{displayedReceiptNumber}
             </div>
+            {!viewingPastReceipt && receiptInfo?.syncState === "PENDING" && (
+              <div
+                role="status"
+                style={{
+                  color: "white",
+                  fontSize: 12,
+                  marginTop: 8,
+                  opacity: 0.9,
+                }}
+              >
+                Saved on this device · {pendingOfflineSales} sale
+                {pendingOfflineSales === 1 ? "" : "s"} waiting to sync
+              </div>
+            )}
+            {!viewingPastReceipt && receiptInfo?.syncState === "PENDING" &&
+              failedOfflineSales > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await retryFailedOfflineSales(currentBusinessId)
+                    window.dispatchEvent(new Event("online"))
+                  }}
+                  style={{
+                    marginTop: 8,
+                    padding: "6px 10px",
+                    border: "1px solid rgba(255,255,255,0.6)",
+                    borderRadius: 8,
+                    background: "transparent",
+                    color: "white",
+                    font: "inherit",
+                    fontSize: 12,
+                  }}
+                >
+                  Retry {failedOfflineSales} failed sync
+                  {failedOfflineSales === 1 ? "" : "s"}
+                </button>
+              )}
+            {!viewingPastReceipt && offlineSyncError && (
+              <div role="status" style={{ color: "white", fontSize: 12, marginTop: 8 }}>
+                Sync issue: {offlineSyncError}
+              </div>
+            )}
           </div>
         </div>
         <div className="scroll-area" style={{ padding: "20px 16px 100px" }}>
@@ -1762,6 +1968,45 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               }}
             >
               {dataError}
+            </div>
+          )}
+          {(pendingOfflineSales > 0 || failedOfflineSales > 0) && (
+            <div
+              role="status"
+              style={{
+                margin: "10px 16px 0",
+                padding: "9px 12px",
+                borderRadius: 10,
+                background: "#FFF8E1",
+                color: "#795548",
+                fontSize: 12,
+              }}
+            >
+              {pendingOfflineSales} sale{pendingOfflineSales === 1 ? "" : "s"} waiting
+              to sync
+              {failedOfflineSales > 0 && (
+                <>
+                  {" · "}
+                  {failedOfflineSales} failed
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await retryFailedOfflineSales(currentBusinessId)
+                      window.dispatchEvent(new Event("online"))
+                    }}
+                    style={{
+                      marginLeft: 8,
+                      border: "none",
+                      background: "transparent",
+                      color: "inherit",
+                      font: "inherit",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    retry
+                  </button>
+                </>
+              )}
             </div>
           )}
           <div

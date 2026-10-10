@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getPinLoginContext, saveClientSession, savePinLoginContext } from '../../lib/client-api'
+import { apiFetch, getPinLoginContext, saveClientSession, savePinLoginContext, type ClientSession } from '../../lib/client-api'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
@@ -67,9 +67,13 @@ export default function LoginScreen({ onLogin }: Props) {
     try {
       const pinContext = getPinLoginContext()
       const normalizedPinIdentifier = pinIdentifier.trim()
-      const response = await fetch('/api/auth/login', {
+      const payload = await apiFetch<ClientSession & {
+        user: ClientSession["user"] & {
+          username?: string
+          email?: string
+        }
+      }>('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(loginPin ? {} : { identifier: email }),
           ...(loginPin ? {
@@ -78,8 +82,6 @@ export default function LoginScreen({ onLogin }: Props) {
           } : { password }),
         }),
       })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.error ?? 'Unable to sign in.')
       saveClientSession(payload)
       if (payload.user?.businessId) {
         savePinLoginContext({

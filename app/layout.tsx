@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Analytics } from "@vercel/analytics/next";
 import "./global.css";
 import WebPushRegistration from "./components/WebPushRegistration";
+import OfflineServiceWorker from "./components/OfflineServiceWorker";
 
 export const metadata: Metadata = {
   title: "MobiDuka POS",
@@ -17,6 +18,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased" suppressHydrationWarning>
+        <OfflineServiceWorker />
         <WebPushRegistration />
         {children}
         <Analytics />

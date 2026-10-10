@@ -1,6 +1,6 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
-const serverUrl = process.env.CAPACITOR_SERVER_URL?.trim()
+const liveReloadUrl = process.env.CAPACITOR_SERVER_URL?.trim()
 
 const config: CapacitorConfig = {
   appId: 'com.mobiduka.pos',
@@ -11,7 +11,7 @@ const config: CapacitorConfig = {
   },
   server: {
     androidScheme: 'https',
-    ...(serverUrl ? { url: serverUrl } : {}),
+    ...(liveReloadUrl ? { url: liveReloadUrl } : {}),
   },
 }
 

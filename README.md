@@ -8,7 +8,7 @@ The platform is designed around reliable retail operations: sales continue durin
 
 | Capability | Description |
 | --- | --- |
-| Offline-first SQLite cache | Stores supported sales, expenses, customer references, and sync records locally so the mobile workflow can continue during network outages. |
+| Offline-first SQLite cache | The Capacitor app caches POS catalog data in SQLite after its first online load and records offline cash sales durably for later synchronization. Other workflows are being added incrementally. |
 | Idempotent synchronization | Uploads queued records when connectivity returns while preserving tenant context and retrying failed records safely. |
 | M-Pesa payment processing | Supports server-side Daraja payment workflows and status polling for point-of-sale confirmation. |
 | SmartScan | Uses the device camera to read retail barcodes such as EAN-13 and UPC-A, plus structured customer account QR codes. |

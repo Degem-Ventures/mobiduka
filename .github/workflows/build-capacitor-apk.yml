@@ -1,4 +1,4 @@
-name: Build Capacitor Android APK (Next.js UI)
+name: Build Capacitor Android APK (Locally Bundled UI)
 
 on:
   workflow_dispatch:
@@ -59,10 +59,9 @@ jobs:
 
       - name: Build and sync Capacitor
         env:
-          CAPACITOR_SERVER_URL: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
+          MOBIDUKA_API_ORIGIN: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
         run: |
-          mkdir -p dist android/app/src/main/assets
-          printf '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>\n' > dist/index.html
+          pnpm run build:capacitor
           pnpm exec cap sync android
 
       - name: Build debug APK

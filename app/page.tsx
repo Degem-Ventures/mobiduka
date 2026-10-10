@@ -25,6 +25,7 @@ import AdminRegisterScreen from "./components/AdminRegisterScreen";
 import ShiftsScreen from "./components/ShiftsScreen";
 import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
 import ManageRolesScreen from "./components/ManageRolesScreen";
+import OfflineSyncWorker from "./components/OfflineSyncWorker";
 import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen";
 import TaxComplianceScreen from "./components/TaxComplianceScreen";
 import { apiFetch, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
@@ -333,6 +334,7 @@ function AppInner() {
 
   return (
     <div className="app-shell">
+      <OfflineSyncWorker enabled={loggedIn} />
       {/* Phone frame */}
       <div className="phone-frame" data-theme={isDark ? "dark" : "light"}>
         {/* Notch */}

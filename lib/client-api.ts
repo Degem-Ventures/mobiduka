@@ -8,6 +8,16 @@ export type ClientSession = {
   };
 };
 
+export class ApiResponseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiResponseError";
+  }
+}
+
 const SESSION_KEY = "mobiduka_session";
 const PIN_LOGIN_CONTEXT_KEY = "mobiduka_pin_login_context";
 const LAST_SCREEN_KEY = "mobiduka_last_screen";
@@ -102,7 +112,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   headers.set("Content-Type", "application/json");
   if (session?.token) headers.set("Authorization", `Bearer ${session.token}`);
 
-  const response = await fetch(path, { ...init, headers });
+  const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN?.replace(/\/+$/, "") ?? "";
+  const requestUrl =
+    apiOrigin && path.startsWith("/")
+      ? new URL(path, apiOrigin).toString()
+      : path;
+  const response = await fetch(requestUrl, { ...init, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith("/api/auth/")) {
@@ -110,7 +125,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       clearLastScreen();
       window.dispatchEvent(new Event("mobiduka-auth-expired"));
     }
-    throw new Error(typeof payload.error === "string" ? payload.error : `Request failed (${response.status})`);
+    throw new ApiResponseError(
+      typeof payload.error === "string"
+        ? payload.error
+        : `Request failed (${response.status})`,
+      response.status,
+    );
   }
   return payload as T;
 }
