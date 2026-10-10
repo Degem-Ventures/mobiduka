@@ -61,18 +61,30 @@ export async function GET(request: Request) {
         salary: true,
         startDate: true,
         pinHash: true,
-        ...(includePinHashes ? { pinHash: true } : {}),
         createdAt: true,
         role: { select: { name: true } },
       },
       orderBy: { fullName: "asc" },
     });
 
+    if (includePinHashes) {
+      return NextResponse.json({
+        success: true,
+        employees: employees.map((employee) => ({
+          id: employee.id,
+          fullName: employee.fullName,
+          role: employee.role?.name ?? "CASHIER",
+          status: employee.status,
+          pinHash: employee.pinHash,
+        })),
+      });
+    }
+
     return NextResponse.json({
       success: true,
       employees: employees.map((employee) => ({
         ...employee,
-        ...(includePinHashes ? {} : { pinHash: undefined }),
+        pinHash: undefined,
         hasPin: Boolean(employee.pinHash),
         role: employee.role?.name ?? "CASHIER",
         isActive: employee.status === "ACTIVE",

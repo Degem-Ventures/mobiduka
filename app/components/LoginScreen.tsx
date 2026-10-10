@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
 import { apiFetch, getPinLoginContext, saveClientSession, savePinLoginContext, type ClientSession } from '../../lib/client-api'
+import {
+  authenticateOfflinePin,
+  isNativeOfflineApp,
+  refreshOfflinePinRoster,
+} from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
@@ -89,10 +94,42 @@ export default function LoginScreen({ onLogin }: Props) {
           businessId: payload.user.businessId,
           displayName: payload.user.name || email,
         })
+        if (isNativeOfflineApp()) {
+          try {
+            await refreshOfflinePinRoster(payload.user.businessId)
+          } catch (error) {
+            console.error('Unable to refresh the offline business PIN roster.', error)
+          }
+        }
       }
       onLogin()
     } catch (error) {
       setPin('')
+      const pinContext = getPinLoginContext()
+      if (
+        loginPin &&
+        pinContext?.businessId &&
+        isNativeOfflineApp() &&
+        error instanceof TypeError
+      ) {
+        try {
+          const result = await authenticateOfflinePin(pinContext.businessId, loginPin)
+          if (result.success) {
+            const offlineSession: ClientSession = {
+              token: '',
+              user: { ...result.user, offline: true },
+            }
+            saveClientSession(offlineSession)
+            onLogin()
+            return
+          }
+          setLoginError(result.message)
+        } catch (offlineError) {
+          console.error('Offline PIN authentication failed unexpectedly.', offlineError)
+          setLoginError('Unable to verify the offline PIN on this device.')
+        }
+        return
+      }
       setLoginError(error instanceof Error ? error.message : 'Unable to sign in.')
     } finally {
       setIsSubmitting(false)
@@ -343,7 +380,7 @@ export default function LoginScreen({ onLogin }: Props) {
             marginBottom: 16, fontSize: 28, fontWeight: 700, color: '#0D1B3D'
           }}>A</div>
           <div style={{ color: 'white', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{pinContext?.displayName ?? 'Quick PIN Login'}</div>
-          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 48 }}>{pinContext ? 'Enter your 4-digit PIN' : 'Sign in with email first to enable PIN login'}</div>
+          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 48 }}>{pinContext ? 'Enter an active employee PIN for this business' : 'Sign in online once to enable business PIN login'}</div>
 
           {!pinContext && (
             <input
@@ -393,7 +430,7 @@ export default function LoginScreen({ onLogin }: Props) {
             background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',
             fontSize: 14, cursor: 'pointer', fontFamily: 'inherit'
           }}>
-            Sign in with email to set up PIN login
+            Sign in online to set up business PIN login
           </button>}
           {pinContext && <button className="btn" onClick={() => setStep('login')} style={{
             background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',

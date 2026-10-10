@@ -241,7 +241,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           : "pos",
       )
       setPaymentMethod(
-        draft?.paymentMethod === "mpesa" || draft?.paymentMethod === "credit"
+        !session?.user.offline &&
+          (draft?.paymentMethod === "mpesa" || draft?.paymentMethod === "credit")
           ? draft.paymentMethod
           : "cash",
       )
@@ -434,6 +435,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     if (!session || !currentBusinessId) return
     let cancelled = false
     let loading = false
+    const scopeOperatorsToOfflineCashier = (operators: ActiveOperator[]) =>
+      session.user.offline
+        ? operators.filter((operator) => operator.id === session.user.id)
+        : operators
 
     const loadActiveShifts = async () => {
       if (loading) return
@@ -449,23 +454,19 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         const parsedRoster = localRoster
           ? (JSON.parse(localRoster) as ActiveOperator[])
           : []
-        const cachedOperators = parsedRoster.filter(
+        const cachedOperators = scopeOperatorsToOfflineCashier(parsedRoster.filter(
           (operator) =>
             typeof operator.id === "string" &&
             typeof operator.sessionId === "string" &&
             typeof operator.name === "string" &&
             typeof operator.shift === "string",
-        )
-        if (cachedOperators.length > 0) {
-          setActiveOperators(cachedOperators)
-          const selected = cachedOperators.find(
-            (operator) => operator.sessionId === localShiftId,
-          )
-          if (selected) {
-            setCurrentDeviceShiftId(selected.sessionId)
-            setSelectedOperatorId(selected.id)
-          }
-        }
+        ))
+        setActiveOperators(cachedOperators)
+        const selected =
+          cachedOperators.find((operator) => operator.sessionId === localShiftId) ??
+          (cachedOperators.length === 1 ? cachedOperators[0] : undefined)
+        setCurrentDeviceShiftId(selected?.sessionId ?? "")
+        setSelectedOperatorId(selected?.id ?? "")
       } catch (error) {
         console.error("Unable to restore the locally saved shift roster.", error)
       }
@@ -475,12 +476,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           "pos.shift_roster.v1",
         ).then((cachedOperators) => {
           if (cancelled || !cachedOperators?.length) return
+          const scopedOperators = scopeOperatorsToOfflineCashier(cachedOperators)
           setActiveOperators((current) =>
-            current.length > 0 ? current : cachedOperators,
+            current.length > 0 ? current : scopedOperators,
           )
-          const selected = cachedOperators.find(
-            (operator) => operator.sessionId === localShiftId,
-          )
+          const selected =
+            scopedOperators.find((operator) => operator.sessionId === localShiftId) ??
+            (scopedOperators.length === 1 ? scopedOperators[0] : undefined)
           if (selected) {
             setCurrentDeviceShiftId((current) => current || selected.sessionId)
             setSelectedOperatorId((current) => current || selected.id)
@@ -620,17 +622,17 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
               const parsedRoster = Array.isArray(cachedRoster)
                 ? cachedRoster
                 : []
-              const cachedOperators = parsedRoster.filter(
+              const cachedOperators = scopeOperatorsToOfflineCashier(parsedRoster.filter(
                 (operator) =>
                   typeof operator.id === "string" &&
                   typeof operator.sessionId === "string" &&
                   typeof operator.name === "string" &&
                   typeof operator.shift === "string",
-              )
+              ))
               setActiveOperators(cachedOperators)
-              const selected = cachedOperators.find(
-                (operator) => operator.sessionId === localShiftId,
-              )
+              const selected =
+                cachedOperators.find((operator) => operator.sessionId === localShiftId) ??
+                (cachedOperators.length === 1 ? cachedOperators[0] : undefined)
               setCurrentDeviceShiftId(selected?.sessionId ?? "")
               setSelectedOperatorId(selected?.id ?? "")
               setDataError(
@@ -713,6 +715,17 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
     if (!deviceUuid || isAssigningShift) return
     setIsAssigningShift(true)
     setDataError("")
+    if (session?.user.offline) {
+      setCurrentDeviceShiftId(operator.sessionId)
+      setSelectedOperatorId(operator.id)
+      window.localStorage.setItem(
+        deviceShiftStorageKey(currentBusinessId),
+        operator.sessionId,
+      )
+      setDataError("Offline mode: using this cashier's cached active shift.")
+      setIsAssigningShift(false)
+      return
+    }
     try {
       await apiFetch("/api/cash/session/device", {
         method: "PUT",
@@ -2113,7 +2126,8 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
           ]
             .filter(
               (m) =>
-                enabledPaymentMethods[(m.key as "cash" | "mpesa" | "credit")],
+                enabledPaymentMethods[(m.key as "cash" | "mpesa" | "credit")] &&
+                (!session?.user.offline || m.key === "cash"),
             )
             .map((m) => (
               <button

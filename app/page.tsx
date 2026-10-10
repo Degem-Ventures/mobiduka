@@ -29,6 +29,7 @@ import OfflineSyncWorker from "./components/OfflineSyncWorker";
 import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen";
 import TaxComplianceScreen from "./components/TaxComplianceScreen";
 import { apiFetch, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
+import { isNativeOfflineApp } from "../lib/offline-store";
 
 type Screen =
   | "login"
@@ -177,7 +178,9 @@ function AppInner() {
     const session = getClientSession();
     const tokenParts = session?.token.split(".");
     let sessionIsValid = Boolean(session);
-    if (session && tokenParts?.[1]) {
+    if (session?.user.offline) {
+      sessionIsValid = isNativeOfflineApp() && !navigator.onLine;
+    } else if (session && tokenParts?.[1]) {
       try {
         const claims = JSON.parse(atob(tokenParts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
         sessionIsValid = typeof claims.exp !== "number" || claims.exp > Date.now() / 1000;
@@ -187,7 +190,9 @@ function AppInner() {
     }
     if (sessionIsValid) {
       const savedScreen = getLastScreen() as Screen | null;
-      const restoredScreen = savedScreen && savedScreen !== "login" ? savedScreen : "dashboard";
+      const restoredScreen = session?.user.offline
+        ? "pos"
+        : savedScreen && savedScreen !== "login" ? savedScreen : "dashboard";
       setLoggedIn(true);
       setScreen(restoredScreen);
     } else {
@@ -204,6 +209,18 @@ function AppInner() {
     };
     window.addEventListener("mobiduka-auth-expired", handleAuthExpired);
     return () => window.removeEventListener("mobiduka-auth-expired", handleAuthExpired);
+  }, []);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      if (!getClientSession()?.user.offline) return;
+      clearClientSession();
+      clearLastScreen();
+      setLoggedIn(false);
+      setScreen("login");
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
   }, []);
 
   useEffect(() => {
@@ -248,8 +265,9 @@ function AppInner() {
 
   const handleLogin = () => {
     setLoggedIn(true);
-    setScreen("dashboard");
-    saveLastScreen("dashboard");
+    const startScreen = getClientSession()?.user.offline ? "pos" : "dashboard";
+    setScreen(startScreen);
+    saveLastScreen(startScreen);
   };
 
   const handleLogout = () => {
@@ -261,6 +279,11 @@ function AppInner() {
 
   const handleNavigate = (s: string, options?: { barcode?: string; productId?: string; cartItem?: { id: string; name: string; price: number; emoji: string } }) => {
     const nextScreen = s as Screen;
+    if (
+      getClientSession()?.user.offline &&
+      nextScreen !== "pos" &&
+      nextScreen !== "scan"
+    ) return;
     if (nextScreen !== "shifts") setOpenActiveShift(false);
     setInventoryBarcode(nextScreen === "inventory" ? options?.barcode : undefined);
     setInventoryProductId(nextScreen === "inventory" ? options?.productId : undefined);
@@ -270,6 +293,11 @@ function AppInner() {
   };
 
   const showNav = showNavFor.includes(screen);
+  const offlineSession = getClientSession()?.user.offline === true;
+  const visibleLeftNavItems = offlineSession
+    ? leftNavItems.filter((item) => item.key === "pos")
+    : leftNavItems;
+  const visibleRightNavItems = offlineSession ? [] : rightNavItems;
   const navActiveColor = isDark ? "#8FB3FF" : "#123A8F";
   const navInactiveColor = isDark ? "#A8B8D8" : "#6B7A99";
 
@@ -359,6 +387,12 @@ function AppInner() {
           <div
             style={{ height: "100%", display: "flex", flexDirection: "column" }}
           >
+            {getClientSession()?.user.offline && (
+              <div role="status" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 14px", background: "#FFF8E1", color: "#795548", fontSize: 11 }}>
+                <span>Offline PIN session · POS only. Staff access may be out of date; sign in online to sync.</span>
+                <button className="btn" onClick={handleLogout} style={{ border: 0, background: "transparent", color: "#795548", fontWeight: 700, whiteSpace: "nowrap" }}>Sign in online</button>
+              </div>
+            )}
             <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
               {renderScreen()}
             </div>
@@ -368,7 +402,7 @@ function AppInner() {
                 className="bottom-nav"
                 style={{ position: "relative", overflow: "visible" }}
               >
-                {leftNavItems.map((item) => {
+                {visibleLeftNavItems.map((item) => {
                   const isActive = screen === item.key;
                   return (
                     <button
@@ -486,7 +520,7 @@ function AppInner() {
                 </div>
                 </div>
 
-                {rightNavItems.map((item) => {
+                {visibleRightNavItems.map((item) => {
                   const isActive = screen === item.key;
                   return (
                     <button
