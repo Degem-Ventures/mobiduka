@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { useColors } from '../utils/theme'
-import { apiFetch, getClientSession } from '../../lib/client-api'
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from '../../lib/offline-store'
+import { getClientSession } from '../../lib/client-api'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
@@ -130,6 +135,8 @@ export default function Dashboard({ onNavigate }: Props) {
   const [scanPulse, setScanPulse] = useState(false)
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useAutoDismissMessage()
+  const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [lowStockDisplay, setLowStockDisplay] = useState<'preview' | 'expanded' | 'all'>('preview')
   const [clockNow, setClockNow] = useState(() => new Date())
@@ -142,9 +149,55 @@ export default function Dashboard({ onNavigate }: Props) {
       setError('Please sign in to load your dashboard.')
       return
     }
-    apiFetch<DashboardData>(`/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`)
-      .then(setData)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load dashboard data.'))
+    let cancelled = false
+    const loadDashboard = async () => {
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(
+          session.user.businessId,
+          'dashboard.summary.v1',
+        )
+      } catch (reason) {
+        console.error('Unable to read the dashboard snapshot timestamp.', reason)
+      }
+      try {
+        const snapshot = await fetchCachedCollection<DashboardData>(
+          session.user.businessId,
+          'dashboard.summary.v1',
+          `/api/dashboard/summary?businessId=${encodeURIComponent(session.user.businessId)}`,
+        )
+        if (cancelled) return
+        setData(snapshot)
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(
+            session.user.businessId,
+            'dashboard.summary.v1',
+          )
+        } catch (reason) {
+          console.error('Unable to read the dashboard snapshot timestamp.', reason)
+        }
+        if (cancelled) return
+        setSnapshotUpdatedAt(updatedAt)
+        setIsOfflineSnapshot(
+          !navigator.onLine ||
+          (isNativeOfflineApp() &&
+            updatedAt !== null &&
+            previousUpdatedAt === updatedAt),
+        )
+        setError('')
+      } catch (reason) {
+        if (cancelled) return
+        setError(reason instanceof Error ? reason.message : 'Unable to load dashboard data.')
+      }
+    }
+    const handleOnline = () => void loadDashboard()
+    void loadDashboard()
+    window.addEventListener('online', handleOnline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', handleOnline)
+    }
   }, [])
 
   useEffect(() => {
@@ -156,9 +209,13 @@ export default function Dashboard({ onNavigate }: Props) {
     const session = getClientSession()
     if (!session) return
     const refreshUnreadCount = () => {
-      apiFetch<{ unreadCount: number }>(`/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`)
+      fetchCachedCollection<{ unreadCount: number }>(
+        session.user.businessId,
+        'dashboard.notifications.v1',
+        `/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`,
+      )
         .then(response => setUnreadNotifications(response.unreadCount))
-        .catch(() => setUnreadNotifications(0))
+        .catch(() => undefined)
     }
     refreshUnreadCount()
     window.addEventListener('mobiduka-notification', refreshUnreadCount)
@@ -316,6 +373,11 @@ export default function Dashboard({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px 16px 80px' }}>
+        {isOfflineSnapshot && (
+          <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
+            Offline · showing the last dashboard snapshot{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}
+          </div>
+        )}
         {error && <div style={{ background: '#FFEBEE', color: '#C62828', border: '1px solid #FFCDD2', borderRadius: 12, padding: '12px 14px', marginBottom: 16, fontSize: 13 }}>{error}</div>}
         {/* Main stat cards */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
