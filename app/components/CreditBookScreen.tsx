@@ -4,6 +4,7 @@ import { apiFetch, getClientSession, startCreditorSale as saveCreditorSaleIntent
 import {
   fetchCachedCollection,
   isNativeOfflineApp,
+  queueOfflineCreditMutation,
   readOfflineCollectionUpdatedAt,
 } from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
@@ -135,7 +136,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
   }
 
   const recordPayment = async () => {
-    if (!session || !selected || detailOfflineSnapshot) return
+    if (!session || !selected) return
     const amount = Number(payAmount)
     if (!Number.isFinite(amount) || amount <= 0 || amount > selected.balance) {
       setDataError('Enter a payment amount within the outstanding balance.')
@@ -143,6 +144,36 @@ export default function CreditBookScreen({ onNavigate }: Props) {
     }
     setSaving(true)
     try {
+      if (isNativeOfflineApp() && !navigator.onLine) {
+        await queueOfflineCreditMutation(session.user.businessId, {
+          customerId: selected.id,
+          amount,
+          action: 'RECORD_PAYMENT',
+          userId: session.user.id,
+          paymentMethod: payMethod.toUpperCase(),
+        })
+        const updatedBalance = Math.max(0, selected.balance - amount)
+        const nextEntry: Transaction = {
+          id: `offline-${Date.now()}`,
+          date: new Date().toLocaleString(),
+          desc: `${payMethod === 'cash' ? 'Cash' : 'M-Pesa'} payment received`,
+          amount,
+          type: 'payment',
+        }
+        setCredits(previous => previous.map(credit => credit.id === selected.id ? {
+          ...credit,
+          balance: updatedBalance,
+          lastTx: nextEntry.date,
+          txCount: credit.txCount + 1,
+          transactions: [nextEntry, ...credit.transactions],
+        } : credit))
+        setSelected(current => current ? { ...current, balance: updatedBalance, transactions: [nextEntry, ...current.transactions] } : current)
+        setShowRecord(false)
+        setSelected(null)
+        setPayAmount('')
+        setDataError('')
+        return
+      }
       await apiFetch('/api/customers/credit', { method: 'POST', body: JSON.stringify({ action: 'RECORD_PAYMENT', businessId: session.user.businessId, customerId: selected.id, amount, userId: session.user.id, paymentMethod: payMethod.toUpperCase() }) })
       await loadCredits()
       setShowRecord(false)
@@ -179,7 +210,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '20px 16px 100px' }}>
           {detailOfflineSnapshot && (
             <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
-              This is saved credit data. Payments require an internet connection.
+              This is saved credit data. Credit payments can be queued offline, but new credit sales still require internet.
             </div>
           )}
           <div className="card" style={{ padding: '20px' }}>
@@ -204,7 +235,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
               </div>
             </div>
           </div>
-          <button className="btn" disabled={saving || detailOfflineSnapshot} onClick={() => void recordPayment()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving || detailOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)', opacity: saving || detailOfflineSnapshot ? 0.7 : 1 }}>
+          <button className="btn" disabled={saving} onClick={() => void recordPayment()} style={{ width: '100%', marginTop: 20, padding: '16px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(46,125,50,0.35)', opacity: saving ? 0.7 : 1 }}>
             Confirm Payment
           </button>
         </div>
@@ -233,7 +264,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
           {detailOfflineSnapshot && (
             <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
-              Showing saved credit history{detailSnapshotUpdatedAt ? ` from ${new Date(detailSnapshotUpdatedAt).toLocaleString()}` : ''}. Payments and credit sales require internet.
+              Showing saved credit history{detailSnapshotUpdatedAt ? ` from ${new Date(detailSnapshotUpdatedAt).toLocaleString()}` : ''}. Credit payments can be queued offline, but new credit sales still require internet.
             </div>
           )}
           {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
@@ -242,7 +273,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
             <div style={{ fontSize: 34, fontWeight: 900, color: '#D32F2F' }}>KSh {selected.balance.toLocaleString()}</div>
             <div style={{ fontSize: 11, color: '#EF5350', marginTop: 4 }}>{selected.daysOld === 0 ? 'Added today' : `${selected.daysOld} day${selected.daysOld > 1 ? 's' : ''} outstanding`}</div>
           </div>
-          <button className="btn" disabled={detailOfflineSnapshot} onClick={() => setShowRecord(true)} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: detailOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(46,125,50,0.3)', opacity: detailOfflineSnapshot ? 0.7 : 1 }}>
+          <button className="btn" onClick={() => setShowRecord(true)} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(46,125,50,0.3)' }}>
             💰 Record Payment
           </button>
           <button className="btn" disabled={detailOfflineSnapshot} onClick={startCreditorSale} style={{ width: '100%', padding: '15px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700, color: 'white', cursor: detailOfflineSnapshot ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 16, boxShadow: '0 3px 12px rgba(18,58,143,0.3)', opacity: detailOfflineSnapshot ? 0.7 : 1 }}>
@@ -290,7 +321,7 @@ export default function CreditBookScreen({ onNavigate }: Props) {
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {listOfflineSnapshot && (
           <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
-            Showing saved credit accounts{listSnapshotUpdatedAt ? ` from ${new Date(listSnapshotUpdatedAt).toLocaleString()}` : ''}. Payments and credit sales require internet.
+            Showing saved credit accounts{listSnapshotUpdatedAt ? ` from ${new Date(listSnapshotUpdatedAt).toLocaleString()}` : ''}. Credit payments can be queued offline, but new credit sales still require internet.
           </div>
         )}
         {credits.map(cr => (

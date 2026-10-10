@@ -130,6 +130,10 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
   const filtered = orders.filter(o => filter === 'all' || (filter === 'pending' && (o.status === 'pending' || o.status === 'partial')) || (filter === 'delivered' && o.status === 'delivered'))
 
   const submitOrder = async () => {
+    if (isOfflineSnapshot) {
+      setDataError('Purchase orders are read-only while offline. Connect to the internet to submit a new order.')
+      return
+    }
     if (!session || !newForm.supplierId || newItems.length === 0 || newItems.some(item => !item.productId || Number(item.quantity) < 1 || Number(item.costPrice) < 0)) return
     setSaving(true)
     setDataError('')
@@ -172,6 +176,10 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
   const newOrderTotal = newItems.reduce((total, item) => total + Number(item.quantity || 0) * Number(item.costPrice || 0), 0)
 
   const receiveOrder = async () => {
+    if (isOfflineSnapshot) {
+      setDataError('Purchase orders are read-only while offline. Connect to the internet to mark a shipment received.')
+      return
+    }
     if (!session || !selected) return
     setSaving(true)
     setDataError('')
@@ -274,7 +282,7 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
             ))}
           </div>
 
-          <button className="btn" disabled={saving || !newForm.supplierId || newItems.length === 0} onClick={() => void submitOrder()} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
+          <button className="btn" disabled={saving || isOfflineSnapshot || !newForm.supplierId || newItems.length === 0} onClick={() => void submitOrder()} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 16, fontWeight: 700, color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(18,58,143,0.35)' }}>
             {saving ? 'Submitting...' : 'Submit Purchase Order'}
           </button>
         </div>
@@ -332,8 +340,8 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
           </div>
           {(selected.status === 'pending' || selected.status === 'partial') && (
             <div style={{ display: 'flex', gap: 10 }}>
-              <button className="btn" style={{ flex: 1, padding: '13px', background: 'rgba(18,58,143,0.1)', border: '1px solid #123A8F', borderRadius: 14, fontSize: 13, fontWeight: 600, color: '#123A8F', cursor: 'pointer', fontFamily: 'inherit' }}>Edit Order</button>
-              <button className="btn" disabled={saving} onClick={() => void receiveOrder()} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit' }}>{saving ? 'Updating...' : 'Mark Received'}</button>
+              <button className="btn" disabled={isOfflineSnapshot} style={{ flex: 1, padding: '13px', background: 'rgba(18,58,143,0.1)', border: '1px solid #123A8F', borderRadius: 14, fontSize: 13, fontWeight: 600, color: '#123A8F', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>Edit Order</button>
+              <button className="btn" disabled={saving || isOfflineSnapshot} onClick={() => void receiveOrder()} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #2E7D32, #388E3C)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: saving || isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>{saving ? 'Updating...' : 'Mark Received'}</button>
             </div>
           )}
         </div>
@@ -352,7 +360,7 @@ export default function PurchaseOrdersScreen({ onNavigate }: Props) {
             </button>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Purchase Orders</div>
           </div>
-          <button className="btn" onClick={() => setShowNew(true)} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" disabled={isOfflineSnapshot} onClick={() => setShowNew(true)} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>
             <span style={{ fontSize: 18, color: '#0D1B3D', lineHeight: 1 }}>+</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>New PO</span>
           </button>

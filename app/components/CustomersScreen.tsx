@@ -4,6 +4,7 @@ import { apiFetch, getClientSession, startCreditorSale } from '../../lib/client-
 import {
   fetchCachedCollection,
   isNativeOfflineApp,
+  queueOfflineCreditMutation,
   readOfflineCollectionUpdatedAt,
 } from '../../lib/offline-store'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
@@ -184,10 +185,41 @@ export default function CustomersScreen({ onNavigate }: Props) {
 
   const recordPayment = async () => {
     if (!session || !selected || selected.credit <= 0) return
-    const amount = window.prompt(`Payment amount (outstanding KSh ${selected.credit.toLocaleString()})`)
-    if (!amount) return
+    const rawAmount = window.prompt(`Payment amount (outstanding KSh ${selected.credit.toLocaleString()})`)
+    if (!rawAmount) return
+    const amount = Number(rawAmount)
+    if (!Number.isFinite(amount) || amount <= 0 || amount > selected.credit) {
+      setDataError('Enter a payment amount within the outstanding balance.')
+      return
+    }
     setSaving(true)
     try {
+      if (isNativeOfflineApp() && !navigator.onLine) {
+        await queueOfflineCreditMutation(session.user.businessId, {
+          customerId: selected.id,
+          amount,
+          action: 'RECORD_PAYMENT',
+          userId: session.user.id,
+          paymentMethod: 'CASH',
+        })
+        const updatedCredit = Math.max(0, selected.credit - amount)
+        const nextTransaction: Transaction = {
+          id: `offline-${Date.now()}`,
+          date: new Date().toLocaleString(),
+          type: 'Payment',
+          amount,
+          method: 'Cash payment',
+          items: 0,
+        }
+        setSelected(current => current ? {
+          ...current,
+          credit: updatedCredit,
+          transactions: [nextTransaction, ...current.transactions],
+        } : current)
+        setCustomers(previous => previous.map(customer => customer.id === selected.id ? { ...customer, credit: updatedCredit } : customer))
+        setDataError('')
+        return
+      }
       await apiFetch('/api/customers/credit', { method: 'POST', body: JSON.stringify({ action: 'RECORD_PAYMENT', businessId: session.user.businessId, customerId: selected.id, amount, userId: session.user.id }) })
       await handleSelectCustomer(selected)
       loadCustomers()
@@ -281,7 +313,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
         <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
           {isOfflineSnapshot && (
             <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>
-              Offline · showing saved customer data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Customer changes and credit payments require internet.
+              Offline · showing saved customer data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Customer edits still require internet, but credit payments can be queued locally.
             </div>
           )}
           {dataError && <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}
@@ -397,7 +429,7 @@ export default function CustomersScreen({ onNavigate }: Props) {
       <div className="scroll-area" style={{ padding: '12px', paddingBottom: 80 }}>
         {isOfflineSnapshot && (
           <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 12, fontSize: 12 }}>
-            Offline · showing saved customer data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Customer changes and credit payments require internet.
+            Offline · showing saved customer data{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Customer edits still require internet, but credit payments can be queued locally.
           </div>
         )}
         {dataError && <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 10, background: '#FFEBEE', color: '#C62828', fontSize: 12 }}>{dataError}</div>}

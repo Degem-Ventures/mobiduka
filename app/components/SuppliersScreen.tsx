@@ -152,9 +152,21 @@ export default function SuppliersScreen({ onNavigate }: Props) {
     else selected.set(normalizedName, name)
     setForm(previous => ({ ...previous, category: [...selected.values()].join(', ') }))
   }
-  const openAdd = () => { setForm(emptySupplierForm); setEditingSupplier(null); setShowAdd(true) }
+  const openAdd = () => {
+    if (isOfflineSnapshot) {
+      setDataError('Saved supplier data is read-only while offline. Connect to the internet to add or edit suppliers.')
+      return
+    }
+    setForm(emptySupplierForm)
+    setEditingSupplier(null)
+    setShowAdd(true)
+  }
 
   const startEdit = (supplier: Supplier) => {
+    if (isOfflineSnapshot) {
+      setDataError('Saved supplier data is read-only while offline. Connect to the internet to edit suppliers.')
+      return
+    }
     setForm({ name: supplier.name, category: supplier.category ?? '', contact: supplier.contactPerson ?? '', phone: supplier.phone ?? '', email: supplier.email ?? '', location: supplier.location ?? '', notes: supplier.notes ?? '', paymentTerms: supplier.paymentTerms ?? 'Net 30', rating: String(supplier.rating ?? 5), outstandingBalance: String(supplier.outstandingBalance ?? 0) })
     setEditingSupplier(supplier)
     setSelected(null)
@@ -162,6 +174,10 @@ export default function SuppliersScreen({ onNavigate }: Props) {
   }
 
   const deleteSupplier = async () => {
+    if (isOfflineSnapshot) {
+      setDataError('Saved supplier data is read-only while offline. Connect to the internet to delete suppliers.')
+      return
+    }
     const target = supplierToDelete ?? selected
     if (!session || !target) return
     setSaving(true); setDataError('')
@@ -289,7 +305,11 @@ export default function SuppliersScreen({ onNavigate }: Props) {
               <textarea className="input" rows={3} placeholder="Optional supplier notes" value={form.notes} onChange={event => setForm(previous => ({ ...previous, notes: event.target.value }))} style={{ resize: 'vertical' }} />
             </div>
           </div>
-          <button className="btn" disabled={saving} onClick={async () => {
+          <button className="btn" disabled={saving || isOfflineSnapshot} onClick={async () => {
+            if (isOfflineSnapshot) {
+              setDataError('Saved supplier data is read-only while offline. Connect to the internet to save changes.')
+              return
+            }
             if (!session || !form.name.trim()) return
             setSaving(true)
             try {
@@ -368,12 +388,12 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             ))}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn" onClick={() => onNavigate('purchases')} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>New Order</button>
-            <button className="btn" onClick={() => setConfirmDelete(true)} style={{ padding: '13px', background: c.errorBg, border: '1px solid #D32F2F', borderRadius: 14, fontSize: 13, fontWeight: 700, color: '#D32F2F', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => onNavigate('purchases')} style={{ flex: 1, padding: '13px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 14, fontSize: 13, fontWeight: 700, color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>New Order</button>
+            <button className="btn" disabled={isOfflineSnapshot} onClick={() => setConfirmDelete(true)} style={{ padding: '13px', background: c.errorBg, border: '1px solid #D32F2F', borderRadius: 14, fontSize: 13, fontWeight: 700, color: '#D32F2F', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>Delete</button>
             <button className="btn" style={{ width: 48, padding: '13px', background: '#E8F5E9', border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>📞</button>
             <button className="btn" style={{ width: 48, padding: '13px', background: c.iconBg, border: 'none', borderRadius: 14, fontSize: 20, cursor: 'pointer' }}>✉️</button>
           </div>
-          {confirmDelete && <div role="alert" className="card" style={{ padding: 14, marginTop: 14, border: '1px solid #EF9A9A' }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete {selected.name}?</div><div style={{ fontSize: 12, color: c.muted, marginBottom: 12 }}>This cannot be undone. Suppliers linked to products or orders are protected.</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setConfirmDelete(false)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.iconBg, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving} onClick={() => void deleteSupplier()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: 'pointer' }}>Delete</button></div></div>}
+          {confirmDelete && <div role="alert" className="card" style={{ padding: 14, marginTop: 14, border: '1px solid #EF9A9A' }}><div style={{ fontSize: 13, fontWeight: 700, color: '#B71C1C', marginBottom: 10 }}>Delete {selected.name}?</div><div style={{ fontSize: 12, color: c.muted, marginBottom: 12 }}>This cannot be undone. Suppliers linked to products or orders are protected.</div><div style={{ display: 'flex', gap: 8 }}><button className="btn" onClick={() => setConfirmDelete(false)} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: c.iconBg, cursor: 'pointer' }}>Cancel</button><button className="btn" disabled={saving || isOfflineSnapshot} onClick={() => void deleteSupplier()} style={{ flex: 1, padding: 9, border: 'none', borderRadius: 8, background: '#D32F2F', color: 'white', cursor: isOfflineSnapshot ? 'default' : 'pointer' }}>Delete</button></div></div>}
         </div>
       </div>
     )
@@ -391,7 +411,7 @@ export default function SuppliersScreen({ onNavigate }: Props) {
             </button>
             <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>Suppliers</div>
           </div>
-          <button className="btn" onClick={openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button className="btn" disabled={isOfflineSnapshot} onClick={openAdd} style={{ background: '#D4AF37', border: 'none', borderRadius: 12, padding: '9px 14px', display: 'flex', alignItems: 'center', gap: 6, cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1, fontFamily: 'inherit' }}>
             <span style={{ fontSize: 18, color: '#0D1B3D', lineHeight: 1 }}>+</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#0D1B3D' }}>Add</span>
           </button>
@@ -427,8 +447,8 @@ export default function SuppliersScreen({ onNavigate }: Props) {
               <div style={{ textAlign: 'right', flexShrink: 0 }}><div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>{s._count.purchaseOrders} orders</div>{s.outstandingBalance > 0 ? <span className="badge badge-error">{formatCompactAmount(s.outstandingBalance)}</span> : <span className="badge badge-success">Settled</span>}</div>
             </button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <button className="btn" onClick={() => startEdit(s)} aria-label={`Edit ${s.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-              <button className="btn" onClick={() => setSupplierToDelete(s)} aria-label={`Delete ${s.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
+              <button className="btn" disabled={isOfflineSnapshot} onClick={() => startEdit(s)} aria-label={`Edit ${s.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.iconBg, border: 'none', display: 'grid', placeItems: 'center', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#123A8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button className="btn" disabled={isOfflineSnapshot} onClick={() => setSupplierToDelete(s)} aria-label={`Delete ${s.name}`} style={{ width: 30, height: 30, borderRadius: 8, background: c.errorBg, border: 'none', display: 'grid', placeItems: 'center', cursor: isOfflineSnapshot ? 'default' : 'pointer', opacity: isOfflineSnapshot ? 0.6 : 1 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D32F2F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
             </div>
           </div>
         ))}
