@@ -8,6 +8,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   android: {
     allowMixedContent: false,
+    adjustMarginsForEdgeToEdge: 'auto',
   },
   server: {
     androidScheme: 'https',
