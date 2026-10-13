@@ -74,35 +74,28 @@ export async function refreshOfflinePinRoster(businessId: string) {
     isSupportedPinHash(employee.pinHash),
   )
   const now = new Date().toISOString()
-  await database.execute("BEGIN IMMEDIATE;", false)
-  try {
-    await database.run(
-      "DELETE FROM offline_pin_roster WHERE business_id = ?",
-      [businessId],
-    )
-    for (const employee of employees) {
-      await database.run(
-        `INSERT INTO offline_pin_roster
+  await database.executeSet([
+    {
+      statement: "DELETE FROM offline_pin_roster WHERE business_id = ?",
+      values: [businessId],
+    },
+    ...employees.map(employee => ({
+      statement: `INSERT INTO offline_pin_roster
           (business_id, employee_id, full_name, role, pin_hash)
          VALUES (?, ?, ?, ?, ?)`,
-        [businessId, employee.id, employee.fullName, employee.role, employee.pinHash],
-      )
-    }
-    await database.run(
-      `INSERT INTO offline_pin_roster_state
+      values: [businessId, employee.id, employee.fullName, employee.role, employee.pinHash],
+    })),
+    {
+      statement: `INSERT INTO offline_pin_roster_state
         (business_id, updated_at, failed_attempts, locked_until)
        VALUES (?, ?, 0, NULL)
        ON CONFLICT (business_id) DO UPDATE SET
          updated_at = excluded.updated_at,
          failed_attempts = 0,
          locked_until = NULL`,
-      [businessId, now],
-    )
-    await database.execute("COMMIT;", false)
-  } catch (error) {
-    await database.execute("ROLLBACK;", false)
-    throw error
-  }
+      values: [businessId, now],
+    },
+  ])
 }
 
 export async function refreshOfflinePinRosterIfNeeded(businessId: string) {
