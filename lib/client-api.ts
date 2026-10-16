@@ -107,7 +107,10 @@ export function savePinLoginContext(context: PinLoginContext) {
   window.localStorage.setItem(PIN_LOGIN_CONTEXT_KEY, JSON.stringify(context));
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiFetchResponse(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const session = getClientSession();
   if (session?.user.offline) {
     throw new TypeError(
@@ -115,7 +118,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     );
   }
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   if (session?.token) headers.set("Authorization", `Bearer ${session.token}`);
 
   const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN?.replace(/\/+$/, "") ?? "";
@@ -124,13 +129,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       ? new URL(path, apiOrigin).toString()
       : path;
   const response = await fetch(requestUrl, { ...init, headers });
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith("/api/auth/")) {
       clearClientSession();
       clearLastScreen();
       window.dispatchEvent(new Event("mobiduka-auth-expired"));
     }
+    const payload = await response.clone().json().catch(() => ({}));
     throw new ApiResponseError(
       typeof payload.error === "string"
         ? payload.error
@@ -138,5 +143,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       response.status,
     );
   }
+  return response;
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiFetchResponse(path, init);
+  const payload = await response.json().catch(() => ({}));
   return payload as T;
 }

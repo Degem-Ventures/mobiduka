@@ -349,6 +349,223 @@ export type OfflineStorageUsage = {
   queuedPayloadBytes: number
 }
 
+export type OfflineBackupSnapshot = {
+  formatVersion: 1
+  businessId: string
+  createdAt: string
+  collections: Array<{
+    cacheKey: string
+    updatedAt: string
+    payload: unknown
+  }>
+  queuedRecords: Array<{
+    id: string
+    entityName: string
+    operation: string
+    externalId: string
+    payload: unknown
+    payloadHash: string
+    status: string
+    attemptCount: number
+    nextRetryAt: string | null
+    createdAt: string
+  }>
+}
+
+export async function createOfflineBackupSnapshot(
+  businessId: string,
+): Promise<OfflineBackupSnapshot> {
+  const database = await getDatabase()
+  if (!database) {
+    throw new Error("Cloud backup requires the native app's on-device SQLite database.")
+  }
+  if (!businessId) {
+    throw new Error("A signed-in business is required to create a backup.")
+  }
+
+  const [cachedCollections, queuedRecords] = await Promise.all([
+    database.query(
+      `SELECT cache_key, payload, updated_at FROM offline_collection_cache
+       WHERE business_id = ? ORDER BY cache_key`,
+      [businessId],
+    ),
+    database.query(
+      `SELECT id, entity_name, operation, external_id, payload, payload_hash,
+              status, attempt_count, next_retry_at, created_at
+       FROM sync_outbox WHERE business_id = ? ORDER BY created_at, id`,
+      [businessId],
+    ),
+  ])
+
+  return {
+    formatVersion: 1,
+    businessId,
+    createdAt: new Date().toISOString(),
+    collections: (cachedCollections.values ?? []).map(row => ({
+      cacheKey: String(row.cache_key),
+      updatedAt: String(row.updated_at),
+      payload: JSON.parse(String(row.payload)) as unknown,
+    })),
+    queuedRecords: (queuedRecords.values ?? []).map(row => ({
+      id: String(row.id),
+      entityName: String(row.entity_name),
+      operation: String(row.operation),
+      externalId: String(row.external_id),
+      payload: JSON.parse(String(row.payload)) as unknown,
+      payloadHash: String(row.payload_hash),
+      status: String(row.status),
+      attemptCount: Number(row.attempt_count),
+      nextRetryAt: typeof row.next_retry_at === "string" ? row.next_retry_at : null,
+      createdAt: String(row.created_at),
+    })),
+  }
+}
+
+export async function restoreOfflineBackupSnapshot(
+  businessId: string,
+  snapshot: unknown,
+): Promise<void> {
+  const database = await getDatabase()
+  if (!database) {
+    throw new Error("Cloud restore requires the native app's on-device SQLite database.")
+  }
+  if (
+    !snapshot ||
+    typeof snapshot !== "object" ||
+    Array.isArray(snapshot) ||
+    (snapshot as Record<string, unknown>).formatVersion !== 1 ||
+    (snapshot as Record<string, unknown>).businessId !== businessId ||
+    !Array.isArray((snapshot as Record<string, unknown>).collections) ||
+    !Array.isArray((snapshot as Record<string, unknown>).queuedRecords)
+  ) {
+    throw new Error("The cloud restore snapshot does not match this business or its supported format.")
+  }
+
+  const source = snapshot as Record<string, unknown>
+  if (
+    typeof source.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(source.createdAt))
+  ) {
+    throw new Error("The cloud restore snapshot has an invalid creation timestamp.")
+  }
+
+  const collections: OfflineBackupSnapshot["collections"] = []
+  const cacheKeys = new Set<string>()
+  for (const value of source.collections as unknown[]) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("The cloud restore snapshot contains an invalid collection.")
+    }
+    const collection = value as Record<string, unknown>
+    if (
+      typeof collection.cacheKey !== "string" ||
+      collection.cacheKey.length === 0 ||
+      collection.cacheKey.length > 512 ||
+      typeof collection.updatedAt !== "string" ||
+      !Number.isFinite(Date.parse(collection.updatedAt)) ||
+      !Object.prototype.hasOwnProperty.call(collection, "payload") ||
+      cacheKeys.has(collection.cacheKey)
+    ) {
+      throw new Error("The cloud restore snapshot contains an invalid collection.")
+    }
+    cacheKeys.add(collection.cacheKey)
+    collections.push({
+      cacheKey: collection.cacheKey,
+      updatedAt: collection.updatedAt,
+      payload: collection.payload,
+    })
+  }
+
+  const queuedRecords: OfflineBackupSnapshot["queuedRecords"] = []
+  const recordIds = new Set<string>()
+  for (const value of source.queuedRecords as unknown[]) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("The cloud restore snapshot contains an invalid queued record.")
+    }
+    const record = value as Record<string, unknown>
+    if (
+      typeof record.id !== "string" ||
+      record.id.length === 0 ||
+      typeof record.entityName !== "string" ||
+      typeof record.operation !== "string" ||
+      typeof record.externalId !== "string" ||
+      typeof record.payloadHash !== "string" ||
+      !/^[a-f\d]{64}$/i.test(record.payloadHash) ||
+      (record.status !== "PENDING" && record.status !== "FAILED") ||
+      typeof record.attemptCount !== "number" ||
+      !Number.isSafeInteger(record.attemptCount) ||
+      record.attemptCount < 0 ||
+      (record.nextRetryAt !== null && typeof record.nextRetryAt !== "string") ||
+      typeof record.createdAt !== "string" ||
+      !Number.isFinite(Date.parse(record.createdAt)) ||
+      !Object.prototype.hasOwnProperty.call(record, "payload") ||
+      recordIds.has(record.id)
+    ) {
+      throw new Error("The cloud restore snapshot contains an invalid queued record.")
+    }
+    recordIds.add(record.id)
+    queuedRecords.push({
+      id: record.id,
+      entityName: record.entityName,
+      operation: record.operation,
+      externalId: record.externalId,
+      payload: record.payload,
+      payloadHash: record.payloadHash,
+      status: record.status,
+      attemptCount: record.attemptCount,
+      nextRetryAt: record.nextRetryAt,
+      createdAt: record.createdAt,
+    })
+  }
+
+  await database.execute("BEGIN IMMEDIATE;", false)
+  try {
+    await database.run(
+      "DELETE FROM offline_collection_cache WHERE business_id = ?",
+      [businessId],
+      false,
+    )
+    await database.run(
+      "DELETE FROM sync_outbox WHERE business_id = ?",
+      [businessId],
+      false,
+    )
+    for (const collection of collections) {
+      await database.run(
+        `INSERT INTO offline_collection_cache (business_id, cache_key, payload, updated_at)
+         VALUES (?, ?, ?, ?)`,
+        [businessId, collection.cacheKey, JSON.stringify(collection.payload), collection.updatedAt],
+        false,
+      )
+    }
+    for (const record of queuedRecords) {
+      await database.run(
+        `INSERT INTO sync_outbox (
+           id, business_id, entity_name, operation, external_id, payload,
+           payload_hash, status, attempt_count, next_retry_at, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          record.id,
+          businessId,
+          record.entityName,
+          record.operation,
+          record.externalId,
+          JSON.stringify(record.payload),
+          record.payloadHash,
+          record.status,
+          record.attemptCount,
+          record.nextRetryAt,
+          record.createdAt,
+        ],
+        false,
+      )
+    }
+    await database.execute("COMMIT;", false)
+  } catch (error) {
+    await database.execute("ROLLBACK;", false)
+    throw error
+  }
+}
+
 export async function getOfflineStorageUsage(
   businessId: string,
 ): Promise<OfflineStorageUsage> {

@@ -38,9 +38,304 @@
       "get": { "tags": ["Business"], "summary": "Get authenticated business profile", "responses": { "200": { "description": "Business profile" }, "401": { "description": "Authentication required" } } },
       "patch": { "tags": ["Business"], "summary": "Update authenticated business profile", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "businessId": { "type": "string" }, "name": { "type": "string" }, "branch": { "type": "string", "nullable": true }, "country": { "type": "string", "nullable": true }, "phone": { "type": "string", "nullable": true }, "email": { "type": "string", "format": "email", "nullable": true }, "taxPin": { "type": "string", "nullable": true }, "currency": { "type": "string", "enum": ["KES", "UGX", "TZS", "USD", "GBP", "EUR"] } } } } } }, "responses": { "200": { "description": "Updated business profile" } } }
     },
+    "/business/backup": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Get cloud device backup history",
+        "description": "Requires the authenticated user's business settings permission. Returns the latest completed backup and up to 20 completed or failed attempts, including manual/automatic source, byte size, retry count, and device-cache counts.",
+        "responses": {
+          "200": { "description": "Latest completed backup in backup plus recent attempts in backups; backup contents remain encrypted." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." }
+        }
+      },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Initialize an encrypted cloud backup",
+        "description": "Creates a tenant-scoped device snapshot upload. triggerType marks manual or automatic runs; collection and queue counts are persisted for backup history. Configure BACKUP_ENCRYPTION_KEY on the server.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["backupId", "checksum", "chunkCount", "compressedBytes", "originalBytes"],
+                "properties": {
+                  "backupId": { "type": "string", "format": "uuid" },
+                  "checksum": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$", "description": "SHA-256 of the uncompressed JSON snapshot." },
+                  "chunkCount": { "type": "integer", "minimum": 1, "maximum": 256 },
+                  "compressedBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+                  "originalBytes": { "type": "integer", "minimum": 1, "maximum": 268435456 },
+                  "collectionCount": { "type": "integer", "minimum": 0 },
+                  "queuedRecordCount": { "type": "integer", "minimum": 0 },
+                  "triggerType": { "type": "string", "enum": ["MANUAL", "AUTO"], "default": "MANUAL" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Backup upload initialized." },
+          "200": { "description": "Idempotent retry for an existing backup." },
+          "400": { "description": "Invalid backup metadata." },
+          "403": { "description": "Business settings permission required." },
+          "503": { "description": "Server backup encryption is not configured." }
+        }
+      }
+    },
+    "/business/backup/{backupId}/chunks/{index}": {
+      "put": {
+        "tags": ["Business"],
+        "summary": "Upload one encrypted backup chunk",
+        "description": "Accepts one gzip archive chunk of at most 256 KiB. Re-uploading an identical chunk is idempotent; a different payload at the same index is rejected.",
+        "parameters": [
+          { "name": "backupId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "index", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": { "type": "string", "format": "binary" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Chunk stored or an identical retry was already present." },
+          "400": { "description": "Invalid index or chunk size." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Backup was not found in this business." },
+          "409": { "description": "Chunk index already contains different data." },
+          "413": { "description": "Chunk exceeds 256 KiB." }
+        }
+      }
+    },
+    "/business/backup/{backupId}/complete": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Verify and complete a cloud backup",
+        "description": "Authenticates/decrypts each chunk, checks the gzip archive and SHA-256 checksum, verifies tenant and snapshot format, then marks the backup complete.",
+        "parameters": [
+          { "name": "backupId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "retryCount": { "type": "integer", "minimum": 0, "maximum": 512 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Backup completed or an identical completion retry was already recorded." },
+          "400": { "description": "Backup integrity, checksum, or snapshot validation failed." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Backup was not found in this business." },
+          "409": { "description": "Backup is missing one or more chunks." },
+          "503": { "description": "Server backup encryption is not configured." }
+        }
+      }
+    },
+    "/business/backup/{backupId}/fail": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Persist a failed device backup attempt",
+        "parameters": [
+          { "name": "backupId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["failureReason"],
+                "properties": {
+                  "failureReason": { "type": "string", "maxLength": 500 },
+                  "retryCount": { "type": "integer", "minimum": 0, "maximum": 512 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Failed attempt recorded." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Pending device backup was not found." }
+        }
+      }
+    },
+    "/business/restore": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Restore a completed encrypted cloud backup",
+        "description": "Requires the authenticated user's business settings permission. Selects the latest completed backup when backupId is omitted, decrypts and verifies its AES-256-GCM chunks server-side, and returns the tenant-matched offline snapshot. The client should confirm before replacing local collections and queued sync records.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "backupId": { "type": "string", "format": "uuid", "description": "Optional completed backup ID; omitted to restore the latest completed backup." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified offline cache snapshot for the authenticated business.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success", "backupId", "checksum", "completedAt", "payload"],
+                  "properties": {
+                    "success": { "type": "boolean", "enum": [true] },
+                    "backupId": { "type": "string", "format": "uuid" },
+                    "checksum": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+                    "completedAt": { "type": "string", "format": "date-time", "nullable": true },
+                    "payload": {
+                      "type": "object",
+                      "required": ["formatVersion", "businessId", "createdAt", "collections", "queuedRecords"],
+                      "properties": {
+                        "formatVersion": { "type": "integer", "enum": [1] },
+                        "businessId": { "type": "string" },
+                        "createdAt": { "type": "string", "format": "date-time" },
+                        "collections": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["cacheKey", "updatedAt", "payload"],
+                            "properties": {
+                              "cacheKey": { "type": "string" },
+                              "updatedAt": { "type": "string", "format": "date-time" },
+                              "payload": {}
+                            }
+                          }
+                        },
+                        "queuedRecords": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["id", "entityName", "operation", "externalId", "payload", "payloadHash", "status", "attemptCount", "nextRetryAt", "createdAt"],
+                            "properties": {
+                              "id": { "type": "string" },
+                              "entityName": { "type": "string" },
+                              "operation": { "type": "string" },
+                              "externalId": { "type": "string" },
+                              "payload": {},
+                              "payloadHash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+                              "status": { "type": "string", "enum": ["PENDING", "FAILED"] },
+                              "attemptCount": { "type": "integer", "minimum": 0 },
+                              "nextRetryAt": { "type": "string", "format": "date-time", "nullable": true },
+                              "createdAt": { "type": "string", "format": "date-time" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid restore request or backup ID." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "No completed backup was found for this business." },
+          "422": { "description": "Backup chunks, checksum, archive, or snapshot failed integrity validation." },
+          "503": { "description": "Server backup encryption is not configured." },
+          "500": { "description": "Unexpected server-side restoration failure." }
+        }
+      }
+    },
+    "/business/backup/server-data": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Get full server business backup history",
+        "description": "Requires authenticated business settings permission. Returns completed metadata and failed attempts, including automatic/manual source, record count, retry count and failure reason; snapshots remain encrypted at rest.",
+        "responses": {
+          "200": { "description": "Latest completed server backup in backup plus recent completed or failed attempts in backups." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." }
+        }
+      },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Create a full tenant-scoped PostgreSQL business backup",
+        "description": "Reads business-owned records in a repeatable-read transaction, serializes and compresses the snapshot, encrypts each chunk with AES-256-GCM, and stores up to 10 completed server backups in the same PostgreSQL database. Includes credential hashes and encrypted payment credential records; shared payment-method definitions and backup archives are excluded. Only authorized server-side restore can access plaintext. This is not protection from loss of that database; maintain an independent off-site backup. Requires BACKUP_ENCRYPTION_KEY.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "triggerType": { "type": "string", "enum": ["MANUAL", "AUTO"], "default": "MANUAL" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Encrypted server business backup created." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." },
+          "409": { "description": "Server data has inconsistent tenant relationships; no backup was stored." },
+          "413": { "description": "Snapshot exceeds the supported size." },
+          "503": { "description": "Server backup encryption is not configured." },
+          "500": { "description": "Server backup could not be created." }
+        }
+      }
+    },
+    "/cron/automatic-backups": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Run the daily automatic full-business backup job",
+        "description": "Scheduled daily at 06:00 UTC by Vercel Cron. Requires CRON_SECRET in production. Creates a full-business backup for each business with automatic backups enabled and records failed attempts.",
+        "responses": {
+          "200": { "description": "Automatic backup run totals." },
+          "401": { "description": "Unauthorized cron execution." }
+        }
+      }
+    },
+    "/business/restore/server-data": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Restore a full server business snapshot without deleting current-only rows",
+        "description": "Requires authenticated business settings permission. Decrypts and verifies a completed snapshot, then transactionally upserts tenant rows. Snapshot values win for matching primary IDs; current rows absent from the snapshot are retained. Business and credential records are included. Unique-key or foreign-key conflicts roll back the entire restore.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["backupId"],
+                "properties": {
+                  "backupId": { "type": "string", "format": "uuid" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Server snapshot restored; rows absent from the snapshot were retained." },
+          "400": { "description": "Invalid restore request." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Completed server backup not found for this business." },
+          "422": { "description": "Backup integrity or tenant validation failed." },
+          "503": { "description": "Server backup encryption is not configured." },
+          "500": { "description": "Restore transaction failed; no rows were committed." }
+        }
+      }
+    },
     "/settings": {
-      "get": { "tags": ["Business"], "summary": "Get authenticated business settings", "parameters": [{ "name": "includeTaxConfig", "in": "query", "schema": { "type": "boolean" }, "description": "Include the Tax & Compliance preferences." }], "responses": { "200": { "description": "Business settings and optional tax configuration" }, "401": { "description": "Authentication required" } } },
-      "patch": { "tags": ["Business"], "summary": "Update business and tax settings", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "description": "Accepts businessId, taxPin, and taxConfig (vatEnabled, defaultRate, filingPeriod, etimsEnabled, etimsDevice)." } } } }, "responses": { "200": { "description": "Updated settings" }, "400": { "description": "Invalid settings" } } }
+      "get": { "tags": ["Business"], "summary": "Get authenticated business settings", "parameters": [{ "name": "includeTaxConfig", "in": "query", "schema": { "type": "boolean" }, "description": "Include the Tax & Compliance preferences." }], "responses": { "200": { "description": "Business settings, including automatic backup and Wi-Fi-only preferences" }, "401": { "description": "Authentication required" } } },
+      "patch": { "tags": ["Business"], "summary": "Update business and tax settings", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "description": "Accepts businessId, taxPin, taxConfig, autoBackup, autoBackupFrequency (DAILY, WEEKLY, or MONTHLY), and autoBackupWifiOnly." } } } }, "responses": { "200": { "description": "Updated settings" }, "400": { "description": "Invalid settings" } } }
     },
     "/auth/login": {
       "post": {
@@ -724,7 +1019,7 @@
                         "inventoryValuation": { "type": "number" },
                         "inventoryUnits": { "type": "integer" },
                         "activeOpenShiftsCount": { "type": "integer" },
-                        "openingCashTotal": { "type": "number" }
+                        "openingCashTotal": { "type": "number"                         }
                       }
                     },
                     "trends": { "type": "array", "items": { "type": "object" } }
@@ -735,6 +1030,36 @@
           },
           "400": { "description": "businessId is missing." },
           "500": { "description": "Analytical aggregation failed." }
+        }
+      }
+    },
+    "/reports/export-csv": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Export the authenticated business sales ledger as CSV",
+        "description": "Requires the authenticated user's Export Data permission. Business scope is derived from the bearer token; client-supplied business IDs and roles are not accepted. Streams paginated sales rows with item and payment details. Optional UTC date filters are inclusive.",
+        "parameters": [
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string", "format": "date" }, "description": "Include transactions on or after this UTC date." },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string", "format": "date" }, "description": "Include transactions through this UTC date." }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV attachment containing the transaction ledger.",
+            "headers": {
+              "Content-Disposition": { "schema": { "type": "string" }, "description": "Attachment filename." },
+              "Cache-Control": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "text/csv": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "400": { "description": "Invalid date filter or reversed date range." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business Export Data permission required." },
+          "404": { "description": "No transactions were found for this business and date range." },
+          "500": { "description": "Unable to generate the sales ledger." }
         }
       }
     },

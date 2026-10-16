@@ -85,6 +85,27 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+.backup-screen-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.backup-screen-content > * {
+  flex-shrink: 0;
+}
+
+.backup-screen-content > :not(.backup-primary):not(.backup-screen-error) {
+  order: 1;
+}
+
+.backup-screen-content > .backup-primary {
+  order: 0;
+}
+
+.backup-screen-content > .backup-screen-error {
+  order: -1;
+}
+
 /* Status bar */
 .status-bar {
   height: 44px;
@@ -94,6 +115,29 @@ body {
   justify-content: space-between;
   padding: 0 20px;
   flex-shrink: 0;
+}
+
+.shift-banner-overtime {
+  animation: shift-banner-overtime-blink 1s steps(1, end) infinite;
+}
+
+@keyframes shift-banner-overtime-blink {
+  0%,
+  100% {
+    border-color: #D32F2F;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2), 0 0 0 2px rgba(211, 47, 47, 0.45);
+  }
+
+  50% {
+    border-color: rgba(211, 47, 47, 0.25);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2), 0 0 0 0 rgba(211, 47, 47, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shift-banner-overtime {
+    animation: none;
+  }
 }
 
 /* Bottom nav */

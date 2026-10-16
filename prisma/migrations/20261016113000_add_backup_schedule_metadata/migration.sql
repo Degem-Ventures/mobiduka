@@ -1,0 +1,7 @@
+ALTER TABLE "BusinessSettings"
+    ADD COLUMN "autoBackupWifiOnly" BOOLEAN NOT NULL DEFAULT TRUE;
+
+ALTER TABLE "CloudBackup"
+    ADD COLUMN "triggerType" TEXT NOT NULL DEFAULT 'MANUAL',
+    ADD COLUMN "retryCount" INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN "failureReason" TEXT;

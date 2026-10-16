@@ -8,7 +8,7 @@ The platform is designed around reliable retail operations: sales continue durin
 
 | Capability | Description |
 | --- | --- |
-| Offline-first SQLite cache | The Capacitor app can bulk-download supported POS, recent receipt history, dashboard, the More-screen profile/notification overview, shift history, inventory, reports, customer and credit-account lists plus each customer's latest 20 sales and credit entries, role and permission summaries, accepted payment method status, a limited employee directory, user profile, receipt preview configuration, tax settings, a limited settings overview, expense, supplier, purchase-order, and notification data to SQLite from On-device Sync. Inventory displays its snapshot time when offline and is read-only until connectivity returns. POS identifies when it is using saved catalog data and shows the catalog save time; local sales update cached stock without changing that save time. The app records offline cash sales and new cash expenses durably for later synchronization; On-device Sync lists up to the 50 most recent unsent cash sales, their pending/failed state, and the saved failure reason when present. It also shows dataset-level download progress and failures, a saved-data readiness summary with snapshot timestamps, and an estimate of collection-cache and queued-record JSON payload bytes. The estimate excludes PIN-roster data and SQLite overhead, and is not a device or cloud quota. Receipt history includes saved server receipts and locally queued sales labeled by sync state. This does not make every workflow offline: older customer/credit histories and all writes other than cash sales and new cash expenses still require connectivity. Cloud backups, CSV export, and cache clearing are not implemented. Payment account details and credentials are not cached. |
+| Offline-first SQLite cache | The Capacitor app can bulk-download supported POS, recent receipt history, dashboard, the More-screen profile/notification overview, shift history, inventory, reports, customer and credit-account lists plus each customer's latest 20 sales and credit entries, role and permission summaries, accepted payment method status, a limited employee directory, user profile, receipt preview configuration, tax settings, a limited settings overview, expense, supplier, purchase-order, and notification data to SQLite from On-device Sync. Inventory displays its snapshot time when offline and is read-only until connectivity returns. POS identifies when it is using saved catalog data and shows the catalog save time; local sales update cached stock without changing that save time. The app records offline cash sales and new cash expenses durably for later synchronization; On-device Sync lists up to the 50 most recent unsent cash sales, their pending/failed state, and the saved failure reason when present. It also shows dataset-level download progress and failures, a saved-data readiness summary with snapshot timestamps, and an estimate of collection-cache and queued-record JSON payload bytes. The estimate excludes PIN-roster data and SQLite overhead, and is not a device or cloud quota. Receipt history includes saved server receipts and locally queued sales labeled by sync state. This does not make every workflow offline: older customer/credit histories and all writes other than cash sales and new cash expenses still require connectivity. On-device Sync supports an encrypted device-state backup of saved collections and queued sync records. A separate server backup includes tenant-scoped PostgreSQL business records and has a transactional, non-destructive restore: matching IDs take snapshot values and current-only rows remain. |
 | Idempotent synchronization | Uploads queued records when connectivity returns while preserving tenant context and retrying failed records safely. |
 | Offline cash expenses | The Capacitor app saves new cash expenses to SQLite for later synchronization, and shows pending or failed state. Expense edits and non-cash expenses still require an online session. |
 | M-Pesa payment processing | Supports server-side Daraja payment workflows and status polling for point-of-sale confirmation. |
@@ -29,6 +29,10 @@ MobiDuka uses business-scoped authentication and five role tiers:
 | `ACCOUNTANT` | Sales, expenses, cash sessions, and financial review. |
 
 Employee PINs are hashed before database storage. PIN validation and roster access are scoped to the active business. The Capacitor app may cache PIN hashes in its app-private SQLite database for business-scoped offline login; offline PIN access expires after seven days and is protected by a local five-attempt lockout. An offline login is local-only and must be followed by an online sign-in before queued sales synchronize. Staff changes and PIN revocations cannot be enforced on disconnected devices until roster refresh. Never commit PINs, tokens, payment credentials, or database connection strings.
+
+Cloud backup encryption uses a separate base64-encoded 32-byte `BACKUP_ENCRYPTION_KEY`, generated with `openssl rand -base64 32`. Configure it as a server-only deployment secret and retain the same key to preserve the ability to decrypt stored backup chunks. Do not reuse the M-Pesa credentials key. Cloud backup API access requires the authenticated user's business settings permission. Device and full server snapshots are stored separately, tenant-scoped, and the 10 most recent of each type are retained. Server snapshots include staff password/PIN hashes and encrypted M-Pesa credential ciphertext; the server decrypts these only during an authorized restore. Shared platform payment-method definitions and the backup archive tables themselves are excluded. Server restore upserts snapshot rows without deleting records absent from the snapshot; snapshot values win on matching primary IDs. The restore runs in a database transaction, so a unique-key or relation conflict rolls back the operation. These snapshots are stored in the same PostgreSQL database as live records and are not protection against loss of that database; maintain an independent off-site database backup.
+
+Automatic backups use the saved business `autoBackup` preference and `autoBackupFrequency` schedule. Daily backups run at 06:00 UTC, weekly backups run Mondays at 06:00 UTC, and monthly backups run on the first day of the month at 06:00 UTC. Full-business backups run through Vercel Cron; device snapshots run when the installed Capacitor app is active and online on a scheduled day. The Wi-Fi-only preference is enforced through `@capacitor/network` in the native app and does not apply to manual uploads or browser builds. Failed attempts, trigger type, snapshot size, record counts, and upload retry counts are retained in `CloudBackup`; failed attempts older than 30 days are removed.
 
 ## Project overview
 
@@ -103,6 +107,9 @@ This page loads the OpenAPI file from `public/openapi.json` and renders the curr
 - payments/stk-push
 - payments/stk-query
 - purchase-orders
+- reports/export-csv
+- business/backup/server-data
+- business/restore/server-data
 - reports/summary
 - sales
 - sync
@@ -122,6 +129,9 @@ DATABASE_URL="postgresql://user:password@host:5432/mobiduka?sslmode=require" pnp
 In Vercel, add the same connection string as the `DATABASE_URL` environment variable for every environment that serves the API. Do not rely on `prisma/dev.db`; a Vercel function filesystem is not a durable application database.
 
 The M-Pesa tenant-integration migration is tracked at `20261002000000_add_mpesa_integrations`.
+The encrypted cloud-backup storage migration is tracked at `20261015000000_add_cloud_backups`; deploy it with `pnpm exec prisma migrate deploy` before enabling the backup UI.
+The `20261016000000_add_cloud_backup_type` migration separates device snapshots from full server business backups; it has been deployed to the configured database.
+The `20261016112000_add_cloud_backup_summary` and `20261016113000_add_backup_schedule_metadata` migrations add snapshot counts, backup preferences, trigger labels, retry counts, and persisted failures. Apply them with `pnpm exec prisma migrate deploy` before deploying automatic backups.
 
 - For an existing database that predates this feature, apply it with `pnpm exec prisma migrate deploy`.
 - For a database already synchronized with the current schema using `prisma db push`, record the matching migration with `pnpm exec prisma migrate resolve --applied 20261002000000_add_mpesa_integrations`.
@@ -236,6 +246,7 @@ Required GitHub Actions secrets and Vercel environment variables include:
 | `VERCEL_PROJECT_ID` | Identifies the Vercel project. |
 | `DATABASE_URL` | Connects Prisma to the production PostgreSQL database. |
 | `MPESA_CREDENTIALS_ENCRYPTION_KEY` | Base64-encoded 32-byte key used to encrypt each tenant's Daraja credentials. |
+| `BACKUP_ENCRYPTION_KEY` | Separate base64-encoded 32-byte key used to encrypt uploaded cloud backup chunks. |
 | `MPESA_ENVIRONMENT` | Server-only Daraja target: `sandbox` or `production`. |
 | `MPESA_CALLBACK_URL` | Public HTTPS M-Pesa callback endpoint. |
 

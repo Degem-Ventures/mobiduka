@@ -30,6 +30,50 @@ model SyncReceipt {
   @@index([businessId, payloadHash])
 }
 
+model CloudBackup {
+  id              String             @id @default(uuid())
+  businessId      String
+  backupType      String             @default("DEVICE")
+  checksum        String
+  chunkCount      Int
+  compressedBytes Int
+  originalBytes   Int
+  recordCount       Int?
+  collectionCount   Int?
+  queuedRecordCount Int?
+  triggerType       String             @default("MANUAL")
+  retryCount        Int                @default(0)
+  failureReason     String?
+  progressPercent   Int                @default(0)
+  progressMessage   String?
+  restoreProgressPercent Int?
+  restoreProgressMessage String?
+  restoreStartedAt DateTime?
+  status          String             @default("PENDING")
+  createdAt       DateTime           @default(now())
+  completedAt     DateTime?
+
+  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  chunks   CloudBackupChunk[]
+
+  @@index([businessId, backupType, status, createdAt])
+}
+
+model CloudBackupChunk {
+  id                String      @id @default(uuid())
+  backupId          String
+  chunkIndex        Int
+  plaintextChecksum String
+  nonce             String
+  authTag           String
+  ciphertext        String      @db.Text
+  createdAt         DateTime    @default(now())
+
+  backup CloudBackup @relation(fields: [backupId], references: [id], onDelete: Cascade)
+
+  @@unique([backupId, chunkIndex])
+}
+
 model Business {
   id               String   @id @default(uuid())
   name             String
@@ -69,6 +113,7 @@ model Business {
   notifications             Notification[]
   notificationSubscriptions NotificationSubscription[]
   scanEvents                ScanEvent[]
+  cloudBackups              CloudBackup[]
   shiftTypes                ShiftType[]
   roles                     Role[]
   settings                  BusinessSettings?
@@ -82,6 +127,8 @@ model BusinessSettings {
   salesNotifications Boolean  @default(true)
   dailyReport        Boolean  @default(false)
   autoBackup         Boolean  @default(true)
+  autoBackupFrequency String  @default("DAILY")
+  autoBackupWifiOnly Boolean  @default(true)
   mpesaEnabled       Boolean  @default(true)
   themeMode          String   @default("auto")
   paymentConfig      Json?
