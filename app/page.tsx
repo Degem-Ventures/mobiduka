@@ -1,72 +1,63 @@
-"use client";
+"use client" /* Phone frame */ /* Notch */ /* Centre SCAN FAB — absolute so it doesn't shrink adjacent slots */ /* <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    position: "relative",
+                    marginTop: -22,
+                  }}
+                > */
 
-import { JSX, useEffect, useRef, useState } from "react";
-import { ThemeProvider, useTheme } from "./context/ThemeContext";
-import LoginScreen from "./components/LoginScreen";
-import Dashboard from "./components/Dashboard";
-import POSScreen from "./components/POSScreen";
-import InventoryScreen from "./components/InventoryScreen";
-import ReportsScreen from "./components/ReportsScreen";
-import CustomersScreen from "./components/CustomersScreen";
-import MoreScreen from "./components/MoreScreen";
-import SettingsScreen from "./components/SettingsScreen";
-import PurchaseOrdersScreen from "./components/PurchaseOrdersScreen";
-import SuppliersScreen from "./components/SuppliersScreen";
-import CreditBookScreen from "./components/CreditBookScreen";
-import ExpensesScreen from "./components/ExpensesScreen";
-import EmployeesScreen from "./components/EmployeesScreen";
-import NotificationsScreen from "./components/NotificationsScreen";
-import BackupScreen from "./components/BackupScreen";
-import UserProfileScreen from "./components/UserProfileScreen";
-import SmartScanScreen from "./components/SmartScanScreen";
-import ActiveSessionsScreen from "./components/ActiveSessionsScreen";
-import TwoFactorScreen from "./components/TwoFactorScreen";
-import AdminRegisterScreen from "./components/AdminRegisterScreen";
-import ShiftsScreen from "./components/ShiftsScreen";
-import PaymentMethodsScreen from "./components/PaymentMethodsScreen";
-import ManageRolesScreen from "./components/ManageRolesScreen";
-import OfflineSyncWorker from "./components/OfflineSyncWorker";
-import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen";
-import TaxComplianceScreen from "./components/TaxComplianceScreen";
-import { ApiResponseError, clearClientSession, clearLastScreen, getClientSession, getLastScreen, saveLastScreen } from "../lib/client-api";
+import { JSX, useEffect, useRef, useState } from "react"
+import { ThemeProvider, useTheme } from "./context/ThemeContext"
+import LoginScreen from "./components/LoginScreen"
+import Dashboard from "./components/Dashboard"
+import POSScreen from "./components/POSScreen"
+import InventoryScreen from "./components/InventoryScreen"
+import ReportsScreen from "./components/ReportsScreen"
+import CustomersScreen from "./components/CustomersScreen"
+import MoreScreen from "./components/MoreScreen"
+import SettingsScreen from "./components/SettingsScreen"
+import PurchaseOrdersScreen from "./components/PurchaseOrdersScreen"
+import SuppliersScreen from "./components/SuppliersScreen"
+import CreditBookScreen from "./components/CreditBookScreen"
+import ExpensesScreen from "./components/ExpensesScreen"
+import EmployeesScreen from "./components/EmployeesScreen"
+import NotificationsScreen from "./components/NotificationsScreen"
+import BackupScreen from "./components/BackupScreen"
+import UserProfileScreen from "./components/UserProfileScreen"
+import SmartScanScreen from "./components/SmartScanScreen"
+import ActiveSessionsScreen from "./components/ActiveSessionsScreen"
+import TwoFactorScreen from "./components/TwoFactorScreen"
+import AdminRegisterScreen from "./components/AdminRegisterScreen"
+import ShiftsScreen from "./components/ShiftsScreen"
+import PaymentMethodsScreen from "./components/PaymentMethodsScreen"
+import ManageRolesScreen from "./components/ManageRolesScreen"
+import OfflineSyncWorker from "./components/OfflineSyncWorker"
+import AutomaticBackupWorker from "./components/AutomaticBackupWorker"
+import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen"
+import TaxComplianceScreen from "./components/TaxComplianceScreen"
+import {
+  ApiResponseError,
+  clearClientSession,
+  clearLastScreen,
+  getClientSession,
+  getLastScreen,
+  saveLastScreen,
+} from "../lib/client-api"
 import {
   fetchCachedCollection,
   isNativeOfflineApp,
   readOfflineCollectionUpdatedAt,
-} from "../lib/offline-store";
+} from "../lib/offline-store"
 
-type Screen =
-  | "login"
-  | "dashboard"
-  | "pos"
-  | "inventory"
-  | "reports"
-  | "customers"
-  | "more"
-  | "settings"
-  | "purchases"
-  | "suppliers"
-  | "credit"
-  | "expenses"
-  | "employees"
-  | "notifications"
-  | "backup"
-  | "profile"
-  | "scan"
-  | "sessions"
-  | "twofa"
-  | "register"
-  | "shifts"
-  | "payments"
-  | "roles"
-  | "receiptsettings"
-  | "taxcompliance";
+type Screen = "login" | "dashboard" | "pos" | "inventory" | "reports" | "customers" | "more" | "settings" | "purchases" | "suppliers" | "credit" | "expenses" | "employees" | "notifications" | "backup" | "profile" | "scan" | "sessions" | "twofa" | "register" | "shifts" | "payments" | "roles" | "receiptsettings" | "taxcompliance"
 
 type SideNavItem = {
-  key: Screen;
-  label: string;
-  icon: (active: boolean) => JSX.Element;
-};
+  key: Screen
+  label: string
+  icon: (active: boolean) => JSX.Element
+}
 
 const leftNavItems: SideNavItem[] = [
   {
@@ -109,7 +100,7 @@ const leftNavItems: SideNavItem[] = [
       </svg>
     ),
   },
-];
+]
 
 const rightNavItems: SideNavItem[] = [
   {
@@ -152,7 +143,7 @@ const rightNavItems: SideNavItem[] = [
       </svg>
     ),
   },
-];
+]
 
 const showNavFor: Screen[] = [
   "dashboard",
@@ -161,248 +152,365 @@ const showNavFor: Screen[] = [
   "customers",
   "more",
   "scan",
-];
+]
+
+const shiftOvertimeThresholdMs = 8 * 60 * 60 * 1000
 
 function AppInner() {
-  const { isDark } = useTheme();
-  const [screen, setScreen] = useState<Screen>("login");
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [isHydratingSession, setIsHydratingSession] = useState(true);
-  const [activeShiftCount, setActiveShiftCount] = useState(0);
-  const [activeShiftNames, setActiveShiftNames] = useState<string[]>([]);
-  const [activeShiftsAreSnapshot, setActiveShiftsAreSnapshot] = useState(false);
-  const [activeShiftsUpdatedAt, setActiveShiftsUpdatedAt] = useState<string | null>(null);
-  const [openActiveShift, setOpenActiveShift] = useState(false);
-  const [shiftBannerPosition, setShiftBannerPosition] = useState({ y: 0 });
-  const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null);
-  const shiftBannerWasDragged = useRef(false);
-  const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>();
-  const [inventoryProductId, setInventoryProductId] = useState<string | undefined>();
-  const [posCartItem, setPosCartItem] = useState<{ id: string; name: string; price: number; emoji: string } | undefined>();
+  const { isDark } = useTheme()
+  const [screen, setScreen] = useState<Screen>("login")
+  const [loggedIn, setLoggedIn] = useState(false)
+  const [isHydratingSession, setIsHydratingSession] = useState(true)
+  const [activeShiftCount, setActiveShiftCount] = useState(0)
+  const [activeShiftNames, setActiveShiftNames] = useState<string[]>([])
+  const [oldestActiveShiftOpenedAt, setOldestActiveShiftOpenedAt] =
+    useState<string | null>(null)
+  const [shiftClockNow, setShiftClockNow] = useState(() => Date.now())
+  const [activeShiftsAreSnapshot, setActiveShiftsAreSnapshot] = useState(false)
+  const [activeShiftsUpdatedAt, setActiveShiftsUpdatedAt] =
+    useState<string | null>(null)
+  const [openActiveShift, setOpenActiveShift] = useState(false)
+  const [shiftBannerPosition, setShiftBannerPosition] = useState({ y: 0 })
+  const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null)
+  const shiftBannerWasDragged = useRef(false)
+  const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>()
+  const [inventoryProductId, setInventoryProductId] =
+    useState<string | undefined>()
+  const [posCartItem, setPosCartItem] = useState<{
+    id: string
+    name: string
+    price: number
+    emoji: string
+  } | undefined>()
 
   useEffect(() => {
-    const session = getClientSession();
-    const tokenParts = session?.token.split(".");
-    let sessionIsValid = Boolean(session);
+    const session = getClientSession()
+    const tokenParts = session?.token.split(".")
+    let sessionIsValid = Boolean(session)
     if (session?.user.offline) {
-      sessionIsValid = isNativeOfflineApp() && !navigator.onLine;
+      sessionIsValid = isNativeOfflineApp() && !navigator.onLine
     } else if (session && tokenParts?.[1]) {
       try {
-        const claims = JSON.parse(atob(tokenParts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
-        sessionIsValid = typeof claims.exp !== "number" || claims.exp > Date.now() / 1000;
+        const claims = JSON.parse(
+          atob(tokenParts[1].replace(/-/g, "+").replace(/_/g, "/")),
+        ) as { exp?: number }
+        sessionIsValid =
+          typeof claims.exp !== "number" || claims.exp > Date.now() / 1000
       } catch {
-        sessionIsValid = false;
+        sessionIsValid = false
       }
     }
     if (sessionIsValid) {
-      const savedScreen = getLastScreen() as Screen | null;
+      const savedScreen = getLastScreen() as Screen | null
       const restoredScreen = session?.user.offline
         ? "pos"
-        : savedScreen && savedScreen !== "login" ? savedScreen : "dashboard";
-      setLoggedIn(true);
-      setScreen(restoredScreen);
+        : savedScreen && savedScreen !== "login"
+          ? savedScreen
+          : "dashboard"
+      setLoggedIn(true)
+      setScreen(restoredScreen)
     } else {
-      clearClientSession();
-      clearLastScreen();
+      clearClientSession()
+      clearLastScreen()
     }
-    setIsHydratingSession(false);
-  }, []);
+    setIsHydratingSession(false)
+  }, [])
 
   useEffect(() => {
     const handleAuthExpired = () => {
-      setLoggedIn(false);
-      setScreen("login");
-    };
-    window.addEventListener("mobiduka-auth-expired", handleAuthExpired);
-    return () => window.removeEventListener("mobiduka-auth-expired", handleAuthExpired);
-  }, []);
+      setLoggedIn(false)
+      setScreen("login")
+    }
+    window.addEventListener("mobiduka-auth-expired", handleAuthExpired)
+    return () =>
+      window.removeEventListener("mobiduka-auth-expired", handleAuthExpired)
+  }, [])
 
   useEffect(() => {
     const handleOnline = () => {
-      if (!getClientSession()?.user.offline) return;
-      clearClientSession();
-      clearLastScreen();
-      setLoggedIn(false);
-      setScreen("login");
-    };
-    window.addEventListener("online", handleOnline);
-    return () => window.removeEventListener("online", handleOnline);
-  }, []);
+      if (!getClientSession()?.user.offline) return
+      clearClientSession()
+      clearLastScreen()
+      setLoggedIn(false)
+      setScreen("login")
+    }
+    window.addEventListener("online", handleOnline)
+    return () => window.removeEventListener("online", handleOnline)
+  }, [])
 
   useEffect(() => {
     if (!loggedIn) {
-      setActiveShiftCount(0);
-      setActiveShiftNames([]);
-      return;
+      setActiveShiftCount(0)
+      setActiveShiftNames([])
+      setOldestActiveShiftOpenedAt(null)
+      return
     }
 
-    let cancelled = false;
-    const cacheKey = "shifts.active-summary.v1";
+    let cancelled = false
+    const cacheKey = "shifts.active-summary.v1"
     const loadActiveShifts = async () => {
-      const clientSession = getClientSession();
-      if (!clientSession) return;
-      let previousUpdatedAt: string | null = null;
+      const clientSession = getClientSession()
+      if (!clientSession) return
+      let previousUpdatedAt: string | null = null
       try {
-        previousUpdatedAt = await readOfflineCollectionUpdatedAt(clientSession.user.businessId, cacheKey);
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(
+          clientSession.user.businessId,
+          cacheKey,
+        )
       } catch (error) {
-        console.error("Unable to read the active-shift snapshot timestamp.", error);
+        console.error(
+          "Unable to read the active-shift snapshot timestamp.",
+          error,
+        )
       }
       try {
         const response = await fetchCachedCollection<{
-          sessions: Array<{ closedAt: string | null; cashier: { fullName: string; role: { name: string } | null } | null }>;
-        }>(clientSession.user.businessId, cacheKey, `/api/cash/session?businessId=${encodeURIComponent(clientSession.user.businessId)}`);
-        if (cancelled) return;
-        const active = response.sessions.filter((session) =>
-          !session.closedAt &&
-          ['CASHIER', 'SUPERVISOR'].includes(session.cashier?.role?.name?.toUpperCase() ?? ''),
-        );
-        setActiveShiftCount(active.length);
-        setActiveShiftNames(active.map((session) => session.cashier?.fullName ?? "Unassigned"));
-        let updatedAt: string | null = null;
+          sessions: Array<{
+            openedAt: string
+            closedAt: string | null
+            cashier: {
+              fullName: string
+              role: { name: string } | null
+            } | null
+          }>
+        }>(
+          clientSession.user.businessId,
+          cacheKey,
+          `/api/cash/session?businessId=${encodeURIComponent(clientSession.user.businessId)}`,
+        )
+        if (cancelled) return
+        const active = response.sessions.filter(
+          (session) =>
+            !session.closedAt &&
+            ["CASHIER", "SUPERVISOR"].includes(
+              session.cashier?.role?.name?.toUpperCase() ?? "",
+            ),
+        )
+        setActiveShiftCount(active.length)
+        setActiveShiftNames(
+          active.map((session) => session.cashier?.fullName ?? "Unassigned"),
+        )
+        const oldestActiveShift = active.reduce<string | null>(
+          (oldest, session) => {
+            const openedAt = Date.parse(session.openedAt)
+            if (!Number.isFinite(openedAt)) return oldest
+            return oldest === null || openedAt < Date.parse(oldest)
+              ? session.openedAt
+              : oldest
+          },
+          null,
+        )
+        setOldestActiveShiftOpenedAt(oldestActiveShift)
+        setShiftClockNow(Date.now())
+        let updatedAt: string | null = null
         try {
-          updatedAt = await readOfflineCollectionUpdatedAt(clientSession.user.businessId, cacheKey);
+          updatedAt = await readOfflineCollectionUpdatedAt(
+            clientSession.user.businessId,
+            cacheKey,
+          )
         } catch (error) {
-          console.error("Unable to read the active-shift snapshot timestamp.", error);
+          console.error(
+            "Unable to read the active-shift snapshot timestamp.",
+            error,
+          )
         }
-        if (cancelled) return;
-        setActiveShiftsUpdatedAt(updatedAt);
+        if (cancelled) return
+        setActiveShiftsUpdatedAt(updatedAt)
         setActiveShiftsAreSnapshot(
           isNativeOfflineApp() &&
-          (!navigator.onLine || (updatedAt !== null && previousUpdatedAt === updatedAt)),
-        );
+            (!navigator.onLine ||
+              (updatedAt !== null && previousUpdatedAt === updatedAt)),
+        )
       } catch (error) {
-        if (!cancelled && error instanceof ApiResponseError && [401, 403].includes(error.status)) {
-          setActiveShiftCount(0);
-          setActiveShiftNames([]);
-          setActiveShiftsAreSnapshot(false);
-          setActiveShiftsUpdatedAt(null);
+        if (
+          !cancelled &&
+          error instanceof ApiResponseError &&
+          [401, 403].includes(error.status)
+        ) {
+          setActiveShiftCount(0)
+          setActiveShiftNames([])
+          setOldestActiveShiftOpenedAt(null)
+          setActiveShiftsAreSnapshot(false)
+          setActiveShiftsUpdatedAt(null)
         } else if (!cancelled) {
-          console.error("Unable to load active shifts.", error);
+          console.error("Unable to load active shifts.", error)
         }
       }
-    };
+    }
 
-    void loadActiveShifts();
-    const refreshTimer = window.setInterval(() => void loadActiveShifts(), 30000);
-    window.addEventListener('mobiduka:shift-changed', loadActiveShifts);
-    const handleOnline = () => void loadActiveShifts();
+    void loadActiveShifts()
+    const refreshTimer = window.setInterval(
+      () => void loadActiveShifts(),
+      30000,
+    )
+    window.addEventListener("mobiduka:shift-changed", loadActiveShifts)
+    const handleOnline = () => void loadActiveShifts()
     const handleOffline = () => {
-      if (isNativeOfflineApp()) setActiveShiftsAreSnapshot(true);
-    };
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+      if (isNativeOfflineApp()) setActiveShiftsAreSnapshot(true)
+    }
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
     return () => {
-      cancelled = true;
-      window.clearInterval(refreshTimer);
-      window.removeEventListener('mobiduka:shift-changed', loadActiveShifts);
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [loggedIn, screen]);
+      cancelled = true
+      window.clearInterval(refreshTimer)
+      window.removeEventListener("mobiduka:shift-changed", loadActiveShifts)
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
+  }, [loggedIn, screen])
+
+  useEffect(() => {
+    if (!oldestActiveShiftOpenedAt) return
+    const clockTimer = window.setInterval(
+      () => setShiftClockNow(Date.now()),
+      15_000,
+    )
+    return () => window.clearInterval(clockTimer)
+  }, [oldestActiveShiftOpenedAt])
+
+  const oldestActiveShiftDuration = oldestActiveShiftOpenedAt
+    ? shiftClockNow - Date.parse(oldestActiveShiftOpenedAt)
+    : 0
+  const activeShiftOvertime =
+    activeShiftCount > 0 && oldestActiveShiftDuration > shiftOvertimeThresholdMs
 
   const handleLogin = () => {
-    setLoggedIn(true);
-    const startScreen = getClientSession()?.user.offline ? "pos" : "dashboard";
-    setScreen(startScreen);
-    saveLastScreen(startScreen);
-  };
+    setLoggedIn(true)
+    const startScreen = getClientSession()?.user.offline ? "pos" : "dashboard"
+    setScreen(startScreen)
+    saveLastScreen(startScreen)
+  }
 
   const handleLogout = () => {
-    clearClientSession();
-    clearLastScreen();
-    setLoggedIn(false);
-    setScreen("login");
-  };
+    clearClientSession()
+    clearLastScreen()
+    setLoggedIn(false)
+    setScreen("login")
+  }
 
-  const handleNavigate = (s: string, options?: { barcode?: string; productId?: string; cartItem?: { id: string; name: string; price: number; emoji: string } }) => {
-    const nextScreen = s as Screen;
+  const handleNavigate = (
+    s: string,
+    options?: {
+      barcode?: string
+      productId?: string
+      cartItem?: {
+        id: string
+        name: string
+        price: number
+        emoji: string
+      }
+    },
+  ) => {
+    const nextScreen = s as Screen
     if (
       getClientSession()?.user.offline &&
       nextScreen !== "pos" &&
       nextScreen !== "scan"
-    ) return;
-    if (nextScreen !== "shifts") setOpenActiveShift(false);
-    setInventoryBarcode(nextScreen === "inventory" ? options?.barcode : undefined);
-    setInventoryProductId(nextScreen === "inventory" ? options?.productId : undefined);
-    setPosCartItem(nextScreen === "pos" ? options?.cartItem : undefined);
-    setScreen(nextScreen);
-    if (nextScreen !== "login") saveLastScreen(nextScreen);
-  };
+    )
+      return
+    if (nextScreen !== "shifts") setOpenActiveShift(false)
+    setInventoryBarcode(
+      nextScreen === "inventory" ? options?.barcode : undefined,
+    )
+    setInventoryProductId(
+      nextScreen === "inventory" ? options?.productId : undefined,
+    )
+    setPosCartItem(nextScreen === "pos" ? options?.cartItem : undefined)
+    setScreen(nextScreen)
+    if (nextScreen !== "login") saveLastScreen(nextScreen)
+  }
 
-  const showNav = showNavFor.includes(screen);
-  const offlineSession = getClientSession()?.user.offline === true;
+  const showNav = showNavFor.includes(screen)
+  const offlineSession = getClientSession()?.user.offline === true
   const visibleLeftNavItems = offlineSession
     ? leftNavItems.filter((item) => item.key === "pos")
-    : leftNavItems;
-  const visibleRightNavItems = offlineSession ? [] : rightNavItems;
-  const navActiveColor = isDark ? "#8FB3FF" : "#123A8F";
-  const navInactiveColor = isDark ? "#A8B8D8" : "#6B7A99";
+    : leftNavItems
+  const visibleRightNavItems = offlineSession ? [] : rightNavItems
+  const navActiveColor = isDark ? "#8FB3FF" : "#123A8F"
+  const navInactiveColor = isDark ? "#A8B8D8" : "#6B7A99"
 
   const renderScreen = () => {
     switch (screen) {
       case "dashboard":
-        return <Dashboard onNavigate={handleNavigate} />;
+        return <Dashboard onNavigate={handleNavigate} />
       case "pos":
-        return <POSScreen onNavigate={handleNavigate} initialCartItem={posCartItem} />;
+        return (
+          <POSScreen
+            onNavigate={handleNavigate}
+            initialCartItem={posCartItem}
+          />
+        )
       case "inventory":
-        return <InventoryScreen onNavigate={handleNavigate} initialBarcode={inventoryBarcode} initialProductId={inventoryProductId} />;
+        return (
+          <InventoryScreen
+            onNavigate={handleNavigate}
+            initialBarcode={inventoryBarcode}
+            initialProductId={inventoryProductId}
+          />
+        )
       case "reports":
-        return <ReportsScreen onNavigate={handleNavigate} />;
+        return <ReportsScreen onNavigate={handleNavigate} />
       case "customers":
-        return <CustomersScreen onNavigate={handleNavigate} />;
+        return <CustomersScreen onNavigate={handleNavigate} />
       case "more":
         return (
           <MoreScreen onLogout={handleLogout} onNavigate={handleNavigate} />
-        );
+        )
       case "settings":
-        return <SettingsScreen onNavigate={handleNavigate} />;
+        return <SettingsScreen onNavigate={handleNavigate} />
       case "purchases":
-        return <PurchaseOrdersScreen onNavigate={handleNavigate} />;
+        return <PurchaseOrdersScreen onNavigate={handleNavigate} />
       case "suppliers":
-        return <SuppliersScreen onNavigate={handleNavigate} />;
+        return <SuppliersScreen onNavigate={handleNavigate} />
       case "credit":
-        return <CreditBookScreen onNavigate={handleNavigate} />;
+        return <CreditBookScreen onNavigate={handleNavigate} />
       case "expenses":
-        return <ExpensesScreen onNavigate={handleNavigate} />;
+        return <ExpensesScreen onNavigate={handleNavigate} />
       case "employees":
-        return <EmployeesScreen onNavigate={handleNavigate} />;
+        return <EmployeesScreen onNavigate={handleNavigate} />
       case "notifications":
-        return <NotificationsScreen onNavigate={handleNavigate} />;
+        return <NotificationsScreen onNavigate={handleNavigate} />
       case "backup":
-        return <BackupScreen onNavigate={handleNavigate} />;
+        return <BackupScreen onNavigate={handleNavigate} />
       case "profile":
-        return <UserProfileScreen onNavigate={handleNavigate} />;
+        return <UserProfileScreen onNavigate={handleNavigate} />
       case "scan":
-        return <SmartScanScreen onNavigate={handleNavigate} />;
+        return <SmartScanScreen onNavigate={handleNavigate} />
       case "sessions":
-        return <ActiveSessionsScreen onNavigate={handleNavigate} />;
+        return <ActiveSessionsScreen onNavigate={handleNavigate} />
       case "twofa":
-        return <TwoFactorScreen onNavigate={handleNavigate} />;
+        return <TwoFactorScreen onNavigate={handleNavigate} />
       case "register":
-        return <AdminRegisterScreen onNavigate={handleNavigate} />;
+        return <AdminRegisterScreen onNavigate={handleNavigate} />
       case "shifts":
-        return <ShiftsScreen onNavigate={handleNavigate} openActiveShift={openActiveShift} />;
+        return (
+          <ShiftsScreen
+            onNavigate={handleNavigate}
+            openActiveShift={openActiveShift}
+          />
+        )
       case "payments":
-        return <PaymentMethodsScreen onNavigate={handleNavigate} />;
+        return <PaymentMethodsScreen onNavigate={handleNavigate} />
       case "roles":
-        return <ManageRolesScreen onNavigate={handleNavigate} />;
+        return <ManageRolesScreen onNavigate={handleNavigate} />
       case "receiptsettings":
-        return <ReceiptSettingsScreen onNavigate={handleNavigate} />;
+        return <ReceiptSettingsScreen onNavigate={handleNavigate} />
       case "taxcompliance":
-        return <TaxComplianceScreen onNavigate={handleNavigate} />;
+        return <TaxComplianceScreen onNavigate={handleNavigate} />
       default:
-        return null;
+        return null
     }
-  };
+  }
 
-  if (isHydratingSession) return null;
+  if (isHydratingSession) return null
 
   return (
     <div className="app-shell">
       <OfflineSyncWorker enabled={loggedIn} />
-      {/* Phone frame */}
+      <AutomaticBackupWorker enabled={loggedIn} />
+      {}
       <div className="phone-frame" data-theme={isDark ? "dark" : "light"}>
-        {/* Notch */}
+        {}
         <div
           className="phone-notch"
           style={{
@@ -425,9 +533,36 @@ function AppInner() {
             style={{ height: "100%", display: "flex", flexDirection: "column" }}
           >
             {getClientSession()?.user.offline && (
-              <div role="status" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 14px", background: "#FFF8E1", color: "#795548", fontSize: 11 }}>
-                <span>Offline PIN session · POS only. Staff access may be out of date; sign in online to sync.</span>
-                <button className="btn" onClick={handleLogout} style={{ border: 0, background: "transparent", color: "#795548", fontWeight: 700, whiteSpace: "nowrap" }}>Sign in online</button>
+              <div
+                role="status"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "8px 14px",
+                  background: "#FFF8E1",
+                  color: "#795548",
+                  fontSize: 11,
+                }}
+              >
+                <span>
+                  Offline PIN session · POS only. Staff access may be out of
+                  date; sign in online to sync.
+                </span>
+                <button
+                  className="btn"
+                  onClick={handleLogout}
+                  style={{
+                    border: 0,
+                    background: "transparent",
+                    color: "#795548",
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Sign in online
+                </button>
               </div>
             )}
             <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
@@ -440,11 +575,13 @@ function AppInner() {
                 style={{ position: "relative", overflow: "visible" }}
               >
                 {visibleLeftNavItems.map((item) => {
-                  const isActive = screen === item.key;
+                  const isActive = screen === item.key
                   return (
                     <button
                       key={item.key}
-                      className={`bottom-nav-item btn ${isActive ? "active" : ""}`}
+                      className={`bottom-nav-item btn ${
+                        isActive ? "active" : ""
+                      }`}
                       onClick={() => handleNavigate(item.key)}
                       style={{
                         position: "relative",
@@ -474,20 +611,12 @@ function AppInner() {
                         />
                       )}
                     </button>
-                  );
+                  )
                 })}
 
-                {/* Centre SCAN FAB — absolute so it doesn't shrink adjacent slots */}
-                {/* <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    position: "relative",
-                    marginTop: -22,
-                  }}
-                > */}
-                  <div
+                {}
+                {}
+                <div
                   style={{
                     position: "relative",
                     width: 64,
@@ -507,62 +636,64 @@ function AppInner() {
                       zIndex: 10,
                     }}
                   >
-                  <button
-                    className="btn"
-                    onClick={() => handleNavigate("scan")}
-                    style={{
-                      width: 58,
-                      height: 58,
-                      borderRadius: "50%",
-                      background:
-                        screen === "scan"
-                          ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
-                          : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
-                      border: `3px solid ${isDark ? "#0F2040" : "white"}`,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
-                      transition: "all 0.2s",
-                    }}
-                  >
-                    <svg
-                      width="22"
-                      height="22"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="white"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                    <button
+                      className="btn"
+                      onClick={() => handleNavigate("scan")}
+                      style={{
+                        width: 58,
+                        height: 58,
+                        borderRadius: "50%",
+                        background:
+                          screen === "scan"
+                            ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
+                            : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
+                        border: `3px solid ${isDark ? "#0F2040" : "white"}`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
+                        transition: "all 0.2s",
+                      }}
                     >
-                      <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-                      <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-                      <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-                      <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-                      <line x1="7" y1="12" x2="17" y2="12" />
-                    </svg>
-                  </button>
-                  <span
-                    style={{
-                      fontSize: 10,
-                      fontWeight: screen === "scan" ? 700 : 600,
-                      color: screen === "scan" ? "#F0D060" : navActiveColor,
-                      marginTop: 3,
-                    }}
-                  >
-                    SCAN
-                  </span>
-                </div>
+                      <svg
+                        width="22"
+                        height="22"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="white"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+                        <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                        <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+                        <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                        <line x1="7" y1="12" x2="17" y2="12" />
+                      </svg>
+                    </button>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: screen === "scan" ? 700 : 600,
+                        color: screen === "scan" ? "#F0D060" : navActiveColor,
+                        marginTop: 3,
+                      }}
+                    >
+                      SCAN
+                    </span>
+                  </div>
                 </div>
 
                 {visibleRightNavItems.map((item) => {
-                  const isActive = screen === item.key;
+                  const isActive = screen === item.key
                   return (
                     <button
                       key={item.key}
-                      className={`bottom-nav-item btn ${isActive ? "active" : ""}`}
+                      className={`bottom-nav-item btn ${
+                        isActive ? "active" : ""
+                      }`}
                       onClick={() => handleNavigate(item.key)}
                       style={{
                         position: "relative",
@@ -592,88 +723,111 @@ function AppInner() {
                         />
                       )}
                     </button>
-                  );
+                  )
                 })}
               </div>
             )}
           </div>
         )}
-        {loggedIn && screen !== "login" && !offlineSession && activeShiftCount > 0 && (
-          <button
-            className="btn"
-            onPointerDown={(event) => {
-              if (activeShiftsAreSnapshot) return;
-              shiftBannerDrag.current = { x: event.clientX, y: event.clientY };
-              shiftBannerWasDragged.current = false;
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              if (activeShiftsAreSnapshot) return;
-              const start = shiftBannerDrag.current;
-              if (!start) return;
-              const deltaY = event.clientY - start.y;
-              if (Math.abs(deltaY) > 3) shiftBannerWasDragged.current = true;
-              setShiftBannerPosition((position) => ({
-                y: Math.max(0, Math.min(720, position.y + deltaY)),
-              }));
-              shiftBannerDrag.current = { x: event.clientX, y: event.clientY };
-            }}
-            onPointerUp={() => { shiftBannerDrag.current = null; }}
-            onPointerCancel={() => { shiftBannerDrag.current = null; }}
-            onClick={() => {
-              if (activeShiftsAreSnapshot) return;
-              if (shiftBannerWasDragged.current) {
-                shiftBannerWasDragged.current = false;
-                return;
+        {loggedIn &&
+          screen !== "login" &&
+          !offlineSession &&
+          activeShiftCount > 0 && (
+            <button
+              className={
+                activeShiftOvertime ? "btn shift-banner-overtime" : "btn"
               }
-              setOpenActiveShift(true);
-              handleNavigate("shifts");
-            }}
-            style={{
-              position: "absolute",
-              top: shiftBannerPosition.y,
-              left: "50%",
-              transform: "translateX(-50%)",
-              zIndex: 1000,
-              width: "calc(100% - 32px)",
-              maxWidth: 349,
-              border: "none",
-              borderRadius: 10,
-              background: "#0F6634",
-              color: "white",
-              padding: "11px 14px",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              textAlign: "left",
-              cursor: activeShiftsAreSnapshot ? "default" : "grab",
-              touchAction: activeShiftsAreSnapshot ? "auto" : "none",
-              userSelect: "none",
-              fontFamily: "inherit",
-              fontSize: 12,
-              fontWeight: 700,
-              boxShadow: "0 4px 10px rgba(0,0,0,0.2)",
-            }}
-          >
-            <span
-              aria-hidden="true"
-              style={{ fontSize: 16, lineHeight: 1, color: "#A5D6A7" }}
+              aria-label={
+                activeShiftOvertime
+                  ? "An active shift has exceeded 8 hours"
+                  : undefined
+              }
+              onPointerDown={(event) => {
+                if (activeShiftsAreSnapshot) return
+                shiftBannerDrag.current = { x: event.clientX, y: event.clientY }
+                shiftBannerWasDragged.current = false
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={(event) => {
+                if (activeShiftsAreSnapshot) return
+                const start = shiftBannerDrag.current
+                if (!start) return
+                const deltaY = event.clientY - start.y
+                if (Math.abs(deltaY) > 3) shiftBannerWasDragged.current = true
+                setShiftBannerPosition((position) => ({
+                  y: Math.max(0, Math.min(720, position.y + deltaY)),
+                }))
+                shiftBannerDrag.current = { x: event.clientX, y: event.clientY }
+              }}
+              onPointerUp={() => {
+                shiftBannerDrag.current = null
+              }}
+              onPointerCancel={() => {
+                shiftBannerDrag.current = null
+              }}
+              onClick={() => {
+                if (activeShiftsAreSnapshot) return
+                if (shiftBannerWasDragged.current) {
+                  shiftBannerWasDragged.current = false
+                  return
+                }
+                setOpenActiveShift(true)
+                handleNavigate("shifts")
+              }}
+              style={{
+                position: "absolute",
+                top: shiftBannerPosition.y,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 1000,
+                width: "calc(100% - 32px)",
+                maxWidth: 349,
+                border: activeShiftOvertime ? "2px solid #D32F2F" : "none",
+                borderRadius: 10,
+                background: "#0F6634",
+                color: "white",
+                padding: "11px 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                textAlign: "left",
+                cursor: activeShiftsAreSnapshot ? "default" : "grab",
+                touchAction: activeShiftsAreSnapshot ? "auto" : "none",
+                userSelect: "none",
+                fontFamily: "inherit",
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: "0 4px 10px rgba(0,0,0,0.2)",
+              }}
             >
-              ◷
-            </span>
-            <span style={{ flex: 1 }}>
-              {activeShiftsAreSnapshot
-                ? `Saved shift status${activeShiftsUpdatedAt ? ` · ${new Date(activeShiftsUpdatedAt).toLocaleString()}` : ""}`
-                : `${activeShiftCount} shift${activeShiftCount === 1 ? "" : "s"} in progress`}
-              {activeShiftNames.length > 0 ? ` · ${activeShiftNames.join(", ")}` : ""}
-            </span>
-            {!activeShiftsAreSnapshot && <span style={{ color: "#A5D6A7" }}>Manage ›</span>}
-          </button>
-        )}
+              <span
+                aria-hidden="true"
+                style={{ fontSize: 16, lineHeight: 1, color: "#A5D6A7" }}
+              >
+                ◷
+              </span>
+              <span style={{ flex: 1 }}>
+                {activeShiftsAreSnapshot
+                  ? `Saved shift status${
+                      activeShiftsUpdatedAt
+                        ? ` · ${new Date(activeShiftsUpdatedAt).toLocaleString()}`
+                        : ""
+                    }`
+                  : `${activeShiftCount} shift${
+                      activeShiftCount === 1 ? "" : "s"
+                    } in progress`}
+                {activeShiftNames.length > 0
+                  ? ` · ${activeShiftNames.join(", ")}`
+                  : ""}
+              </span>
+              {!activeShiftsAreSnapshot && (
+                <span style={{ color: "#A5D6A7" }}>Manage ›</span>
+              )}
+            </button>
+          )}
       </div>
-
     </div>
-  );
+  )
 }
 
 export default function App() {
@@ -681,5 +835,5 @@ export default function App() {
     <ThemeProvider>
       <AppInner />
     </ThemeProvider>
-  );
+  )
 }

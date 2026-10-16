@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server.js"
+import { isAutoBackupFrequency } from "@/lib/backup-schedule"
 import { prisma } from "@/lib/prisma"
 import { authenticatedBusinessId, requireBusinessAccess } from "@/lib/auth"
 import {
@@ -85,6 +86,8 @@ const settingsSelect = {
       salesNotifications: true,
       dailyReport: true,
       autoBackup: true,
+      autoBackupFrequency: true,
+      autoBackupWifiOnly: true,
       mpesaEnabled: true,
       themeMode: true,
       paymentConfig: true,
@@ -99,6 +102,8 @@ function responseFor(business: {
     salesNotifications: boolean
     dailyReport: boolean
     autoBackup: boolean
+    autoBackupFrequency: string
+    autoBackupWifiOnly: boolean
     mpesaEnabled: boolean
     themeMode: string
     paymentConfig: unknown
@@ -118,6 +123,8 @@ function responseFor(business: {
           salesNotifications: true,
           dailyReport: false,
           autoBackup: true,
+          autoBackupFrequency: "DAILY",
+          autoBackupWifiOnly: true,
           mpesaEnabled: false,
           themeMode: "auto",
           paymentConfig: defaultPaymentConfig,
@@ -224,6 +231,8 @@ export async function PATCH(request: Request) {
       salesNotifications?: boolean
       dailyReport?: boolean
       autoBackup?: boolean
+      autoBackupFrequency?: string
+      autoBackupWifiOnly?: boolean
       mpesaEnabled?: boolean
       themeMode?: string
       paymentConfig?: unknown
@@ -300,10 +309,19 @@ export async function PATCH(request: Request) {
         { status: 400 },
       )
     }
-    const requestedMpesaEnabled = configuredMpesaEnabled ?? body.mpesaEnabled
     if (
-      requestedMpesaEnabled === true
+      (body.autoBackup !== undefined && typeof body.autoBackup !== "boolean") ||
+      (body.autoBackupFrequency !== undefined &&
+        !isAutoBackupFrequency(body.autoBackupFrequency)) ||
+      (body.autoBackupWifiOnly !== undefined &&
+        typeof body.autoBackupWifiOnly !== "boolean")
     ) {
+      return NextResponse.json({ error: "Backup preferences are invalid." }, {
+        status: 400,
+      })
+    }
+    const requestedMpesaEnabled = configuredMpesaEnabled ?? body.mpesaEnabled
+    if (requestedMpesaEnabled === true) {
       if (!(await hasMpesaIntegration(businessId))) {
         return NextResponse.json(
           {
@@ -320,6 +338,8 @@ export async function PATCH(request: Request) {
       "salesNotifications",
       "dailyReport",
       "autoBackup",
+      "autoBackupFrequency",
+      "autoBackupWifiOnly",
     ] as const
     const preferences = Object.fromEntries(
       preferenceKeys

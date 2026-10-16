@@ -6,6 +6,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useColors } from '../utils/theme'
 import { getClientSession } from '../../lib/client-api'
+import { downloadSalesLedgerCsv } from '../../lib/download-sales-ledger'
 import {
   fetchCachedCollection,
   isNativeOfflineApp,
@@ -72,6 +73,9 @@ export default function ReportsScreen({ onNavigate }: Props) {
   const [loading, setLoading] = useState(true)
   const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
+  const [exportMessage, setExportMessage] = useState('')
   const c = useColors()
 
   useEffect(() => {
@@ -129,6 +133,27 @@ export default function ReportsScreen({ onNavigate }: Props) {
       window.removeEventListener('online', handleOnline)
     }
   }, [])
+
+  const downloadSalesLedger = async () => {
+    setExporting(true)
+    setExportError('')
+    setExportMessage('')
+    try {
+      const result = await downloadSalesLedgerCsv()
+      setExportMessage(
+        result.source === 'offline'
+          ? `Downloaded the saved offline ledger from ${new Date(result.savedAt).toLocaleString()}. It may not include newer sales.`
+          : result.offlineCopySaved
+            ? 'Sales ledger downloaded and saved on this browser or device for offline use.'
+            : 'Sales ledger downloaded, but this browser or device could not save an offline copy.',
+      )
+    } catch (reason) {
+      console.error('Unable to download the sales ledger CSV.', reason)
+      setExportError(reason instanceof Error ? reason.message : 'Unable to download the sales ledger.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const weekData = report?.trends ?? []
   const monthData = report?.monthly ?? []
@@ -197,6 +222,44 @@ export default function ReportsScreen({ onNavigate }: Props) {
       </div>
 
       <div className="scroll-area" style={{ padding: '16px', paddingBottom: 80 }}>
+
+        <section className="card" aria-labelledby="sales-ledger-export-heading" style={{ padding: 16, marginBottom: 14 }}>
+          <div id="sales-ledger-export-heading" style={{ fontSize: 14, fontWeight: 700, color: c.text, marginBottom: 5 }}>
+            Sales transaction ledger
+          </div>
+          <div style={{ fontSize: 11, color: c.muted, lineHeight: 1.5, marginBottom: 12 }}>
+            Download the business sales ledger, including line items and payment references. Requires the Export Data permission.
+          </div>
+          {exportError && (
+            <div role="alert" style={{ color: '#D32F2F', fontSize: 11, marginBottom: 10 }}>
+              {exportError}
+            </div>
+          )}
+          {exportMessage && (
+            <div role="status" style={{ color: '#2E7D32', fontSize: 11, marginBottom: 10 }}>
+              {exportMessage}
+            </div>
+          )}
+          <button
+            className="btn"
+            onClick={() => void downloadSalesLedger()}
+            disabled={exporting}
+            style={{
+              width: '100%',
+              padding: 12,
+              background: exporting ? c.cardAlt : 'linear-gradient(135deg, #123A8F, #0288D1)',
+              border: 'none',
+              borderRadius: 10,
+              color: exporting ? c.muted : 'white',
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: exporting ? 'default' : 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            {exporting ? 'Preparing sales ledger…' : 'Download sales ledger CSV'}
+          </button>
+        </section>
 
         {isOfflineSnapshot && (
           <div role="status" style={{ background: '#FFF8E1', color: '#795548', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12 }}>

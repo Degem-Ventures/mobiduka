@@ -7,3 +7,6 @@ project(':capacitor-community-sqlite').projectDir = new File('../node_modules/.p
 
 include ':capacitor-haptics'
 project(':capacitor-haptics').projectDir = new File('../node_modules/.pnpm/@capacitor+haptics@7.0.5_@capacitor+core@7.6.9/node_modules/@capacitor/haptics/android')
+
+include ':capacitor-network'
+project(':capacitor-network').projectDir = new File('../node_modules/.pnpm/@capacitor+network@7.0.4_@capacitor+core@7.6.9/node_modules/@capacitor/network/android')
