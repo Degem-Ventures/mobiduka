@@ -1,4 +1,4 @@
-name: Build and publish signed Capacitor Android APK
+name: Build Capacitor Android APK
 
 on:
   workflow_dispatch:
@@ -8,8 +8,10 @@ on:
         required: true
         type: string
   push:
+    branches:
+        - dev
     tags:
-      - "v*"
+        - "v*"
 
 permissions:
   contents: write
@@ -24,6 +26,7 @@ jobs:
           lfs: true
 
       - name: Resolve release version
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         id: release_version
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -94,6 +97,7 @@ jobs:
           pnpm exec cap sync android
 
       - name: Configure release signing
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -125,7 +129,20 @@ jobs:
           echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "ANDROID_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
 
+      - name: Build debug APK
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: gradle -p android clean assembleDebug
+
+      - name: Upload debug APK artifact
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        uses: actions/upload-artifact@v5
+        with:
+          name: mobiduka-capacitor-debug-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Build signed release APK
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -137,6 +154,7 @@ jobs:
             -PmobidukaVersionName="$VERSION_NAME"
 
       - name: Verify APK signature
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: |
           apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           if [[ -z "$apksigner_path" ]]; then
@@ -146,6 +164,7 @@ jobs:
           "$apksigner_path" verify --verbose android/app/build/outputs/apk/release/app-release.apk
 
       - name: Write release build metadata
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           VERSION_NAME: ${{ steps.release_version.outputs.version_name }}
           RELEASE_TAG: ${{ steps.release_version.outputs.tag }}
@@ -159,6 +178,7 @@ jobs:
           } > "$RUNNER_TEMP/mobiduka-release-build-info.txt"
 
       - name: Publish APK to GitHub Releases
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_version.outputs.tag }}

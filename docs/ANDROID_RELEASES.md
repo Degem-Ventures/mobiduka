@@ -81,7 +81,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-Alternatively, run **Build and publish signed Capacitor Android APK** from the
+Alternatively, run **Build Capacitor Android APK** from the
 Actions tab and provide a version such as `1.0.1`. The workflow validates that
 all signing secrets are configured, builds `assembleRelease`, verifies the APK
 signature, and publishes the APK and build metadata on the GitHub Release.
