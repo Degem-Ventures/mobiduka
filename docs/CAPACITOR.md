@@ -29,7 +29,7 @@ The GitHub Actions workflow uses the runner's Gradle installation, so it does no
 
 ## GitHub Actions build
 
-The workflow at `.github/workflows/build-capacitor-apk.yml` bundles the React UI locally and creates a signed release APK on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner. Set the `MOBIDUKA_API_ORIGIN` repository variable to the deployed app origin when it differs from `https://mobiduka.vercel.app`.
+The workflow at `.github/workflows/build-capacitor-apk.yml` bundles the React UI locally on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner. It runs on pushes to `dev` and builds an unsigned **debug APK artifact** (`mobiduka-capacitor-debug-apk-<run number>`) without release secrets. Set the `MOBIDUKA_API_ORIGIN` repository variable to the deployed app origin when it differs from `https://mobiduka.vercel.app`.
 
 <!-- 1. Push this project to GitHub.
 2. Open the repository's **Actions** tab.
@@ -38,9 +38,9 @@ The workflow at `.github/workflows/build-capacitor-apk.yml` bundles the React UI
 
 The workflow also runs automatically for pushes to `dev`. -->
 
-Release signing secrets are required; follow [Android signed APK releases](./ANDROID_RELEASES.md) to create the persistent key and configure GitHub Actions.
+Version tags and manual workflow runs build and publish a signed **release APK**. Release signing secrets are required for those runs; follow [Android signed APK releases](./ANDROID_RELEASES.md) to create the persistent key and configure GitHub Actions.
 
-Push a `vMAJOR.MINOR.PATCH` tag or manually run **Build and publish signed Capacitor Android APK** with a version such as `1.0.1`. The workflow validates signing, builds and verifies `app-release.apk`, and publishes it with build metadata as a GitHub Release. Its version name comes from the release tag; its increasing Actions run number is used as Android's `versionCode`.
+Push a `vMAJOR.MINOR.PATCH` tag or manually run **Build Capacitor Android APK** with a version such as `1.0.1`. The workflow validates signing, builds and verifies `app-release.apk`, and publishes it with build metadata as a GitHub Release. Its version name comes from the release tag or manual input; its increasing Actions run number is used as Android's `versionCode`.
 
 ## Updating the app
 
