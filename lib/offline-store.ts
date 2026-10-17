@@ -678,6 +678,25 @@ export type QueuedOfflineCashSale = {
   }
 }
 
+export type OfflineSaleSyncProgress = {
+  businessId: string
+  phase: "syncing" | "synced" | "failed" | "settled"
+  sales: QueuedOfflineCashSale[]
+}
+
+export const OFFLINE_SALE_SYNC_PROGRESS_EVENT =
+  "mobiduka-offline-sale-sync-progress"
+
+function dispatchOfflineSaleSyncProgress(detail: OfflineSaleSyncProgress) {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(
+    new CustomEvent<OfflineSaleSyncProgress>(
+      OFFLINE_SALE_SYNC_PROGRESS_EVENT,
+      { detail },
+    ),
+  )
+}
+
 export type OfflineExpenseInput = {
   id?: string
   description: string
@@ -1185,7 +1204,31 @@ export async function syncPendingOfflineSales(
       payload: JSON.parse(String(row.payload)) as Record<string, unknown>,
       createdAt: String(row.created_at),
     }))
+    const cashSales = rows.flatMap((row) => {
+      if (
+        String(row.entity_name) !== "Sale" ||
+        String(row.operation) !== "CREATE"
+      ) {
+        return []
+      }
+      return [
+        {
+          id: String(row.id),
+          createdAt: String(row.created_at),
+          status: "PENDING" as const,
+          lastError: null,
+          payload: JSON.parse(
+            String(row.payload),
+          ) as QueuedOfflineCashSale["payload"],
+        },
+      ]
+    })
     try {
+      dispatchOfflineSaleSyncProgress({
+        businessId,
+        phase: "syncing",
+        sales: cashSales,
+      })
       const response = await apiFetch<{
         success: boolean
         processedIds: string[]
@@ -1201,6 +1244,11 @@ export async function syncPendingOfflineSales(
         }),
       })
       const acknowledgedIds = new Set(response.processedIds)
+      dispatchOfflineSaleSyncProgress({
+        businessId,
+        phase: "synced",
+        sales: cashSales.filter((sale) => acknowledgedIds.has(sale.id)),
+      })
       for (const row of rows) {
         const id = String(row.id)
         if (!acknowledgedIds.has(id)) continue
@@ -1227,7 +1275,22 @@ export async function syncPendingOfflineSales(
           ],
         )
       }
+      dispatchOfflineSaleSyncProgress({
+        businessId,
+        phase: "failed",
+        sales: cashSales.map((sale) => ({
+          ...sale,
+          status: "FAILED",
+          lastError: String(error),
+        })),
+      })
       throw error
+    } finally {
+      dispatchOfflineSaleSyncProgress({
+        businessId,
+        phase: "settled",
+        sales: cashSales,
+      })
     }
   })().finally(() => {
     syncInProgress = null
