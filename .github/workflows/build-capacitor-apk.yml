@@ -1,9 +1,18 @@
-name: Build Capacitor Android APK (Locally Bundled UI)
+name: Build and publish signed Capacitor Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix (for example 1.2.3)
+        required: true
+        type: string
   push:
-    branches: [dev]
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   build-capacitor-apk:
@@ -13,6 +22,26 @@ jobs:
         uses: actions/checkout@v5
         with:
           lfs: true
+
+      - name: Resolve release version
+        id: release_version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$INPUT_VERSION"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Version must use semantic version format, for example 1.2.3."
+            exit 1
+          fi
+
+          echo "version_name=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Verify launcher icon assets
         run: |
@@ -64,14 +93,67 @@ jobs:
           pnpm run build:capacitor
           pnpm exec cap sync android
 
-      - name: Build debug APK
-        run: gradle -p android clean assembleDebug
-        # run: |
-        #   cd android
-        #   ./gradlew assembleDebug
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" ||
+                -z "$ANDROID_KEYSTORE_PASSWORD" ||
+                -z "$ANDROID_KEY_ALIAS" ||
+                -z "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "::error::Android release signing is not configured. Add all four ANDROID_* repository secrets as described in docs/ANDROID_RELEASES.md."
+            exit 1
+          fi
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v5
+          keystore_path="$RUNNER_TEMP/mobiduka-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          echo "ANDROID_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.release_version.outputs.version_name }}
+        run: |
+          gradle -p android clean assembleRelease \
+            -PmobidukaVersionCode="$GITHUB_RUN_NUMBER" \
+            -PmobidukaVersionName="$VERSION_NAME"
+
+      - name: Verify APK signature
+        run: |
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [[ -z "$apksigner_path" ]]; then
+            echo "::error::Android apksigner tool was not found."
+            exit 1
+          fi
+          "$apksigner_path" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Write release build metadata
+        env:
+          VERSION_NAME: ${{ steps.release_version.outputs.version_name }}
+          RELEASE_TAG: ${{ steps.release_version.outputs.tag }}
+        run: |
+          {
+            echo "versionName=$VERSION_NAME"
+            echo "versionCode=$GITHUB_RUN_NUMBER"
+            echo "tag=$RELEASE_TAG"
+            echo "commit=$GITHUB_SHA"
+            echo "branch=$GITHUB_REF_NAME"
+          } > "$RUNNER_TEMP/mobiduka-release-build-info.txt"
+
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: mobiduka-capacitor-debug-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          tag_name: ${{ steps.release_version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: MobiDuka ${{ steps.release_version.outputs.version_name }}
+          generate_release_notes: true
+          files: |
+            android/app/build/outputs/apk/release/app-release.apk
+            ${{ runner.temp }}/mobiduka-release-build-info.txt
