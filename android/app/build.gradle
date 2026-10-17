@@ -22,10 +22,11 @@ if (localEnvFile.exists()) {
     }
 }
 
-def releaseStoreFile = System.getenv('ANDROID_KEYSTORE_PATH') ?: keystoreProperties.getProperty('storeFile') ?: localSigningValues['ANDROID_KEYSTORE_PATH']
-def releaseStorePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: keystoreProperties.getProperty('storePassword') ?: localSigningValues['ANDROID_KEYSTORE_PASSWORD']
-def releaseKeyAlias = System.getenv('ANDROID_KEY_ALIAS') ?: keystoreProperties.getProperty('keyAlias') ?: localSigningValues['ANDROID_KEY_ALIAS']
-def releaseKeyPassword = System.getenv('ANDROID_KEY_PASSWORD') ?: keystoreProperties.getProperty('keyPassword') ?: localSigningValues['ANDROID_KEY_PASSWORD']
+def signingValue = { String value -> value == null ? null : value.trim() }
+def releaseStoreFile = signingValue(System.getenv('ANDROID_KEYSTORE_PATH') ?: keystoreProperties.getProperty('storeFile') ?: localSigningValues['ANDROID_KEYSTORE_PATH'])
+def releaseStorePassword = signingValue(System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: keystoreProperties.getProperty('storePassword') ?: localSigningValues['ANDROID_KEYSTORE_PASSWORD'])
+def releaseKeyAlias = signingValue(System.getenv('ANDROID_KEY_ALIAS') ?: keystoreProperties.getProperty('keyAlias') ?: localSigningValues['ANDROID_KEY_ALIAS'])
+def releaseKeyPassword = signingValue(System.getenv('ANDROID_KEY_PASSWORD') ?: keystoreProperties.getProperty('keyPassword') ?: localSigningValues['ANDROID_KEY_PASSWORD'])
 def releaseSigningConfigured = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 def releaseTaskRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
 

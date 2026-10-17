@@ -112,6 +112,17 @@ jobs:
           keystore_path="$RUNNER_TEMP/mobiduka-release.jks"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           chmod 600 "$keystore_path"
+          ANDROID_KEY_ALIAS="$(printf '%s' "$ANDROID_KEY_ALIAS" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          export ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS
+          if ! keytool -list \
+            -keystore "$keystore_path" \
+            -storetype JKS \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::The configured Android key alias was not found in the decoded keystore. Confirm ANDROID_KEY_ALIAS matches the alias used to generate ANDROID_KEYSTORE_BASE64, with no extra spaces."
+            exit 1
+          fi
+          echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "ANDROID_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
 
       - name: Build signed release APK
