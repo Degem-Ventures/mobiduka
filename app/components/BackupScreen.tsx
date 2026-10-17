@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { Network, type ConnectionType } from "@capacitor/network"
 import { useColors } from "../utils/theme"
 import {
@@ -17,10 +17,12 @@ import {
   getOfflineSaleSyncStatus,
   getOfflineStorageUsage,
   isNativeOfflineApp,
+  OFFLINE_SALE_SYNC_PROGRESS_EVENT,
   restoreOfflineBackupSnapshot,
   retryFailedOfflineSales,
   syncPendingOfflineSales,
   type OfflineCacheIndexEntry,
+  type OfflineSaleSyncProgress,
   type OfflineStorageUsage,
   type QueuedOfflineCashSale,
 } from "../../lib/offline-store"
@@ -146,6 +148,10 @@ type CloudBackupMetadata = {
   completedAt: string | null
 }
 
+type RestorePoint = CloudBackupMetadata & {
+  kind: "Full business" | "Device snapshot"
+}
+
 type BackupSettingsResponse = {
   preferences: {
     autoBackup: boolean
@@ -191,6 +197,88 @@ function formatBackupDate(value: string | null) {
   return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })}, ${time}`
 }
 
+type BackupIconName =
+  | "arrow-left"
+  | "cloud"
+  | "database"
+  | "device"
+  | "refresh"
+  | "shield"
+  | "check"
+  | "clock"
+  | "chevron"
+  | "restore"
+
+function BackupIcon({
+  name,
+  size = 20,
+  color = "currentColor",
+}: {
+  name: BackupIconName
+  size?: number
+  color?: string
+}) {
+  const paths: Record<BackupIconName, ReactNode> = {
+    "arrow-left": (
+      <>
+        <path d="M19 12H5" />
+        <path d="m12 19-7-7 7-7" />
+      </>
+    ),
+    cloud: <path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z" />,
+    database: (
+      <>
+        <ellipse cx="12" cy="5" rx="8" ry="3" />
+        <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+        <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+      </>
+    ),
+    device: (
+      <>
+        <rect x="6" y="2" width="12" height="20" rx="2" />
+        <path d="M10 18h4" />
+      </>
+    ),
+    refresh: (
+      <>
+        <path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5" />
+        <path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5" />
+      </>
+    ),
+    shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />,
+    check: <path d="m5 12 4 4L19 6" />,
+    clock: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </>
+    ),
+    chevron: <path d="m9 18 6-6-6-6" />,
+    restore: (
+      <>
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+        <path d="M3 3v5h5" />
+      </>
+    ),
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {paths[name]}
+    </svg>
+  )
+}
+
 export default function BackupScreen({ onNavigate }: Props) {
   const c = useColors()
   const session = getClientSession()
@@ -198,6 +286,13 @@ export default function BackupScreen({ onNavigate }: Props) {
   const userId = session?.user.id
   const [status, setStatus] = useState<SyncStatus>(emptyStatus)
   const [queuedSales, setQueuedSales] = useState<QueuedOfflineCashSale[]>([])
+  const [syncingSaleIds, setSyncingSaleIds] = useState<Set<string>>(new Set())
+  const [salesSyncExpanded, setSalesSyncExpanded] = useState(false)
+  const [offlinePreparationExpanded, setOfflinePreparationExpanded] =
+    useState(true)
+  const [recentlySyncedSales, setRecentlySyncedSales] = useState<
+    QueuedOfflineCashSale[]
+  >([])
   const [queuedSalesLoading, setQueuedSalesLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -215,6 +310,9 @@ export default function BackupScreen({ onNavigate }: Props) {
   const [ledgerExportMessage, setLedgerExportMessage] = useState("")
   const [ledgerExporting, setLedgerExporting] = useState(false)
   const [restoreMessage, setRestoreMessage] = useState("")
+  const [selectedRestoreBackupId, setSelectedRestoreBackupId] = useState<
+    string | null
+  >(null)
   const [backingUp, setBackingUp] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const [backupProgress, setBackupProgress] = useState<{
@@ -238,6 +336,9 @@ export default function BackupScreen({ onNavigate }: Props) {
     message: string
   } | null>(null)
   const [serverRestoreBusy, setServerRestoreBusy] = useState(false)
+  const [serverRestoreBackupId, setServerRestoreBackupId] = useState<
+    string | null
+  >(null)
   const [serverRestoreProgress, setServerRestoreProgress] = useState<{
     percent: number
     message: string
@@ -255,6 +356,11 @@ export default function BackupScreen({ onNavigate }: Props) {
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine,
   )
+  useEffect(() => {
+    setRecentlySyncedSales([])
+    setSyncingSaleIds(new Set())
+  }, [businessId])
+
   const isNative = isNativeOfflineApp()
   const deviceBackupUnavailableReason = !isNative
     ? "Device snapshots use app-private SQLite storage and are available only in the installed Android or iOS app, not in a browser."
@@ -558,7 +664,7 @@ export default function BackupScreen({ onNavigate }: Props) {
   }, [businessId, serverBackupBusy, session?.token])
 
   useEffect(() => {
-    const backupId = latestServerBackup?.id
+    const backupId = serverRestoreBackupId
     if (!serverRestoreBusy || !backupId || !businessId || !session?.token)
       return
     let active = true
@@ -614,7 +720,7 @@ export default function BackupScreen({ onNavigate }: Props) {
       active = false
       if (timeoutId !== undefined) window.clearTimeout(timeoutId)
     }
-  }, [businessId, latestServerBackup?.id, serverRestoreBusy, session?.token])
+  }, [businessId, serverRestoreBackupId, serverRestoreBusy, session?.token])
 
   const refreshStatus = useCallback(async () => {
     if (!businessId || !isNative) {
@@ -708,12 +814,38 @@ export default function BackupScreen({ onNavigate }: Props) {
       else if (detail.lastError) setError(detail.lastError)
       else setError("")
     }
+    const handleSaleSyncProgress = (event: Event) => {
+      const detail = (event as CustomEvent<OfflineSaleSyncProgress>).detail
+      if (!detail || detail.businessId !== businessId) return
+      const saleIds = new Set(detail.sales.map((sale) => sale.id))
+      if (detail.phase === "syncing") {
+        setSyncingSaleIds((current) => new Set([...current, ...saleIds]))
+      } else if (detail.phase === "synced") {
+        setRecentlySyncedSales((current) =>
+          [
+            ...detail.sales.slice().reverse(),
+            ...current.filter((sale) => !saleIds.has(sale.id)),
+          ].slice(0, 50),
+        )
+      }
+      if (detail.phase === "failed" || detail.phase === "settled") {
+        setSyncingSaleIds((current) => {
+          const next = new Set(current)
+          for (const id of saleIds) next.delete(id)
+          return next
+        })
+      }
+    }
     const handleOnline = () => {
       void refreshStatus()
       void refreshCacheIndex()
     }
     const handleConnectivityChange = () => setIsOnline(navigator.onLine)
     window.addEventListener("mobiduka-offline-sync-status", handleSyncStatus)
+    window.addEventListener(
+      OFFLINE_SALE_SYNC_PROGRESS_EVENT,
+      handleSaleSyncProgress,
+    )
     window.addEventListener("online", handleOnline)
     window.addEventListener("online", handleConnectivityChange)
     window.addEventListener("offline", handleConnectivityChange)
@@ -722,11 +854,15 @@ export default function BackupScreen({ onNavigate }: Props) {
         "mobiduka-offline-sync-status",
         handleSyncStatus,
       )
+      window.removeEventListener(
+        OFFLINE_SALE_SYNC_PROGRESS_EVENT,
+        handleSaleSyncProgress,
+      )
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("online", handleConnectivityChange)
       window.removeEventListener("offline", handleConnectivityChange)
     }
-  }, [refreshCacheIndex, refreshQueuedSales, refreshStatus])
+  }, [businessId, refreshCacheIndex, refreshQueuedSales, refreshStatus])
 
   const syncNow = async () => {
     if (
@@ -823,7 +959,7 @@ export default function BackupScreen({ onNavigate }: Props) {
     [businessId, isNative, isOnline, session?.token, session?.user.offline],
   )
 
-  const restoreCloudBackup = async () => {
+  const restoreCloudBackup = async (backupId?: string) => {
     if (
       !businessId ||
       !session?.token ||
@@ -836,7 +972,11 @@ export default function BackupScreen({ onNavigate }: Props) {
       )
       return
     }
-    if (!latestBackup) {
+    const backupToRestore = backupId
+      ? deviceBackupHistory.find((backup) => backup.id === backupId) ??
+        (latestBackup?.id === backupId ? latestBackup : null)
+      : latestBackup
+    if (!backupToRestore?.completedAt) {
       setBackupError("There is no completed cloud backup to restore.")
       return
     }
@@ -856,7 +996,7 @@ export default function BackupScreen({ onNavigate }: Props) {
         payload: unknown
       }>("/api/business/restore", {
         method: "POST",
-        body: JSON.stringify({ backupId: latestBackup.id }),
+        body: JSON.stringify({ backupId: backupToRestore.id }),
       })
       await restoreOfflineBackupSnapshot(businessId, result.payload)
       await Promise.all([refreshStatus(), refreshCacheIndex()])
@@ -940,14 +1080,18 @@ export default function BackupScreen({ onNavigate }: Props) {
     }
   }
 
-  const restoreServerBackup = async () => {
+  const restoreServerBackup = async (backupId?: string) => {
     if (!businessId || !session?.token || session.user.offline || !isOnline) {
       setServerBackupError(
         "Sign in online and connect to the internet before restoring a server backup.",
       )
       return
     }
-    if (!latestServerBackup) {
+    const backupToRestore = backupId
+      ? serverBackupHistory.find((backup) => backup.id === backupId) ??
+        (latestServerBackup?.id === backupId ? latestServerBackup : null)
+      : latestServerBackup
+    if (!backupToRestore?.completedAt) {
       setServerBackupError("There is no completed server backup to restore.")
       return
     }
@@ -960,6 +1104,7 @@ export default function BackupScreen({ onNavigate }: Props) {
     }
 
     setServerRestoreBusy(true)
+    setServerRestoreBackupId(backupToRestore.id)
     setServerRestoreProgress({ percent: 0, message: "Preparing restore" })
     setServerBackupError("")
     setServerBackupHistoryError("")
@@ -969,7 +1114,7 @@ export default function BackupScreen({ onNavigate }: Props) {
         restoredRows: Record<string, number>
       }>("/api/business/restore/server-data", {
         method: "POST",
-        body: JSON.stringify({ backupId: latestServerBackup.id }),
+        body: JSON.stringify({ backupId: backupToRestore.id }),
       })
       const restoredCount = Object.values(result.restoredRows).reduce(
         (total, count) => total + count,
@@ -990,6 +1135,7 @@ export default function BackupScreen({ onNavigate }: Props) {
       )
     } finally {
       setServerRestoreBusy(false)
+      setServerRestoreBackupId(null)
       setServerRestoreProgress(null)
     }
   }
@@ -1046,6 +1192,9 @@ export default function BackupScreen({ onNavigate }: Props) {
   const pendingCount = status.pending
   const failedCount = status.failed
   const hasQueue = pendingCount + failedCount > 0
+  useEffect(() => {
+    if (hasQueue) setSalesSyncExpanded(true)
+  }, [hasQueue])
   const datasets = userId ? cacheDatasets(userId) : []
   const datasetStatus = datasets.map((dataset) => {
     const entries = dataset.cacheKeys.flatMap((key) => {
@@ -1076,13 +1225,169 @@ export default function BackupScreen({ onNavigate }: Props) {
     }
   })
   const readyDatasets = datasetStatus.filter((dataset) => dataset.ready).length
+  const restorePointCandidates: RestorePoint[] = []
+  for (const [kind, backups] of [
+    [
+      "Full business",
+      [
+        ...serverBackupHistory,
+        ...(latestServerBackup ? [latestServerBackup] : []),
+      ],
+    ],
+    [
+      "Device snapshot",
+      [...deviceBackupHistory, ...(latestBackup ? [latestBackup] : [])],
+    ],
+  ] as const) {
+    for (const backup of backups) {
+      if (backup.completedAt) restorePointCandidates.push({ ...backup, kind })
+    }
+  }
+  const restorePointsById = new Map<string, RestorePoint>()
+  for (const backup of restorePointCandidates) {
+    restorePointsById.set(`${backup.kind}:${backup.id}`, backup)
+  }
+  const restorePoints = Array.from(restorePointsById.values()).sort(
+    (left, right) =>
+      new Date(right.completedAt ?? 0).getTime() -
+      new Date(left.completedAt ?? 0).getTime(),
+  )
+  const selectedRestorePoint =
+    restorePoints.find(
+      (backup) =>
+        `${backup.kind}:${backup.id}` === selectedRestoreBackupId,
+    ) ??
+    restorePoints[0] ??
+    null
+  const canRestoreSelectedBackup =
+    !!selectedRestorePoint &&
+    isOnline &&
+    !!session?.token &&
+    !session.user.offline &&
+    (selectedRestorePoint.kind !== "Device snapshot" || isNative) &&
+    !backingUp &&
+    !restoring &&
+    !serverBackupBusy &&
+    !serverRestoreBusy
+  const hasSalesActivity =
+    hasQueue || recentlySyncedSales.length > 0 || syncingSaleIds.size > 0
+  const salesActivityRow = (
+    sale: QueuedOfflineCashSale,
+    synced: boolean,
+  ) => {
+    const unitCount = sale.payload.items.reduce(
+      (total, item) => total + item.quantity,
+      0,
+    )
+    const failed = !synced && sale.status === "FAILED"
+    const inProgress = !synced && syncingSaleIds.has(sale.id)
+    const statusLabel = synced
+      ? "Synced"
+      : failed
+        ? "Failed"
+        : inProgress
+          ? "Syncing"
+          : "Pending"
+    const statusColor = synced
+      ? c.success
+      : failed
+        ? c.error
+        : inProgress
+          ? c.warning
+          : c.muted
+    const statusBackground = synced
+      ? c.successBg
+      : failed
+        ? c.errorBg
+        : inProgress
+          ? c.warningBg
+          : c.cardAlt
+
+    return (
+      <div
+        key={sale.id}
+        style={{
+          border: `1px solid ${c.border}`,
+          borderRadius: 13,
+          padding: "11px 12px",
+          background: c.card,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 10,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                color: c.text,
+                fontSize: 12,
+                fontWeight: 700,
+                overflowWrap: "anywhere",
+              }}
+            >
+              {sale.payload.saleNumber}
+            </div>
+            <div style={{ color: c.muted, fontSize: 10, marginTop: 3 }}>
+              {new Date(sale.createdAt).toLocaleString()} · {unitCount} unit
+              {unitCount === 1 ? "" : "s"}
+            </div>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-end",
+              gap: 5,
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ color: c.text, fontSize: 12, fontWeight: 800 }}>
+              KSh {sale.payload.total.toLocaleString()}
+            </div>
+            <span
+              role="status"
+              style={{
+                padding: "3px 8px",
+                borderRadius: 999,
+                color: statusColor,
+                background: statusBackground,
+                fontSize: 9,
+                fontWeight: 800,
+              }}
+            >
+              {statusLabel}
+            </span>
+          </div>
+        </div>
+        {failed && sale.lastError && (
+          <div
+            role="note"
+            style={{
+              marginTop: 7,
+              color: c.error,
+              fontSize: 10,
+              lineHeight: 1.4,
+            }}
+          >
+            {sale.lastError}
+          </div>
+        )}
+      </div>
+    )
+  }
   return (
     <div className="screen" style={{ background: c.bg }}>
       <div
         style={{
-          background: "linear-gradient(135deg, #0D1B3D, #0288D1)",
+          background: c.headerGradient,
           padding: "52px 20px 24px",
           flexShrink: 0,
+          color: c.onNavy,
         }}
       >
         <div
@@ -1097,140 +1402,204 @@ export default function BackupScreen({ onNavigate }: Props) {
             className="btn"
             onClick={() => onNavigate("more")}
             style={{
-              background: "rgba(255,255,255,0.12)",
-              border: "none",
-              borderRadius: 10,
-              width: 36,
-              height: 36,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
+              width: 38,
+              height: 38,
+              border: `1px solid ${c.navyBorder}`,
+              borderRadius: 12,
+              background: c.navySurface,
+              display: "grid",
+              placeItems: "center",
             }}
           >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="white"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-            >
-              <path d="M19 12H5M12 5l-7 7 7 7" />
-            </svg>
+            <BackupIcon name="arrow-left" size={18} color={c.onNavy} />
           </button>
-          <div style={{ color: "white", fontSize: 18, fontWeight: 700 }}>
-            Backup & Cloud Sync
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.2 }}>
+              Backup & sync
+            </div>
+            <div style={{ marginTop: 2, color: c.onNavyMuted, fontSize: 11 }}>
+              Business protection center
+            </div>
+          </div>
+          <div
+            style={{
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              color: latestServerBackup?.completedAt ? c.gold : "#FFE082",
+              fontSize: 10,
+              fontWeight: 800,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: latestServerBackup?.completedAt
+                  ? c.gold
+                  : "#FFE082",
+              }}
+            />
+            {serverBackupLoading
+              ? "Checking"
+              : latestServerBackup?.completedAt
+                ? "Protected"
+                : "Backup needed"}
           </div>
         </div>
         <div
           style={{
-            background: "rgba(255,255,255,0.12)",
-            borderRadius: 18,
-            padding: 20,
-            border: "1px solid rgba(255,255,255,0.15)",
+            background: c.navySurface,
+            borderRadius: 20,
+            padding: 18,
+            border: `1px solid ${c.navyBorder}`,
+            boxShadow: c.shadow,
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ fontSize: 38 }}>☁️</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: "white", fontSize: 16, fontWeight: 700 }}>
-                Business cloud backup
+            <div
+              aria-hidden="true"
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 15,
+                display: "grid",
+                placeItems: "center",
+                color: c.gold,
+                background: c.navySurface,
+                border: `1px solid ${c.navyBorder}`,
+                fontSize: 23,
+              }}
+            >
+              <BackupIcon name="shield" size={24} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 800 }}>
+                {latestServerBackup?.completedAt
+                  ? "Your business data is protected"
+                  : "Set up business protection"}
               </div>
               <div
                 role="status"
                 style={{
-                  color: "rgba(255,255,255,0.78)",
-                  fontSize: 12,
+                  color: c.onNavyMuted,
+                  fontSize: 11,
                   marginTop: 4,
                 }}
               >
                 {serverBackupLoading
                   ? "Checking latest business backup…"
                   : latestServerBackup?.completedAt
-                    ? `Last business backup: ${new Date(latestServerBackup.completedAt).toLocaleString()}`
+                    ? `Latest encrypted backup · ${formatBackupDate(latestServerBackup.completedAt)}`
                     : "No full business backup yet"}
               </div>
               <div
                 style={{
-                  color: "rgba(255,255,255,0.68)",
-                  fontSize: 11,
+                  color: c.onNavyFaint,
+                  fontSize: 10,
                   marginTop: 5,
                 }}
               >
-                {latestServerBackup
-                  ? `${formatPayloadSize(latestServerBackup.originalBytes)} · encrypted`
-                  : "Create a snapshot of this business’s server records"}
+                Full business recovery point
               </div>
             </div>
-            {hasQueue && (
-              <div style={{ textAlign: "right" }}>
-                <div
-                  style={{
-                    color: failedCount ? "#FFCDD2" : "#FFE082",
-                    fontSize: 11,
-                  }}
-                >
-                  {failedCount ? "Needs attention" : "Waiting to sync"}
-                </div>
-                <div style={{ color: "white", fontSize: 20, fontWeight: 800 }}>
-                  {pendingCount + failedCount}
-                </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ color: c.onNavyFaint, fontSize: 9 }}>
+                SNAPSHOT SIZE
               </div>
-            )}
+              <div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>
+                {latestServerBackup?.completedAt
+                  ? formatPayloadSize(latestServerBackup.originalBytes)
+                  : "—"}
+              </div>
+            </div>
           </div>
           <div
             style={{
-              borderTop: "1px solid rgba(255,255,255,0.18)",
-              marginTop: 14,
-              paddingTop: 12,
               display: "grid",
-              gap: 5,
-              fontSize: 11,
-              color: "rgba(255,255,255,0.75)",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              marginTop: 16,
+              paddingTop: 13,
+              borderTop: `1px solid ${c.navyDivider}`,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <span>Full business records</span>
-              <span style={{ color: "white", fontWeight: 600 }}>
-                Encrypted in server database
-              </span>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <span>Device cache snapshot</span>
-              <span style={{ color: "white", fontWeight: 600 }}>
-                {latestBackup?.completedAt
-                  ? `Cloud copy · ${new Date(latestBackup.completedAt).toLocaleDateString()}`
-                  : "Not backed up"}
-              </span>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <span>On-device offline data</span>
-              <span style={{ color: "white", fontWeight: 600 }}>
-                {loading
-                  ? "Checking…"
-                  : `${readyDatasets}/${datasets.length} datasets ready`}
-              </span>
-            </div>
+            {[
+              {
+                label: "Cloud",
+                value: serverBackupLoading
+                  ? "Checking"
+                  : latestServerBackup?.completedAt
+                    ? "Saved"
+                    : "Needed",
+              },
+              {
+                label: "Device",
+                value: loading
+                ? "Checking"
+                : `${readyDatasets}/${datasets.length} ready`,
+              },
+              {
+                label: "Sales sync",
+                value:
+                  loading
+                    ? "Checking"
+                    : syncingSaleIds.size > 0
+                      ? `Syncing ${syncingSaleIds.size}`
+                      : pendingCount + failedCount > 0
+                        ? `${pendingCount + failedCount} waiting`
+                        : "Clear",
+              },
+            ].map((item, index) => (
+              <div
+                key={item.label}
+                style={{
+                  textAlign: "center",
+                  borderRight:
+                    index < 2 ? `1px solid ${c.navyDivider}` : "none",
+                  minWidth: 0,
+                }}
+              >
+                <div
+                  style={{
+                    color: c.onNavyFaint,
+                    fontSize: 9,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.6,
+                  }}
+                >
+                  {item.label}
+                </div>
+                <div
+                  style={{
+                    marginTop: 3,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              borderTop: `1px solid ${c.navyDivider}`,
+              marginTop: 12,
+              paddingTop: 10,
+              color: c.onNavyFaint,
+              fontSize: 9,
+              lineHeight: 1.5,
+            }}
+          >
+            {loading
+              ? "Checking on-device offline data… "
+              : `${readyDatasets}/${datasets.length} offline datasets ready. `}
+            Full business backups and device snapshots are separate. Cloud
+            backups need internet.
           </div>
         </div>
       </div>
@@ -1257,6 +1626,291 @@ export default function BackupScreen({ onNavigate }: Props) {
           </div>
         )}
 
+        <div
+          className="backup-screen-overview"
+          style={{ order: 0, marginBottom: 16 }}
+        >
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void createServerBackup()}
+            disabled={
+              !isOnline ||
+              !session?.token ||
+              session.user.offline ||
+              serverBackupBusy ||
+              serverRestoreBusy
+            }
+            style={{
+              width: "100%",
+              minHeight: 50,
+              marginBottom: 20,
+              border: "none",
+              borderRadius: 15,
+              background:
+                !isOnline ||
+                !session?.token ||
+                session.user.offline ||
+                serverBackupBusy ||
+                serverRestoreBusy
+                  ? c.cardAlt
+                  : c.primaryGradient,
+              color:
+                !isOnline ||
+                !session?.token ||
+                session.user.offline ||
+                serverBackupBusy ||
+                serverRestoreBusy
+                  ? c.muted
+                  : c.onNavy,
+              boxShadow:
+                !isOnline ||
+                !session?.token ||
+                session.user.offline ||
+                serverBackupBusy ||
+                serverRestoreBusy
+                  ? "none"
+                  : c.shadow,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 9,
+              fontFamily: "inherit",
+              fontSize: 14,
+              fontWeight: 800,
+              cursor:
+                !isOnline ||
+                !session?.token ||
+                session.user.offline ||
+                serverBackupBusy ||
+                serverRestoreBusy
+                  ? "default"
+                  : "pointer",
+            }}
+          >
+            <BackupIcon
+              name={serverBackupBusy ? "refresh" : "cloud"}
+              size={19}
+            />
+            {serverBackupBusy
+              ? `Backing up · ${serverBackupProgress?.percent ?? 0}%`
+              : "Back up now"}
+          </button>
+          {serverBackupBusy && (
+            <div aria-live="polite" style={{ margin: "-10px 2px 16px" }}>
+              <div
+                role="progressbar"
+                aria-label="Full business backup progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={serverBackupProgress?.percent ?? 0}
+                aria-valuetext={`${serverBackupProgress?.percent ?? 0}% complete`}
+                style={{
+                  height: 5,
+                  borderRadius: 999,
+                  overflow: "hidden",
+                  background: c.cardAlt,
+                }}
+              >
+                <div
+                  style={{
+                    width: `${serverBackupProgress?.percent ?? 0}%`,
+                    height: "100%",
+                    borderRadius: 999,
+                    background: c.successGradient,
+                    transition: "width 160ms ease",
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  marginTop: 6,
+                  color: c.muted,
+                  fontSize: 10,
+                  fontWeight: 700,
+                }}
+              >
+                {serverBackupProgress?.message ?? "Preparing business backup"}
+              </div>
+            </div>
+          )}
+          {(serverBackupError || backupError) && (
+            <div
+              role="alert"
+              style={{
+                background: c.errorBg,
+                color: "#D32F2F",
+                borderRadius: 10,
+                padding: "10px 12px",
+                margin: "-8px 0 14px",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              {serverBackupError || backupError}
+            </div>
+          )}
+          {(serverBackupMessage || restoreMessage) && (
+            <div
+              role="status"
+              style={{
+                background: "rgba(46, 125, 50, 0.1)",
+                color: "#2E7D32",
+                borderRadius: 10,
+                padding: "10px 12px",
+                margin: "-8px 0 14px",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              {serverBackupMessage || restoreMessage}
+            </div>
+          )}
+
+          <div
+            style={{
+              color: c.muted,
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 0.8,
+              textTransform: "uppercase",
+              margin: "0 4px 8px",
+            }}
+          >
+            Protection
+          </div>
+          <section
+            className="card"
+            aria-label="Backup and sync protection status"
+            style={{ marginBottom: 16 }}
+          >
+            {[
+              {
+                icon: "database" as const,
+                title: "Business cloud backup",
+                detail: serverBackupLoading
+                  ? "Checking latest backup…"
+                  : latestServerBackup?.completedAt
+                    ? `Last backup · ${formatBackupDate(latestServerBackup.completedAt)}`
+                    : "No full business backup yet",
+                status: serverBackupLoading
+                  ? "Checking"
+                  : latestServerBackup?.completedAt
+                    ? "Saved"
+                    : "Needed",
+                tone: latestServerBackup?.completedAt ? c.success : c.warning,
+                background: latestServerBackup?.completedAt
+                  ? c.successBg
+                  : c.warningBg,
+              },
+              {
+                icon: "device" as const,
+                title: "Offline data on this device",
+                detail: !isNative
+                  ? "Available in the installed app"
+                  : loading
+                    ? "Checking saved datasets…"
+                    : `${readyDatasets} of ${datasets.length} datasets ready`,
+                status: !isNative
+                  ? "Native app"
+                  : loading
+                    ? "Checking"
+                    : readyDatasets === datasets.length
+                      ? "Ready"
+                      : "Prepare",
+                tone:
+                  isNative && readyDatasets === datasets.length
+                    ? c.success
+                    : c.primary,
+                background:
+                  isNative && readyDatasets === datasets.length
+                    ? c.successBg
+                    : c.infoBg,
+              },
+              {
+                icon: "refresh" as const,
+                title: "Sales sync",
+                detail: syncing
+                  ? `Sending ${syncingSaleIds.size || "queued"} sales to the server…`
+                  : failedCount > 0
+                    ? `${failedCount} failed · ${pendingCount} waiting`
+                    : hasQueue
+                      ? `${pendingCount} sales waiting to sync`
+                      : "All queued sales are synced",
+                status: syncing
+                  ? "Syncing"
+                  : failedCount > 0
+                    ? "Attention"
+                    : hasQueue
+                      ? "Needs sync"
+                      : "Synced",
+                tone:
+                  failedCount > 0 || syncing || hasQueue
+                    ? c.warning
+                    : c.success,
+                background:
+                  failedCount > 0 || syncing || hasQueue
+                    ? c.warningBg
+                    : c.successBg,
+              },
+            ].map((item, index) => (
+              <div
+                key={item.title}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "14px 15px",
+                  borderBottom: index < 2 ? c.divider : "none",
+                }}
+              >
+                <div
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 12,
+                    flexShrink: 0,
+                    display: "grid",
+                    placeItems: "center",
+                    color: item.tone,
+                    background: item.background,
+                  }}
+                >
+                  <BackupIcon name={item.icon} size={19} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: c.text, fontSize: 12, fontWeight: 700 }}>
+                    {item.title}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 2,
+                      color: c.muted,
+                      fontSize: 10,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {item.detail}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: "4px 8px",
+                    borderRadius: 999,
+                    color: item.tone,
+                    background: item.background,
+                    fontSize: 9,
+                    fontWeight: 800,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {item.status}
+                </div>
+              </div>
+            ))}
+          </section>
+        </div>
+
         {isNative && (
           <>
             <div
@@ -1271,25 +1925,60 @@ export default function BackupScreen({ onNavigate }: Props) {
             >
               On this device
             </div>
-            <div className="card" style={{ padding: 16, marginBottom: 14 }}>
-              <div
+            <details className="card" style={{ marginBottom: 14 }}>
+              <summary
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "baseline",
-                  gap: 8,
-                  marginBottom: 10,
+                  alignItems: "center",
+                  gap: 11,
+                  padding: 15,
+                  cursor: "pointer",
+                  listStyle: "none",
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>
-                  Saved offline data
-                </div>
-                <div role="status" style={{ fontSize: 11, color: c.muted }}>
-                  {cacheIndexLoading
-                    ? "Checking…"
-                    : `${readyDatasets}/${datasets.length} ready`}
-                </div>
-              </div>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 36,
+                    height: 36,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 10,
+                    color: c.primary,
+                    background: c.infoBg,
+                    flexShrink: 0,
+                  }}
+                >
+                  <BackupIcon name="device" size={19} />
+                </span>
+                <span style={{ flex: 1 }}>
+                  <span
+                    style={{
+                      display: "block",
+                      color: c.text,
+                      fontSize: 13,
+                      fontWeight: 700,
+                    }}
+                  >
+                    Saved offline data
+                  </span>
+                  <span
+                    role="status"
+                    style={{
+                      display: "block",
+                      marginTop: 3,
+                      color: c.muted,
+                      fontSize: 10,
+                    }}
+                  >
+                    {cacheIndexLoading
+                      ? "Checking saved datasets…"
+                      : `${readyDatasets}/${datasets.length} datasets ready`}
+                  </span>
+                </span>
+                <BackupIcon name="chevron" size={17} color={c.muted} />
+              </summary>
+              <div style={{ padding: "0 15px 15px" }}>
               <div style={{ display: "grid", gap: 8 }}>
                 {datasetStatus.map((dataset) => (
                   <div
@@ -1414,194 +2103,221 @@ export default function BackupScreen({ onNavigate }: Props) {
                 </div>
               </div>
             </div>
+            </details>
           </>
         )}
 
-        {isNative && hasQueue && (
-          <section
+        {isNative && hasSalesActivity && (
+          <details
             className="card"
-            aria-labelledby="queued-sales-heading"
-            style={{ padding: 16, marginBottom: 14 }}
+            open={salesSyncExpanded}
+            onToggle={(event) =>
+              setSalesSyncExpanded(event.currentTarget.open)
+            }
+            style={{ marginBottom: 14, order: 0 }}
           >
-            <div
+            <summary
               style={{
                 display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: 8,
-                marginBottom: 10,
+                alignItems: "center",
+                gap: 11,
+                padding: 15,
+                cursor: "pointer",
+                listStyle: "none",
               }}
             >
-              <h2
-                id="queued-sales-heading"
+              <span
+                aria-hidden="true"
                 style={{
-                  margin: 0,
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: c.text,
+                  width: 36,
+                  height: 36,
+                  display: "grid",
+                  placeItems: "center",
+                  borderRadius: 10,
+                  color: c.primary,
+                  background: c.infoBg,
+                  flexShrink: 0,
                 }}
               >
-                Unsent cash sales
-              </h2>
-              <span role="status" style={{ fontSize: 11, color: c.muted }}>
-                {queuedSalesLoading
-                  ? "Checking…"
-                  : `${Math.min(queuedSales.length, 50)}${
-                      queuedSales.length > 50 ? "+" : ""
-                    } listed`}
+                <BackupIcon name="refresh" size={19} />
               </span>
-            </div>
-            {queuedSales.length === 0 && !queuedSalesLoading ? (
-              <div style={{ fontSize: 12, color: c.muted }}>
-                The queue count is updating. Refresh this screen to check the
-                saved sales.
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 8 }}>
-                {queuedSales.slice(0, 50).map((sale) => {
-                  const unitCount = sale.payload.items.reduce(
-                    (total, item) => total + item.quantity,
-                    0,
-                  )
-                  const failed = sale.status === "FAILED"
-                  return (
-                    <div
-                      key={sale.id}
-                      style={{
-                        border: `1px solid ${c.divider}`,
-                        borderRadius: 10,
-                        padding: "10px 11px",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 10,
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div
-                            style={{
-                              color: c.text,
-                              fontSize: 12,
-                              fontWeight: 700,
-                              overflowWrap: "anywhere",
-                            }}
-                          >
-                            {sale.payload.saleNumber}
-                          </div>
-                          <div
-                            style={{
-                              color: c.muted,
-                              fontSize: 10,
-                              marginTop: 3,
-                            }}
-                          >
-                            {new Date(sale.createdAt).toLocaleString()} ·{" "}
-                            {unitCount} unit{unitCount === 1 ? "" : "s"}
-                          </div>
-                        </div>
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <div
-                            style={{
-                              color: c.text,
-                              fontSize: 12,
-                              fontWeight: 800,
-                            }}
-                          >
-                            KSh {sale.payload.total.toLocaleString()}
-                          </div>
-                          <div
-                            style={{
-                              color: failed ? "#C62828" : "#8A6500",
-                              fontSize: 10,
-                              fontWeight: 700,
-                              marginTop: 3,
-                            }}
-                          >
-                            {failed ? "Failed" : "Pending"}
-                          </div>
-                        </div>
-                      </div>
-                      {failed && sale.lastError && (
-                        <div
-                          role="note"
-                          style={{
-                            marginTop: 7,
-                            color: "#B71C1C",
-                            fontSize: 10,
-                            lineHeight: 1.4,
-                          }}
-                        >
-                          {sale.lastError}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+              <span style={{ flex: 1 }}>
+                <span
+                  id="sales-activity-heading"
+                  style={{
+                    display: "block",
+                    color: c.text,
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}
+                >
+                  Sales sync activity
+                </span>
+                <span
+                  role="status"
+                  style={{
+                    display: "block",
+                    marginTop: 3,
+                    color: c.muted,
+                    fontSize: 10,
+                  }}
+                >
+                  {`${recentlySyncedSales.length} synced · ${
+                    pendingCount + failedCount
+                  } waiting`}
+                </span>
+              </span>
+              <span
+                style={{
+                  transform: salesSyncExpanded ? "rotate(90deg)" : "none",
+                  transition: "transform 160ms ease",
+                }}
+              >
+                <BackupIcon name="chevron" size={17} color={c.muted} />
+              </span>
+            </summary>
+            <div style={{ padding: "0 15px 15px" }}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void syncNow()}
+                disabled={
+                  !hasQueue ||
+                  syncing ||
+                  backingUp ||
+                  !isOnline ||
+                  !session?.token ||
+                  session.user.offline
+                }
+                style={{
+                  width: "100%",
+                  minHeight: 40,
+                  marginBottom: 12,
+                  border: "none",
+                  borderRadius: 10,
+                  background:
+                    hasQueue &&
+                    !syncing &&
+                    !backingUp &&
+                    isOnline &&
+                    !!session?.token &&
+                    !session.user.offline
+                      ? c.primaryGradient
+                      : c.cardAlt,
+                  color:
+                    hasQueue &&
+                    !syncing &&
+                    !backingUp &&
+                    isOnline &&
+                    !!session?.token &&
+                    !session.user.offline
+                      ? c.onNavy
+                      : c.muted,
+                  fontFamily: "inherit",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  cursor:
+                    hasQueue &&
+                    !syncing &&
+                    !backingUp &&
+                    isOnline &&
+                    !!session?.token &&
+                    !session.user.offline
+                      ? "pointer"
+                      : "default",
+                }}
+              >
+                {syncing
+                  ? `Syncing ${syncingSaleIds.size || "queued"} sales…`
+                  : failedCount > 0
+                    ? `Retry and sync ${pendingCount + failedCount} sales`
+                    : hasQueue
+                      ? `Sync ${pendingCount} waiting sales now`
+                      : "All sales synced"}
+              </button>
+            {queuedSalesLoading && (
+              <div role="status" style={{ color: c.muted, fontSize: 11 }}>
+                Checking queued sales…
               </div>
             )}
+            {recentlySyncedSales.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+                <div
+                  style={{
+                    color: c.muted,
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: 0.6,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Recently synced
+                </div>
+                {recentlySyncedSales
+                  .slice(0, 50)
+                  .map((sale) => salesActivityRow(sale, true))}
+              </div>
+            )}
+            {queuedSales.length > 0 && (
+              <div style={{ display: "grid", gap: 8 }}>
+                {recentlySyncedSales.length > 0 && (
+                  <div
+                    style={{
+                      color: c.muted,
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Waiting to sync
+                  </div>
+                )}
+                {queuedSales.slice(0, 50).map((sale) =>
+                  salesActivityRow(sale, false),
+                )}
+              </div>
+            )}
+            {queuedSales.length === 0 &&
+              recentlySyncedSales.length === 0 &&
+              !queuedSalesLoading && (
+                <div style={{ fontSize: 12, color: c.muted }}>
+                  The sync queue is empty.
+                </div>
+              )}
             {queuedSales.length > 50 && (
               <div style={{ marginTop: 8, color: c.muted, fontSize: 10 }}>
                 Showing the 50 most recent unsent sales. Queue counts include
                 all unsent sales.
               </div>
             )}
-          </section>
+            </div>
+          </details>
         )}
 
-        <button
-          className="btn"
-          onClick={() => void syncNow()}
-          disabled={!isNative || !hasQueue || syncing || backingUp || !isOnline}
-          style={{
-            width: "100%",
-            padding: 16,
-            marginBottom: 16,
-            background:
-              !isNative || !hasQueue || syncing || backingUp || !isOnline
-                ? c.cardAlt
-                : "linear-gradient(135deg, #0288D1, #0277BD)",
-            border: "none",
-            borderRadius: 16,
-            fontSize: 15,
-            fontWeight: 700,
-            color:
-              !isNative || !hasQueue || syncing || backingUp || !isOnline
-                ? c.muted
-                : "white",
-            cursor:
-              !isNative || !hasQueue || syncing || backingUp || !isOnline
-                ? "default"
-                : "pointer",
-            fontFamily: "inherit",
-          }}
-        >
-          {syncing
-            ? "Synchronizing queued sales…"
-            : failedCount > 0
-              ? "Retry failed sales"
-              : "Sync queued sales"}
-        </button>
-
-        <section
+        <details
           className="card"
           aria-labelledby="offline-preparation-heading"
+          open={offlinePreparationExpanded}
+          onToggle={(event) =>
+            setOfflinePreparationExpanded(event.currentTarget.open)
+          }
           style={{
-            padding: 16,
             marginBottom: 14,
             overflow: "visible",
             border: `1px solid ${c.border}`,
             boxShadow: "0 3px 12px rgba(13,27,61,0.06)",
+            order: 0,
           }}
         >
-          <div
+          <summary
             style={{
               display: "flex",
-              alignItems: "flex-start",
+              alignItems: "center",
               gap: 11,
-              marginBottom: 9,
+              padding: 15,
+              cursor: "pointer",
+              listStyle: "none",
             }}
           >
             <span
@@ -1620,12 +2336,12 @@ export default function BackupScreen({ onNavigate }: Props) {
             >
               ↓
             </span>
-            <div>
+            <span style={{ flex: 1 }}>
               <h2
                 id="offline-preparation-heading"
                 style={{
-                  margin: "1px 0 3px",
-                  fontSize: 14,
+                  margin: "0 0 3px",
+                  fontSize: 13,
                   lineHeight: 1.35,
                   fontWeight: 700,
                   color: c.text,
@@ -1636,8 +2352,17 @@ export default function BackupScreen({ onNavigate }: Props) {
               <div style={{ fontSize: 10, color: c.muted }}>
                 Save supported business data to this device
               </div>
-            </div>
-          </div>
+            </span>
+            <span
+              style={{
+                transform: offlinePreparationExpanded ? "rotate(90deg)" : "none",
+                transition: "transform 160ms ease",
+              }}
+            >
+              <BackupIcon name="chevron" size={17} color={c.muted} />
+            </span>
+          </summary>
+          <div style={{ padding: "0 16px 16px" }}>
           <div
             style={{
               fontSize: 12,
@@ -1785,7 +2510,49 @@ export default function BackupScreen({ onNavigate }: Props) {
               )}
             </div>
           )}
-        </section>
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "15px 0 0",
+              marginTop: 14,
+              borderTop: c.divider,
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>
+                Automatic sales sync
+              </div>
+              <div
+                style={{
+                  fontSize: 10,
+                  color: c.muted,
+                  marginTop: 3,
+                  lineHeight: 1.4,
+                }}
+              >
+                Queued sales upload when internet is available; they remain
+                saved on this device while offline.
+              </div>
+            </div>
+            <span
+              style={{
+                padding: "4px 8px",
+                borderRadius: 999,
+                color: c.success,
+                background: c.successBg,
+                fontSize: 9,
+                fontWeight: 800,
+                whiteSpace: "nowrap",
+              }}
+            >
+              Automatic
+            </span>
+          </div>
+          </div>
+        </details>
 
         <div className="backup-primary">
           <div
@@ -1798,9 +2565,200 @@ export default function BackupScreen({ onNavigate }: Props) {
               margin: "2px 4px 8px",
             }}
           >
-            Backup & restore
+            Recovery
           </div>
 
+          <details style={{ marginBottom: 14 }}>
+            <summary
+              className="card"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: 15,
+                cursor: "pointer",
+                listStyle: "none",
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 12,
+                  background: c.infoBg,
+                  color: c.primary,
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <BackupIcon name="restore" size={20} />
+              </span>
+              <span style={{ flex: 1 }}>
+                <span
+                  style={{
+                    display: "block",
+                    color: c.text,
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}
+                >
+                  Restore from a backup
+                </span>
+                <span
+                  style={{
+                    display: "block",
+                    marginTop: 3,
+                    color: c.muted,
+                    fontSize: 10,
+                  }}
+                >
+                  Full business data or this device&apos;s offline snapshot
+                </span>
+              </span>
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 11,
+                  background: c.cardAlt,
+                  color: c.muted,
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                <BackupIcon name="chevron" size={17} />
+              </span>
+            </summary>
+            <div style={{ paddingTop: 12 }}>
+          <section
+            className="card"
+            aria-labelledby="restore-points-heading"
+            style={{ padding: 15, marginBottom: 14 }}
+          >
+            <h3
+              id="restore-points-heading"
+              style={{
+                margin: "0 0 8px",
+                color: c.text,
+                fontSize: 13,
+              }}
+            >
+              Select a restore point
+            </h3>
+            {restorePoints.length === 0 ? (
+              <div style={{ color: c.muted, fontSize: 11 }}>
+                No completed backups are available to restore.
+              </div>
+            ) : (
+              <div
+                role="radiogroup"
+                aria-label="Available backup restore points"
+                style={{ maxHeight: 280, overflowY: "auto" }}
+              >
+                {restorePoints.map((backup) => {
+                  const selected =
+                    !!selectedRestorePoint &&
+                    `${selectedRestorePoint.kind}:${selectedRestorePoint.id}` ===
+                      `${backup.kind}:${backup.id}`
+                  const recordSummary =
+                    backup.kind === "Full business"
+                      ? backup.recordCount == null
+                        ? "Record count unavailable"
+                        : `${backup.recordCount.toLocaleString()} records`
+                      : backup.collectionCount == null ||
+                          backup.queuedRecordCount == null
+                        ? "Entry counts unavailable"
+                        : `${backup.collectionCount.toLocaleString()} collections · ${backup.queuedRecordCount.toLocaleString()} queued records`
+
+                  return (
+                    <button
+                      key={`${backup.kind}-${backup.id}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      disabled={restoring || serverRestoreBusy}
+                      className="btn"
+                      onClick={() =>
+                        setSelectedRestoreBackupId(
+                          `${backup.kind}:${backup.id}`,
+                        )
+                      }
+                      style={{
+                        width: "100%",
+                        padding: "10px 0",
+                        border: "none",
+                        borderTop: c.divider,
+                        background: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        textAlign: "left",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          border: `2px solid ${selected ? c.primary : c.faint}`,
+                          display: "grid",
+                          placeItems: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {selected && (
+                          <span
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: "50%",
+                              background: c.primary,
+                            }}
+                          />
+                        )}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span
+                          style={{
+                            display: "block",
+                            color: c.text,
+                            fontSize: 11,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {backup.kind} · {formatBackupDate(backup.completedAt)}
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: 3,
+                            color: c.muted,
+                            fontSize: 9,
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {recordSummary} ·{" "}
+                          {formatPayloadSize(backup.compressedBytes)}
+                        </span>
+                      </span>
+                      <BackupIcon
+                        name={
+                          backup.kind === "Full business" ? "database" : "device"
+                        }
+                        size={17}
+                        color={c.muted}
+                      />
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </section>
           <section
             className="card"
             aria-labelledby="server-backup-heading"
@@ -1841,130 +2799,6 @@ export default function BackupScreen({ onNavigate }: Props) {
                   ? `Last server backup: ${new Date(latestServerBackup.completedAt).toLocaleString()} · ${formatPayloadSize(latestServerBackup.originalBytes)}`
                   : "Last server backup: Never"}
             </div>
-            {serverBackupError && (
-              <div
-                role="alert"
-                style={{
-                  background: c.errorBg,
-                  color: "#D32F2F",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  marginBottom: 12,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                }}
-              >
-                {serverBackupError}
-              </div>
-            )}
-            {serverBackupMessage && (
-              <div
-                role="status"
-                style={{
-                  background: "rgba(46, 125, 50, 0.1)",
-                  color: "#2E7D32",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  marginBottom: 12,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                }}
-              >
-                {serverBackupMessage}
-              </div>
-            )}
-            <button
-              className="btn"
-              onClick={() => void createServerBackup()}
-              disabled={
-                !isOnline ||
-                !session?.token ||
-                session.user.offline ||
-                serverBackupBusy ||
-                serverRestoreBusy
-              }
-              style={{
-                width: "100%",
-                padding: 14,
-                background:
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  serverBackupBusy ||
-                  serverRestoreBusy
-                    ? c.cardAlt
-                    : "linear-gradient(135deg, #0288D1, #2E7D32)",
-                border: "none",
-                borderRadius: 12,
-                color:
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  serverBackupBusy ||
-                  serverRestoreBusy
-                    ? c.muted
-                    : "white",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor:
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  serverBackupBusy ||
-                  serverRestoreBusy
-                    ? "default"
-                    : "pointer",
-                fontFamily: "inherit",
-              }}
-            >
-              {serverBackupBusy
-                ? `Creating encrypted backup… ${serverBackupProgress?.percent ?? 0}%`
-                : "Back up full business data"}
-            </button>
-            {serverBackupBusy && (
-              <div style={{ marginTop: 10 }}>
-                <div
-                  role="progressbar"
-                  aria-label="Full business backup progress"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={serverBackupProgress?.percent ?? 0}
-                  aria-valuetext={`${serverBackupProgress?.percent ?? 0}% complete`}
-                  style={{
-                    height: 6,
-                    overflow: "hidden",
-                    borderRadius: 999,
-                    background: c.cardAlt,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${serverBackupProgress?.percent ?? 0}%`,
-                      height: "100%",
-                      borderRadius: 999,
-                      background: "linear-gradient(90deg, #0288D1, #2E7D32)",
-                      transition: "width 250ms ease",
-                    }}
-                  />
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    marginTop: 5,
-                    fontSize: 10,
-                    color: c.muted,
-                  }}
-                >
-                  <span>
-                    {serverBackupProgress?.message ??
-                      "Preparing business snapshot"}
-                  </span>
-                  <span>{serverBackupProgress?.percent ?? 0}%</span>
-                </div>
-              </div>
-            )}
             <div
               role="note"
               style={{
@@ -1979,102 +2813,6 @@ export default function BackupScreen({ onNavigate }: Props) {
               credentials. Up to 10 snapshots are retained. Keep an independent
               off-site database backup too.
             </div>
-            <button
-              className="btn"
-              onClick={() => void restoreServerBackup()}
-              disabled={
-                !isOnline ||
-                !session?.token ||
-                session.user.offline ||
-                !latestServerBackup ||
-                serverBackupBusy ||
-                serverRestoreBusy
-              }
-              style={{
-                width: "100%",
-                padding: 14,
-                marginTop: 10,
-                background:
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  !latestServerBackup ||
-                  serverBackupBusy ||
-                  serverRestoreBusy
-                    ? c.cardAlt
-                    : "linear-gradient(135deg, #123A8F, #0288D1)",
-                border: "none",
-                borderRadius: 12,
-                color:
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  !latestServerBackup ||
-                  serverBackupBusy ||
-                  serverRestoreBusy
-                    ? c.muted
-                    : "white",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor:
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  !latestServerBackup ||
-                  serverBackupBusy ||
-                  serverRestoreBusy
-                    ? "default"
-                    : "pointer",
-                fontFamily: "inherit",
-              }}
-            >
-              {serverRestoreBusy
-                ? `Restoring business data… ${serverRestoreProgress?.percent ?? 0}%`
-                : "Restore full business data"}
-            </button>
-            {serverRestoreBusy && (
-              <div style={{ marginTop: 10 }}>
-                <div
-                  role="progressbar"
-                  aria-label="Full business restore progress"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={serverRestoreProgress?.percent ?? 0}
-                  aria-valuetext={`${serverRestoreProgress?.percent ?? 0}% complete`}
-                  style={{
-                    height: 6,
-                    overflow: "hidden",
-                    borderRadius: 999,
-                    background: c.cardAlt,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${serverRestoreProgress?.percent ?? 0}%`,
-                      height: "100%",
-                      borderRadius: 999,
-                      background: "linear-gradient(90deg, #123A8F, #0288D1)",
-                      transition: "width 250ms ease",
-                    }}
-                  />
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    marginTop: 5,
-                    fontSize: 10,
-                    color: c.muted,
-                  }}
-                >
-                  <span>
-                    {serverRestoreProgress?.message ?? "Preparing restore"}
-                  </span>
-                  <span>{serverRestoreProgress?.percent ?? 0}%</span>
-                </div>
-              </div>
-            )}
             <div
               role="note"
               style={{
@@ -2131,38 +2869,6 @@ export default function BackupScreen({ onNavigate }: Props) {
                   ? `Latest device snapshot: ${new Date(latestBackup.completedAt).toLocaleString()} · ${formatPayloadSize(latestBackup.originalBytes)}`
                   : "No device snapshot backed up yet"}
             </div>
-            {backupError && (
-              <div
-                role="alert"
-                style={{
-                  background: c.errorBg,
-                  color: "#D32F2F",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  marginBottom: 12,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                }}
-              >
-                {backupError}
-              </div>
-            )}
-            {restoreMessage && (
-              <div
-                role="status"
-                style={{
-                  background: "rgba(46, 125, 50, 0.1)",
-                  color: "#2E7D32",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  marginBottom: 12,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                }}
-              >
-                {restoreMessage}
-              </div>
-            )}
             <button
               className="btn"
               onClick={() => void createCloudBackup()}
@@ -2189,7 +2895,7 @@ export default function BackupScreen({ onNavigate }: Props) {
                   prefetching ||
                   syncing
                     ? c.cardAlt
-                    : "linear-gradient(135deg, #0288D1, #2E7D32)",
+                    : c.primaryGradient,
                 border: "none",
                 borderRadius: 12,
                 color:
@@ -2274,129 +2980,156 @@ export default function BackupScreen({ onNavigate }: Props) {
                 {deviceBackupUnavailableReason}
               </div>
             )}
-            <button
-              className="btn"
-              onClick={() => void restoreCloudBackup()}
-              disabled={
-                !isNative ||
-                !isOnline ||
-                !session?.token ||
-                session.user.offline ||
-                !latestBackup ||
-                backingUp ||
-                restoring ||
-                prefetching ||
-                syncing
-              }
-              style={{
-                width: "100%",
-                padding: 14,
-                marginTop: 10,
-                background:
-                  !isNative ||
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  !latestBackup ||
-                  backingUp ||
-                  restoring ||
-                  prefetching ||
-                  syncing
-                    ? c.cardAlt
-                    : "linear-gradient(135deg, #123A8F, #0288D1)",
-                border: "none",
-                borderRadius: 12,
-                color:
-                  !isNative ||
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  !latestBackup ||
-                  backingUp ||
-                  restoring ||
-                  prefetching ||
-                  syncing
-                    ? c.muted
-                    : "white",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor:
-                  !isNative ||
-                  !isOnline ||
-                  !session?.token ||
-                  session.user.offline ||
-                  !latestBackup ||
-                  backingUp ||
-                  restoring ||
-                  prefetching ||
-                  syncing
-                    ? "default"
-                    : "pointer",
-                fontFamily: "inherit",
-              }}
-            >
-              {restoring
-                ? "Restoring device snapshot…"
-                : "Restore device snapshot"}
-            </button>
           </section>
+              <button
+                type="button"
+                className="btn"
+                disabled={
+                  !canRestoreSelectedBackup
+                }
+                onClick={() => {
+                  if (!selectedRestorePoint) return
+                  if (selectedRestorePoint.kind === "Full business") {
+                    void restoreServerBackup(selectedRestorePoint.id)
+                  } else {
+                    void restoreCloudBackup(selectedRestorePoint.id)
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  minHeight: 44,
+                  marginTop: 2,
+                  border: "none",
+                  borderRadius: 12,
+                  background: canRestoreSelectedBackup
+                    ? c.primaryGradient
+                    : c.cardAlt,
+                  color: canRestoreSelectedBackup ? c.onNavy : c.muted,
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: canRestoreSelectedBackup ? "pointer" : "default",
+                }}
+              >
+                {serverRestoreBusy
+                  ? `Restoring business data… ${serverRestoreProgress?.percent ?? 0}%`
+                  : restoring
+                    ? "Restoring device snapshot…"
+                    : "Restore selected backup"}
+              </button>
+              {serverRestoreBusy && (
+                <div style={{ marginTop: 10 }}>
+                  <div
+                    role="progressbar"
+                    aria-label="Full business restore progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={serverRestoreProgress?.percent ?? 0}
+                    aria-valuetext={`${serverRestoreProgress?.percent ?? 0}% complete`}
+                    style={{
+                      height: 6,
+                      overflow: "hidden",
+                      borderRadius: 999,
+                      background: c.cardAlt,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${serverRestoreProgress?.percent ?? 0}%`,
+                        height: "100%",
+                        borderRadius: 999,
+                        background: c.primaryGradient,
+                        transition: "width 250ms ease",
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      marginTop: 5,
+                      fontSize: 10,
+                      color: c.muted,
+                    }}
+                  >
+                    <span>
+                      {serverRestoreProgress?.message ?? "Preparing restore"}
+                    </span>
+                    <span>{serverRestoreProgress?.percent ?? 0}%</span>
+                  </div>
+                </div>
+              )}
+              {restoring && (
+                <div
+                  role="status"
+                  style={{
+                    marginTop: 8,
+                    color: c.muted,
+                    fontSize: 10,
+                  }}
+                >
+                  Restoring saved collections to this device&apos;s SQLite
+                  database…
+                </div>
+              )}
+            </div>
+          </details>
 
+          <h2
+            id="backup-sync-settings-heading"
+            style={{
+              margin: "2px 4px 8px",
+              fontSize: 11,
+              fontWeight: 700,
+              color: c.muted,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+            }}
+          >
+            Automatic backup
+          </h2>
           <section
             className="card"
-            aria-labelledby="backup-sync-settings-heading"
-            style={{ padding: 16, marginBottom: 14 }}
+            aria-label="Automatic backup settings"
+            style={{ marginBottom: 14 }}
           >
-            <h2
-              id="backup-sync-settings-heading"
-              style={{ margin: "0 0 6px", fontSize: 14, color: c.text }}
-            >
-              Backup sync settings
-            </h2>
-            <div
-              style={{
-                fontSize: 11,
-                color: c.muted,
-                lineHeight: 1.5,
-                marginBottom: 8,
-              }}
-            >
-              Choose how often backups run. Full business backups run on the
-              server; device snapshots run when the native app is active and
-              online.
-            </div>
             {[
               {
                 label: "Automatic backups",
                 description:
-                  "Create scheduled full-business and device snapshots",
+                  autoBackupFrequency === "DAILY"
+                    ? "Daily at 6:00 AM UTC"
+                    : autoBackupFrequency === "WEEKLY"
+                      ? "Weekly on Monday at 6:00 AM UTC"
+                      : "Monthly on the 1st at 6:00 AM UTC",
                 value: autoBackupEnabled,
                 change: (value: boolean) =>
                   void saveBackupSettings({ autoBackup: value }),
               },
               {
                 label: "Wi-Fi only",
-                description:
-                  "Require native Wi-Fi for automatic device snapshots",
+                description: "Avoid mobile data for device copies",
                 value: autoBackupWifiOnly,
                 change: (value: boolean) =>
                   void saveBackupSettings({ autoBackupWifiOnly: value }),
               },
-            ].map((setting) => (
+            ].map((setting, index) => (
               <div
                 key={setting.label}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: 12,
-                  padding: "10px 0",
-                  borderTop: `1px solid ${c.border}`,
+                  padding: "15px",
+                  borderTop: index === 0 ? "none" : c.divider,
                 }}
               >
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: c.text }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>
                     {setting.label}
                   </div>
-                  <div style={{ fontSize: 10, color: c.muted, marginTop: 2 }}>
+                  <div style={{ fontSize: 10, color: c.muted, marginTop: 3 }}>
                     {setting.description}
                   </div>
                 </div>
@@ -2450,34 +3183,34 @@ export default function BackupScreen({ onNavigate }: Props) {
                   gridTemplateColumns: "1fr minmax(140px, 45%)",
                   alignItems: "center",
                   gap: 12,
-                  padding: "12px 0",
-                  borderTop: `1px solid ${c.border}`,
+                  padding: "12px 15px 15px",
+                  borderTop: c.divider,
                 }}
               >
                 <div>
                   <label
                     htmlFor="auto-backup-frequency"
                     style={{
-                      fontSize: 12,
-                      fontWeight: 600,
+                      fontSize: 11,
+                      fontWeight: 700,
                       color: c.text,
                     }}
                   >
-                    Configure schedule
+                    Backup frequency
                   </label>
                   <div
                     style={{
-                      fontSize: 10,
+                      fontSize: 9,
                       color: c.muted,
-                      marginTop: 2,
+                      marginTop: 3,
                       lineHeight: 1.4,
                     }}
                   >
                     {autoBackupFrequency === "DAILY"
-                      ? "Runs every day at 06:00 UTC."
+                      ? "Runs every day at 6:00 AM UTC."
                       : autoBackupFrequency === "WEEKLY"
-                        ? "Runs every Monday at 06:00 UTC."
-                        : "Runs on the first day of each month at 06:00 UTC."}
+                        ? "Runs every Monday at 6:00 AM UTC."
+                        : "Runs on the first day of each month at 6:00 AM UTC."}
                   </div>
                 </div>
                 <select
@@ -2543,17 +3276,24 @@ export default function BackupScreen({ onNavigate }: Props) {
             </div>
           </section>
 
+          <h2
+            id="backup-history-heading"
+            style={{
+              margin: "2px 4px 8px",
+              fontSize: 11,
+              fontWeight: 700,
+              color: c.muted,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+            }}
+          >
+            Backup history
+          </h2>
           <section
             className="card"
-            aria-labelledby="backup-history-heading"
-            style={{ padding: 16, marginBottom: 14 }}
+            aria-label="Backup history"
+            style={{ marginBottom: 14 }}
           >
-            <h2
-              id="backup-history-heading"
-              style={{ margin: "0 0 10px", fontSize: 15, color: c.text }}
-            >
-              Backup history
-            </h2>
             {[
               ...serverBackupHistory.map((backup) => ({
                 ...backup,
@@ -2569,15 +3309,17 @@ export default function BackupScreen({ onNavigate }: Props) {
                   new Date(b.completedAt ?? b.createdAt ?? 0).getTime() -
                   new Date(a.completedAt ?? a.createdAt ?? 0).getTime(),
               )
-              .map((backup) => (
+              .slice(0, 3)
+              .map((backup, index, visibleBackups) => (
                 <div
-                  key={backup.id}
+                  key={`${backup.kind}-${backup.id}`}
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
-                    padding: "11px 0",
-                    borderTop: `1px solid ${c.border}`,
+                    padding: "13px 15px",
+                    borderBottom:
+                      index < visibleBackups.length - 1 ? c.divider : "none",
                   }}
                 >
                   <div
@@ -2606,32 +3348,11 @@ export default function BackupScreen({ onNavigate }: Props) {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 8,
-                        alignItems: "baseline",
-                      }}
+                      style={{ fontSize: 11, fontWeight: 700, color: c.text }}
                     >
-                      <div
-                        style={{ fontSize: 12, fontWeight: 700, color: c.text }}
-                      >
-                        {formatBackupDate(
-                          backup.completedAt ?? backup.createdAt ?? null,
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 10,
-                          color: c.muted,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {backup.triggerType === "AUTO" ? "Auto" : "Manual"}
-                      </div>
+                      {backup.kind}
                     </div>
                     <div style={{ fontSize: 10, color: c.muted, marginTop: 3 }}>
-                      {backup.kind} ·{" "}
                       {backup.kind === "Full business"
                         ? backup.recordCount == null
                           ? "Record count unavailable"
@@ -2699,6 +3420,34 @@ export default function BackupScreen({ onNavigate }: Props) {
                       </div>
                     )}
                   </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 4,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span
+                      style={{
+                        padding: "3px 7px",
+                        borderRadius: 999,
+                        color: backup.triggerType === "AUTO" ? c.muted : c.primary,
+                        background:
+                          backup.triggerType === "AUTO" ? c.cardAlt : c.infoBg,
+                        fontSize: 9,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {backup.triggerType === "AUTO" ? "Auto" : "Manual"}
+                    </span>
+                    <span style={{ color: c.faint, fontSize: 9 }}>
+                      {formatBackupDate(
+                        backup.completedAt ?? backup.createdAt ?? null,
+                      )}
+                    </span>
+                  </div>
                 </div>
               ))}
             {backupError && (
@@ -2709,7 +3458,7 @@ export default function BackupScreen({ onNavigate }: Props) {
                   color: "#D32F2F",
                   borderRadius: 10,
                   padding: "9px 10px",
-                  marginBottom: 8,
+                  margin: 10,
                   fontSize: 11,
                   lineHeight: 1.5,
                 }}
@@ -2725,7 +3474,7 @@ export default function BackupScreen({ onNavigate }: Props) {
                   color: "#D32F2F",
                   borderRadius: 10,
                   padding: "9px 10px",
-                  marginBottom: 8,
+                  margin: 10,
                   fontSize: 11,
                   lineHeight: 1.5,
                 }}
@@ -2738,27 +3487,33 @@ export default function BackupScreen({ onNavigate }: Props) {
               deviceBackupHistory.length === 0 &&
               !backupError &&
               !serverBackupHistoryError && (
-                <div style={{ fontSize: 12, color: c.muted, padding: "8px 0" }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: c.muted,
+                    padding: "13px 15px",
+                  }}
+                >
                   {backupMetadataLoading || serverBackupLoading
                     ? "Loading backup history…"
                     : "No completed backups yet."}
                 </div>
               )}
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 10,
-                color: c.faint,
-                lineHeight: 1.5,
-              }}
-            >
-              Shows up to 20 recent completed or failed attempts of each type.
-              Automatic backups follow the configured schedule. Full business
-              backups run on the server; device snapshots run while the native
-              app is active. Wi-Fi-only uses Capacitor network status. Failed
-              attempts are saved and can be retried.
-            </div>
           </section>
+          <div
+            style={{
+              margin: "-4px 4px 14px",
+              fontSize: 10,
+              color: c.faint,
+              lineHeight: 1.5,
+            }}
+          >
+            Shows the 3 most recent backup attempts. Automatic backups follow
+            the configured schedule. Full business backups run on the server;
+            device snapshots run while the native app is active. Wi-Fi-only
+            uses Capacitor network status. Failed attempts are saved and can be
+            retried.
+          </div>
         </div>
 
         <aside
