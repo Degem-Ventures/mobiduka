@@ -1,5 +1,37 @@
 apply plugin: 'com.android.application'
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+def localSigningValues = [:]
+def localEnvFile = new File(rootProject.projectDir.parentFile, '.env.local')
+if (localEnvFile.exists()) {
+    localEnvFile.eachLine { line ->
+        def match = line =~ /^\s*(ANDROID_KEYSTORE_PATH|ANDROID_KEYSTORE_PASSWORD|ANDROID_KEY_ALIAS|ANDROID_KEY_PASSWORD)\s*=\s*(.*?)\s*$/
+        if (match.matches()) {
+            def value = match[0][2]
+            if ((value.startsWith('"') && value.endsWith('"')) ||
+                (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.substring(1, value.length() - 1)
+            }
+            localSigningValues[match[0][1]] = value
+        }
+    }
+}
+
+def releaseStoreFile = System.getenv('ANDROID_KEYSTORE_PATH') ?: keystoreProperties.getProperty('storeFile') ?: localSigningValues['ANDROID_KEYSTORE_PATH']
+def releaseStorePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: keystoreProperties.getProperty('storePassword') ?: localSigningValues['ANDROID_KEYSTORE_PASSWORD']
+def releaseKeyAlias = System.getenv('ANDROID_KEY_ALIAS') ?: keystoreProperties.getProperty('keyAlias') ?: localSigningValues['ANDROID_KEY_ALIAS']
+def releaseKeyPassword = System.getenv('ANDROID_KEY_PASSWORD') ?: keystoreProperties.getProperty('keyPassword') ?: localSigningValues['ANDROID_KEY_PASSWORD']
+def releaseSigningConfigured = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+def releaseTaskRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
+
+def appVersionCode = (findProperty('mobidukaVersionCode') ?: '1').toInteger()
+def appVersionName = findProperty('mobidukaVersionName') ?: '1.0.0'
+
 android {
     namespace "com.mobiduka.pos"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +39,8 @@ android {
         applicationId "com.mobiduka.pos"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,12 +48,31 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile rootProject.file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
     }
+}
+
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    throw new GradleException(
+        'Release signing is not configured. Follow docs/ANDROID_RELEASES.md to configure the persistent release key.'
+    )
 }
 
 repositories {

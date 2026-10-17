@@ -29,14 +29,18 @@ The GitHub Actions workflow uses the runner's Gradle installation, so it does no
 
 ## GitHub Actions build
 
-The workflow at `.github/workflows/build-capacitor-apk.yml` bundles the React UI locally and creates the APK on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner. Set the `MOBIDUKA_API_ORIGIN` repository variable to the deployed app origin when it differs from `https://mobiduka.vercel.app`.
+The workflow at `.github/workflows/build-capacitor-apk.yml` bundles the React UI locally and creates a signed release APK on Ubuntu with Node 24, Java 21, Gradle, and the Android SDK supplied by the runner. Set the `MOBIDUKA_API_ORIGIN` repository variable to the deployed app origin when it differs from `https://mobiduka.vercel.app`.
 
-1. Push this project to GitHub.
+<!-- 1. Push this project to GitHub.
 2. Open the repository's **Actions** tab.
 3. Run **Build Capacitor Android APK (Locally Bundled UI)** with **Run workflow**.
 4. Download the `mobiduka-capacitor-debug-apk-<run number>` artifact from the completed workflow.
 
-The workflow also runs automatically for pushes to `dev`.
+The workflow also runs automatically for pushes to `dev`. -->
+
+Release signing secrets are required; follow [Android signed APK releases](./ANDROID_RELEASES.md) to create the persistent key and configure GitHub Actions.
+
+Push a `vMAJOR.MINOR.PATCH` tag or manually run **Build and publish signed Capacitor Android APK** with a version such as `1.0.1`. The workflow validates signing, builds and verifies `app-release.apk`, and publishes it with build metadata as a GitHub Release. Its version name comes from the release tag; its increasing Actions run number is used as Android's `versionCode`.
 
 ## Updating the app
 
@@ -46,7 +50,7 @@ After changing React code or native plugin dependencies, rebuild and sync the na
 MOBIDUKA_API_ORIGIN=https://mobiduka.vercel.app pnpm run cap:sync
 ```
 
-Then rerun the sync and Gradle build commands above, or rerun the GitHub workflow.
+Then rerun the sync and Gradle build commands above for a debug build, or publish a new versioned GitHub Release for an update. Android requires updates to use the same persistent signing key and a higher `versionCode`; sideloaded updates require user approval in Android's installer. The transition from the old debug-signed APK requires uninstalling it first and clears that installation's local data, so sync pending sales and preserve needed device data first. See [Android signed APK releases](./ANDROID_RELEASES.md).
 
 ## iOS GitHub Actions build
 
