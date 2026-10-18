@@ -7,12 +7,13 @@ export type MpesaIntegrationRecord = {
   environment: string
   accountType: string
   shortcode: string
+  partyB: string | null
   accountReference: string | null
   credentialCiphertext: string
   updatedAt: Date
 }
 
-type MpesaIntegrationInput = Pick<MpesaIntegrationRecord, "businessId" | "environment" | "accountType" | "shortcode" | "accountReference" | "credentialCiphertext">
+type MpesaIntegrationInput = Pick<MpesaIntegrationRecord, "businessId" | "environment" | "accountType" | "shortcode" | "partyB" | "accountReference" | "credentialCiphertext">
 
 type MpesaIntegrationDelegate = {
   findUnique: (args: unknown) => Promise<MpesaIntegrationRecord | null>
@@ -57,14 +58,14 @@ export async function findMpesaIntegration(
 
   const rows = integrationId
     ? await db.$queryRaw<MpesaIntegrationRecord[]>`
-        SELECT "id", "businessId", "environment", "accountType", "shortcode", "accountReference",
+        SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB", "accountReference",
           "credentialCiphertext", "updatedAt"
         FROM "MpesaIntegration"
         WHERE "id" = ${integrationId} AND "businessId" = ${businessId}
         LIMIT 1
       `
     : await db.$queryRaw<MpesaIntegrationRecord[]>`
-        SELECT "id", "businessId", "environment", "accountType", "shortcode", "accountReference",
+        SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB", "accountReference",
           "credentialCiphertext", "updatedAt"
         FROM "MpesaIntegration"
         WHERE "businessId" = ${businessId}
@@ -86,6 +87,7 @@ export async function upsertMpesaIntegration(
         environment: input.environment,
         accountType: input.accountType,
         shortcode: input.shortcode,
+        partyB: input.partyB,
         accountReference: input.accountReference,
         credentialCiphertext: input.credentialCiphertext,
       },
@@ -94,21 +96,22 @@ export async function upsertMpesaIntegration(
 
   const rows = await db.$queryRaw<MpesaIntegrationRecord[]>`
     INSERT INTO "MpesaIntegration" (
-      "id", "businessId", "environment", "accountType", "shortcode", "accountReference",
+      "id", "businessId", "environment", "accountType", "shortcode", "partyB", "accountReference",
       "credentialCiphertext", "createdAt", "updatedAt"
     ) VALUES (
       ${randomUUID()}, ${input.businessId}, ${input.environment}, ${input.accountType}, ${input.shortcode},
-      ${input.accountReference}, ${input.credentialCiphertext}, CURRENT_TIMESTAMP,
+      ${input.partyB}, ${input.accountReference}, ${input.credentialCiphertext}, CURRENT_TIMESTAMP,
       CURRENT_TIMESTAMP
     )
     ON CONFLICT ("businessId") DO UPDATE SET
       "environment" = EXCLUDED."environment",
       "accountType" = EXCLUDED."accountType",
       "shortcode" = EXCLUDED."shortcode",
+      "partyB" = EXCLUDED."partyB",
       "accountReference" = EXCLUDED."accountReference",
       "credentialCiphertext" = EXCLUDED."credentialCiphertext",
       "updatedAt" = CURRENT_TIMESTAMP
-    RETURNING "id", "businessId", "environment", "accountType", "shortcode",
+    RETURNING "id", "businessId", "environment", "accountType", "shortcode", "partyB",
       "accountReference", "credentialCiphertext", "updatedAt"
       "credentialCiphertext", "updatedAt"
   `

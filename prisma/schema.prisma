@@ -448,6 +448,7 @@ model MpesaIntegration {
   environment          String   @default("sandbox")
   accountType          String
   shortcode            String
+  partyB               String?
   accountReference     String?
   credentialCiphertext String
   createdAt            DateTime @default(now())

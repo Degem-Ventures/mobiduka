@@ -115,7 +115,7 @@ export async function POST(request: Request) {
           TransactionType: transactionType,
           Amount: Math.round(amount),
           PartyA: phone,
-          PartyB: integration.shortcode,
+          PartyB: integration.partyB || integration.shortcode,
           PhoneNumber: phone,
           CallBackURL: callbackUrl,
           AccountReference: reference,
