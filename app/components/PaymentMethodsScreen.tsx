@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react"
 import { useColors } from "../utils/theme"
-import { ApiResponseError, apiFetch, getClientSession } from "../../lib/client-api"
+import {
+  ApiResponseError,
+  apiFetch,
+  getClientSession,
+} from "../../lib/client-api"
 import {
   isNativeOfflineApp,
   readOfflineCollection,
@@ -8,7 +12,6 @@ import {
   writeOfflineCollection,
 } from "../../lib/offline-store"
 import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
-
 
 interface Method {
   id: string
@@ -54,6 +57,7 @@ type MpesaIntegration = {
   environment?: "sandbox" | "production"
   accountType?: "TILL" | "PAYBILL"
   shortcode?: string
+  partyB?: string | null
   accountReference?: string | null
   updatedAt?: string
 }
@@ -64,6 +68,7 @@ type MpesaForm = {
   environment: "sandbox" | "production"
   accountType: "TILL" | "PAYBILL"
   shortcode: string
+  partyB: string
   accountReference: string
 }
 
@@ -122,6 +127,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
     environment: "sandbox",
     accountType: "TILL",
     shortcode: "",
+    partyB: "",
     accountReference: "",
   })
   const [mpesaCredentialDrafts, setMpesaCredentialDrafts] =
@@ -159,7 +165,9 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const [saving, setSaving] = useState(false)
   const [isOffline, setIsOffline] = useState(false)
   const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
-  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(
+    null,
+  )
   const hasPaymentMethodsSnapshot = useRef(false)
   const activeMpesaCredentials = mpesaCredentialDrafts[mpesaForm.environment]
   const hasStoredCredentialsForSelectedEnvironment =
@@ -172,7 +180,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
     ),
     mpesaConfig: {
       type: mpesaForm.accountType === "TILL" ? "till" : "paybill",
-      till: mpesaForm.accountType === "TILL" ? mpesaForm.shortcode : "",
+      till: mpesaForm.accountType === "TILL" ? mpesaForm.partyB : "",
       paybill: mpesaForm.accountType === "PAYBILL" ? mpesaForm.shortcode : "",
       account: mpesaForm.accountReference,
     },
@@ -224,21 +232,29 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
           const snapshot: PaymentMethodsSnapshot = {
             methods: {
               ...config.methods,
-              mpesa: Boolean(config.methods.mpesa && response.preferences.mpesaEnabled),
+              mpesa: Boolean(
+                config.methods.mpesa && response.preferences.mpesaEnabled,
+              ),
             },
           }
           try {
             await writeOfflineCollection(businessId, cacheKey, snapshot)
             hasPaymentMethodsSnapshot.current = true
           } catch (reason) {
-            console.error("Unable to cache payment method summaries for offline use.", reason)
+            console.error(
+              "Unable to cache payment method summaries for offline use.",
+              reason,
+            )
           }
         }
         let updatedAt: string | null = null
         try {
           updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
         } catch (reason) {
-          console.error("Unable to read the payment methods snapshot timestamp.", reason)
+          console.error(
+            "Unable to read the payment methods snapshot timestamp.",
+            reason,
+          )
         }
         if (!active || thisRequestId !== requestId) return
         setSnapshotUpdatedAt(updatedAt)
@@ -252,36 +268,54 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
         if (!canUseCache || !isNativeOfflineApp()) {
           if (active && thisRequestId === requestId) {
             setIsOffline(isNativeOfflineApp() && !navigator.onLine)
-            setSaveError(reason instanceof Error ? reason.message : "Unable to load payment settings.")
+            setSaveError(
+              reason instanceof Error
+                ? reason.message
+                : "Unable to load payment settings.",
+            )
           }
           return
         }
         try {
-          const cached = await readOfflineCollection<PaymentMethodsSnapshot>(businessId, cacheKey)
+          const cached = await readOfflineCollection<PaymentMethodsSnapshot>(
+            businessId,
+            cacheKey,
+          )
           if (active && thisRequestId === requestId && isNativeOfflineApp()) {
             setIsOffline(true)
           }
           if (!active || thisRequestId !== requestId) return
           if (!cached) {
-            throw new Error("Payment method settings are not available offline yet. Connect to the internet once to load them.")
+            throw new Error(
+              "Payment method settings are not available offline yet. Connect to the internet once to load them.",
+            )
           }
-          setMethods(current => current.map(method => ({
-            ...method,
-            enabled: cached.methods[method.id] ?? method.enabled,
-          })))
+          setMethods((current) =>
+            current.map((method) => ({
+              ...method,
+              enabled: cached.methods[method.id] ?? method.enabled,
+            })),
+          )
           hasPaymentMethodsSnapshot.current = true
           setShowMpesaConfig(false)
           setShowBankConfig(false)
           setShowCashConfig(false)
           setShowCreditConfig(false)
-          const updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
+          const updatedAt = await readOfflineCollectionUpdatedAt(
+            businessId,
+            cacheKey,
+          )
           if (!active || thisRequestId !== requestId) return
           setSnapshotUpdatedAt(updatedAt)
           setIsOfflineSnapshot(true)
           setSaveError("")
         } catch (cacheReason) {
           if (active && thisRequestId === requestId) {
-            setSaveError(cacheReason instanceof Error ? cacheReason.message : "Unable to load saved payment settings.")
+            setSaveError(
+              cacheReason instanceof Error
+                ? cacheReason.message
+                : "Unable to load saved payment settings.",
+            )
           }
         }
       }
@@ -314,6 +348,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
       environment: integration.environment ?? "sandbox",
       accountType: integration.accountType ?? "TILL",
       shortcode: integration.shortcode ?? "",
+      partyB: integration.partyB ?? integration.shortcode ?? "",
       accountReference: integration.accountReference ?? "",
     })
     setMpesaCredentialDrafts({
@@ -376,7 +411,12 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
 
   const validateMpesaForm = () => {
     if (!/^\d{5,8}$/.test(mpesaForm.shortcode.trim()))
-      return "Enter a valid 5 to 8 digit till or paybill number."
+      return "Enter a valid 5 to 8 digit business shortcode."
+    if (
+      mpesaForm.accountType === "TILL" &&
+      !/^\d{5,8}$/.test(mpesaForm.partyB.trim())
+    )
+      return "Enter a valid 5 to 8 digit Till number for Party B."
     if (
       !mpesaForm.accountReference.trim() ||
       mpesaForm.accountReference.trim().length > 12
@@ -554,8 +594,24 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
           </div>
         )}
         {isOfflineSnapshot && (
-          <div role="status" style={{ background: c.cardAlt, color: c.muted, borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 12, lineHeight: 1.5 }}>
-            Showing saved payment method status{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Payment settings and account details are not editable or stored in this offline view.
+          <div
+            role="status"
+            style={{
+              background: c.cardAlt,
+              color: c.muted,
+              borderRadius: 12,
+              padding: "12px 16px",
+              marginBottom: 16,
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            Showing saved payment method status
+            {snapshotUpdatedAt
+              ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}`
+              : ""}
+            . Payment settings and account details are not editable or stored in
+            this offline view.
           </div>
         )}
 
@@ -618,36 +674,39 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {!isOffline && (m.id === "mpesa" ||
-                    (m.enabled &&
-                      (m.id === "bank" ||
-                        m.id === "cash" ||
-                        m.id === "credit"))) && (
-                    <button
-                      className="btn"
-                      disabled={isOffline}
-                      onClick={() => {
-                        if (isOffline) return
-                        if (m.id === "mpesa") setShowMpesaConfig((v) => !v)
-                        if (m.id === "bank") setShowBankConfig((v) => !v)
-                        if (m.id === "cash") setShowCashConfig((v) => !v)
-                        if (m.id === "credit") setShowCreditConfig((v) => !v)
-                      }}
-                      style={{
-                        background: "none",
-                        border: `1px solid ${c.isDark ? "#1A3366" : "#E8ECF4"}`,
-                        borderRadius: 8,
-                        padding: "4px 10px",
-                        fontSize: 11,
-                        fontWeight: 600,
-                        color: c.muted,
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      Configure
-                    </button>
-                  )}
+                  {!isOffline &&
+                    (m.id === "mpesa" ||
+                      (m.enabled &&
+                        (m.id === "bank" ||
+                          m.id === "cash" ||
+                          m.id === "credit"))) && (
+                      <button
+                        className="btn"
+                        disabled={isOffline}
+                        onClick={() => {
+                          if (isOffline) return
+                          if (m.id === "mpesa") setShowMpesaConfig((v) => !v)
+                          if (m.id === "bank") setShowBankConfig((v) => !v)
+                          if (m.id === "cash") setShowCashConfig((v) => !v)
+                          if (m.id === "credit") setShowCreditConfig((v) => !v)
+                        }}
+                        style={{
+                          background: "none",
+                          border: `1px solid ${
+                            c.isDark ? "#1A3366" : "#E8ECF4"
+                          }`,
+                          borderRadius: 8,
+                          padding: "4px 10px",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: c.muted,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        Configure
+                      </button>
+                    )}
                   <button
                     className="btn"
                     disabled={isOffline}
@@ -846,7 +905,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                     <>
                       <div style={{ marginBottom: 12 }}>
                         <label
-                          htmlFor="mpesa-till-number"
+                          htmlFor="mpesa-business-shortcode"
                           style={{
                             fontSize: 12,
                             fontWeight: 600,
@@ -855,18 +914,45 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                             marginBottom: 6,
                           }}
                         >
-                          Till Number
+                          Business Short Code
                         </label>
                         <input
-                          id="mpesa-till-number"
+                          id="mpesa-business-shortcode"
                           className="input"
                           inputMode="numeric"
                           maxLength={8}
-                          placeholder="e.g. 123456"
+                          placeholder="Short Code approved for STK Push"
                           value={mpesaForm.shortcode}
                           onChange={(e) =>
                             updateMpesaForm({
                               shortcode: e.target.value.replace(/\D/g, ""),
+                            })
+                          }
+                        />
+                      </div>
+                      <div style={{ marginBottom: 12 }}>
+                        <label
+                          htmlFor="mpesa-till-party-b"
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: c.muted,
+                            display: "block",
+                            marginBottom: 6,
+                          }}
+                        >
+                          Till Number (Party B)
+                        </label>
+                        <input
+                          id="mpesa-till-party-b"
+                          className="input"
+                          inputMode="numeric"
+                          maxLength={8}
+                          placeholder="Till number"
+                          value={mpesaForm.partyB}
+                          onChange={(e) =>
+                            updateMpesaForm({
+                              partyB: e.target.value.replace(/\D/g, ""),
                             })
                           }
                         />
@@ -1014,9 +1100,9 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                         marginBottom: 14,
                       }}
                     >
-                      Use matching {mpesaForm.environment} credentials for this
-                      merchant&apos;s Till or Paybill. Credentials are encrypted
-                      by the backend before storage.
+                      Use {mpesaForm.environment} credentials approved for this
+                      business shortcode. Credentials are encrypted by the
+                      backend before storage.
                     </div>
                     {hasStoredCredentialsForSelectedEnvironment && (
                       <div
@@ -1215,94 +1301,101 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                 </div>
               )}
 
-              {!isOffline && m.id === "credit" && m.enabled && showCreditConfig && (
-                <div
-                  style={{
-                    background: c.cardAlt,
-                    padding: "16px",
-                    borderBottom: i < arr.length - 1 ? c.divider : "none",
-                  }}
-                >
+              {!isOffline &&
+                m.id === "credit" &&
+                m.enabled &&
+                showCreditConfig && (
                   <div
                     style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      color: c.muted,
-                      marginBottom: 12,
+                      background: c.cardAlt,
+                      padding: "16px",
+                      borderBottom: i < arr.length - 1 ? c.divider : "none",
                     }}
                   >
-                    CREDIT / TAB SETTINGS
-                  </div>
-                  <div style={{ marginBottom: 14 }}>
-                    <label
+                    <div
                       style={{
                         fontSize: 12,
-                        fontWeight: 600,
+                        fontWeight: 700,
                         color: c.muted,
-                        display: "block",
-                        marginBottom: 6,
+                        marginBottom: 12,
                       }}
                     >
-                      Default Credit Limit (KSh)
-                    </label>
-                    <input
-                      className="input"
-                      type="number"
-                      placeholder="5000"
-                      value={creditLimit}
-                      onChange={(e) => setCreditLimit(e.target.value)}
-                    />
-                  </div>
-                  <div
-                    style={{ display: "flex", alignItems: "center", gap: 12 }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <div
-                        style={{ fontSize: 13, fontWeight: 600, color: c.text }}
-                      >
-                        Require manager approval
-                      </div>
-                      <div
-                        style={{ fontSize: 11, color: c.muted, marginTop: 2 }}
-                      >
-                        For credit sales above the limit
-                      </div>
+                      CREDIT / TAB SETTINGS
                     </div>
-                    <button
-                      className="btn"
-                      onClick={() => setRequireApproval((v) => !v)}
-                      style={{
-                        width: 48,
-                        height: 27,
-                        borderRadius: 14,
-                        background: requireApproval
-                          ? "#D32F2F"
-                          : c.isDark
-                            ? "#1A3366"
-                            : "#D0D7E8",
-                        border: "none",
-                        cursor: "pointer",
-                        position: "relative",
-                        transition: "background 0.2s",
-                      }}
-                    >
-                      <div
+                    <div style={{ marginBottom: 14 }}>
+                      <label
                         style={{
-                          position: "absolute",
-                          top: 3,
-                          left: requireApproval ? 24 : 3,
-                          width: 21,
-                          height: 21,
-                          borderRadius: "50%",
-                          background: "white",
-                          transition: "left 0.2s",
-                          boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: c.muted,
+                          display: "block",
+                          marginBottom: 6,
                         }}
+                      >
+                        Default Credit Limit (KSh)
+                      </label>
+                      <input
+                        className="input"
+                        type="number"
+                        placeholder="5000"
+                        value={creditLimit}
+                        onChange={(e) => setCreditLimit(e.target.value)}
                       />
-                    </button>
+                    </div>
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 12 }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: c.text,
+                          }}
+                        >
+                          Require manager approval
+                        </div>
+                        <div
+                          style={{ fontSize: 11, color: c.muted, marginTop: 2 }}
+                        >
+                          For credit sales above the limit
+                        </div>
+                      </div>
+                      <button
+                        className="btn"
+                        onClick={() => setRequireApproval((v) => !v)}
+                        style={{
+                          width: 48,
+                          height: 27,
+                          borderRadius: 14,
+                          background: requireApproval
+                            ? "#D32F2F"
+                            : c.isDark
+                              ? "#1A3366"
+                              : "#D0D7E8",
+                          border: "none",
+                          cursor: "pointer",
+                          position: "relative",
+                          transition: "background 0.2s",
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 3,
+                            left: requireApproval ? 24 : 3,
+                            width: 21,
+                            height: 21,
+                            borderRadius: "50%",
+                            background: "white",
+                            transition: "left 0.2s",
+                            boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+                          }}
+                        />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
             </div>
           ))}
         </div>

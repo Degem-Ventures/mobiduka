@@ -20,6 +20,7 @@ type PublicMpesaIntegration = {
   environment?: "sandbox" | "production"
   accountType?: "TILL" | "PAYBILL"
   shortcode?: string
+  partyB?: string | null
   accountReference?: string | null
   updatedAt?: string
 }
@@ -29,6 +30,7 @@ type IntegrationRequest = {
   environment?: unknown
   accountType?: unknown
   shortcode?: unknown
+  partyB?: unknown
   accountReference?: unknown
   consumerKey?: unknown
   consumerSecret?: unknown
@@ -42,6 +44,7 @@ function publicIntegration(
     environment: string
     accountType: string
     shortcode: string
+    partyB: string | null
     accountReference: string | null
     updatedAt: Date
   } | null,
@@ -53,6 +56,7 @@ function publicIntegration(
     environment: value.environment === "production" ? "production" : "sandbox",
     accountType: value.accountType === "TILL" ? "TILL" : "PAYBILL",
     shortcode: value.shortcode,
+    partyB: value.partyB,
     accountReference: value.accountReference,
     updatedAt: value.updatedAt.toISOString(),
   }
@@ -95,10 +99,19 @@ function validatePublicFields(body: IntegrationRequest) {
       "Account type must be Till or Paybill.",
     )
   }
-  const shortcode = requiredText(body.shortcode, "Till or paybill number", 8)
+  const shortcode = requiredText(body.shortcode, "Business shortcode", 8)
   if (!/^\d{5,8}$/.test(shortcode)) {
     throw new MpesaIntegrationInputError(
-      "Till or paybill number must contain 5 to 8 digits.",
+      "Business shortcode must contain 5 to 8 digits.",
+    )
+  }
+  const partyB =
+    body.partyB === undefined || body.partyB === null || body.partyB === ""
+      ? shortcode
+      : requiredText(body.partyB, "Till number (Party B)", 8)
+  if (!/^\d{5,8}$/.test(partyB)) {
+    throw new MpesaIntegrationInputError(
+      "Till number (Party B) must contain 5 to 8 digits.",
     )
   }
   const accountReference = requiredText(
@@ -115,6 +128,7 @@ function validatePublicFields(body: IntegrationRequest) {
     environment: environment as "sandbox" | "production",
     accountType: accountType as "TILL" | "PAYBILL",
     shortcode,
+    partyB,
     accountReference,
   }
 }
@@ -198,12 +212,13 @@ export async function PUT(request: Request) {
       body.consumerSecret,
       body.passkey,
     ].every((value) => typeof value === "string" && value.trim().length > 0)
-    const existingCredentials = existing && !hasCompleteCredentialBundle
-      ? decryptMpesaCredentials(
-          access.businessId,
-          existing.credentialCiphertext,
-        )
-      : null
+    const existingCredentials =
+      existing && !hasCompleteCredentialBundle
+        ? decryptMpesaCredentials(
+            access.businessId,
+            existing.credentialCiphertext,
+          )
+        : null
     const credentials = mergedCredentials(body, existingCredentials)
     const credentialCiphertext = encryptMpesaCredentials(
       access.businessId,
@@ -253,10 +268,7 @@ export async function PUT(request: Request) {
               "MPESA_CREDENTIALS_ENCRYPTION_KEY must be a base64-encoded 32-byte key."
             ? "MPESA_CREDENTIALS_ENCRYPTION_KEY must be a valid base64-encoded 32-byte key."
             : "Existing M-Pesa credentials could not be decrypted. Restore the original server encryption key or enter all three credentials to replace them."
-      return NextResponse.json(
-        { error: message },
-        { status: 500 },
-      )
+      return NextResponse.json({ error: message }, { status: 500 })
     }
     if (error instanceof MpesaIntegrationInputError) {
       return NextResponse.json({ error: error.message }, { status: 400 })
