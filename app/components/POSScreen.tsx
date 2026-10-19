@@ -88,8 +88,31 @@ type MpesaQrDetails = {
   accountType: "TILL" | "PAYBILL"
   environment: "sandbox" | "production"
   shortcode: string
-  accountReference: string | null
+  partyB: string
+  accountNumber: string | null
 }
+
+function formatShiftStart(openedAt: string) {
+  const start = new Date(openedAt)
+  const today = new Date()
+  const sameDay =
+    start.getFullYear() === today.getFullYear() &&
+    start.getMonth() === today.getMonth() &&
+    start.getDate() === today.getDate()
+  const time = start.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  })
+
+  if (sameDay) return time
+  const date = start.toLocaleDateString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "numeric",
+  })
+  return `${date} · ${time}`
+}
+
 type PosDraft = {
   cart: CartItem[]
   view: "pos" | "cart" | "payment"
@@ -996,13 +1019,14 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
             environment?: "sandbox" | "production"
             accountType?: "TILL" | "PAYBILL"
             shortcode?: string
+            partyB?: string | null
             accountReference?: string | null
           }
         }>(
           `/api/payments/mpesa-integration?businessId=${encodeURIComponent(currentBusinessId)}`,
           { signal: controller.signal, cache: "no-store" },
         ),
-        apiFetch<{ business: { name: string } }>(
+        apiFetch<{ business: { name: string; currency?: string | null } }>(
           `/api/business?businessId=${encodeURIComponent(currentBusinessId)}`,
           { signal: controller.signal, cache: "no-store" },
         ),
@@ -1010,13 +1034,15 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       const integration = configuration.integration
       if (!integration.configured || !integration.accountType || !integration.shortcode)
         throw new Error("Configure an M-PESA Till or Paybill in Settings first.")
+      const accountNumber = integration.accountReference?.trim() ?? ""
       if (
         integration.accountType === "PAYBILL" &&
-        !integration.accountReference?.trim()
+        !accountNumber
       )
-        throw new Error("Add an account reference to the Paybill configuration first.")
+        throw new Error("Add an account number to the Paybill configuration first.")
 
-      const accountReference = integration.accountReference?.trim() ?? ""
+      const tillNumber = integration.partyB?.trim() || integration.shortcode
+      const currency = businessResponse.business.currency || "KES"
       const businessName = businessResponse.business.name
         .replace(/[\s|]/g, "")
         .slice(0, 20)
@@ -1025,12 +1051,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       const amount = String(total)
       const payload =
         integration.accountType === "TILL"
-          ? ["BG", integration.shortcode, amount, businessName].join("|")
+          ? ["BG", tillNumber, amount, businessName].join("|")
           : [
               "PB",
               integration.shortcode,
-              accountReference.replace(/\s+/g, ""),
+              accountNumber,
               amount,
+              currency,
               businessName,
             ].join("|")
       setMpesaQrDetails({
@@ -1038,7 +1065,9 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         accountType: integration.accountType,
         environment: integration.environment ?? "sandbox",
         shortcode: integration.shortcode,
-        accountReference: integration.accountReference ?? null,
+        partyB: tillNumber,
+        accountNumber:
+          integration.accountType === "PAYBILL" ? accountNumber : null,
       })
     } catch (reason) {
       setMpesaQrError(
@@ -2954,11 +2983,13 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                               : "Paybill Number"}
                           </span>
                           <strong style={{ color: c.text }}>
-                            {mpesaQrDetails.shortcode}
+                            {mpesaQrDetails.accountType === "TILL"
+                              ? mpesaQrDetails.partyB
+                              : mpesaQrDetails.shortcode}
                           </strong>
                         </div>
                         {mpesaQrDetails.accountType === "PAYBILL" &&
-                          mpesaQrDetails.accountReference && (
+                          mpesaQrDetails.accountNumber && (
                             <div
                               style={{
                                 display: "flex",
@@ -2969,9 +3000,9 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                                 color: c.muted,
                               }}
                             >
-                              <span>Reference</span>
+                              <span>Account Number</span>
                               <strong style={{ color: c.text }}>
-                                {mpesaQrDetails.accountReference}
+                                {mpesaQrDetails.accountNumber}
                               </strong>
                             </div>
                           )}
@@ -3200,11 +3231,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                       {operator.name}
                     </div>
                     <div style={{ fontSize: 11, color: c.muted }}>
-                      {operator.shift} · Started{" "}
-                      {new Date(operator.openedAt).toLocaleTimeString(
-                        "en-GB",
-                        { hour: "2-digit", minute: "2-digit" },
-                      )}
+                      {operator.shift} · Started {formatShiftStart(operator.openedAt)}
                     </div>
                   </div>
                   {currentDeviceShiftId === operator.sessionId && (

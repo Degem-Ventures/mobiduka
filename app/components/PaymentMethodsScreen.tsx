@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useColors } from "../utils/theme"
-import {
-  ApiResponseError,
-  apiFetch,
-  getClientSession,
-} from "../../lib/client-api"
+import { ApiResponseError, apiFetch, getClientSession } from "../../lib/client-api"
 import {
   isNativeOfflineApp,
   readOfflineCollection,
@@ -12,6 +8,7 @@ import {
   writeOfflineCollection,
 } from "../../lib/offline-store"
 import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
+
 
 interface Method {
   id: string
@@ -28,6 +25,7 @@ interface Props {
 
 type PaymentConfig = {
   methods: Record<string, boolean>
+  mpesaEnvironment?: "sandbox" | "production"
   mpesaConfig: {
     type: string
     till: string
@@ -62,7 +60,11 @@ type MpesaIntegration = {
   updatedAt?: string
 }
 
-type MpesaIntegrationResponse = { integration: MpesaIntegration }
+type MpesaIntegrationResponse = {
+  environment?: "sandbox" | "production"
+  integration: MpesaIntegration
+  integrations?: Partial<Record<"sandbox" | "production", MpesaIntegration>>
+}
 
 type MpesaForm = {
   environment: "sandbox" | "production"
@@ -136,11 +138,19 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
       production: { consumerKey: "", consumerSecret: "", passkey: "" },
     })
   const [showMpesaCredentials, setShowMpesaCredentials] = useState(false)
-  const [mpesaIntegration, setMpesaIntegration] = useState<MpesaIntegration>({
-    configured: false,
+  const [mpesaProfiles, setMpesaProfiles] = useState<
+    Record<MpesaForm["environment"], MpesaIntegration>
+  >({
+    sandbox: { configured: false, environment: "sandbox" },
+    production: { configured: false, environment: "production" },
   })
+  const mpesaIntegration = mpesaProfiles[mpesaForm.environment]
   const [mpesaFormDirty, setMpesaFormDirty] = useState(false)
   const [mpesaLoading, setMpesaLoading] = useState(false)
+  const [mpesaProfileMessage, setMpesaProfileMessage] = useState("")
+  const [pendingMpesaEnvironment, setPendingMpesaEnvironment] = useState<
+    MpesaForm["environment"] | null
+  >(null)
   const [showMpesaConfig, setShowMpesaConfig] = useState(false)
 
   // Bank config
@@ -165,22 +175,20 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
   const [saving, setSaving] = useState(false)
   const [isOffline, setIsOffline] = useState(false)
   const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
-  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(
-    null,
-  )
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const hasPaymentMethodsSnapshot = useRef(false)
+  const mpesaProfileRequestId = useRef(0)
   const activeMpesaCredentials = mpesaCredentialDrafts[mpesaForm.environment]
-  const hasStoredCredentialsForSelectedEnvironment =
-    mpesaIntegration.configured &&
-    (mpesaIntegration.environment ?? "sandbox") === mpesaForm.environment
+  const hasStoredCredentialsForSelectedEnvironment = mpesaIntegration.configured
 
   const paymentConfig = (): PaymentConfig => ({
     methods: Object.fromEntries(
       methods.map((method) => [method.id, method.enabled]),
     ),
+    mpesaEnvironment: mpesaForm.environment,
     mpesaConfig: {
       type: mpesaForm.accountType === "TILL" ? "till" : "paybill",
-      till: mpesaForm.accountType === "TILL" ? mpesaForm.partyB : "",
+      till: mpesaForm.accountType === "TILL" ? mpesaForm.shortcode : "",
       paybill: mpesaForm.accountType === "PAYBILL" ? mpesaForm.shortcode : "",
       account: mpesaForm.accountReference,
     },
@@ -232,29 +240,21 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
           const snapshot: PaymentMethodsSnapshot = {
             methods: {
               ...config.methods,
-              mpesa: Boolean(
-                config.methods.mpesa && response.preferences.mpesaEnabled,
-              ),
+              mpesa: Boolean(config.methods.mpesa && response.preferences.mpesaEnabled),
             },
           }
           try {
             await writeOfflineCollection(businessId, cacheKey, snapshot)
             hasPaymentMethodsSnapshot.current = true
           } catch (reason) {
-            console.error(
-              "Unable to cache payment method summaries for offline use.",
-              reason,
-            )
+            console.error("Unable to cache payment method summaries for offline use.", reason)
           }
         }
         let updatedAt: string | null = null
         try {
           updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
         } catch (reason) {
-          console.error(
-            "Unable to read the payment methods snapshot timestamp.",
-            reason,
-          )
+          console.error("Unable to read the payment methods snapshot timestamp.", reason)
         }
         if (!active || thisRequestId !== requestId) return
         setSnapshotUpdatedAt(updatedAt)
@@ -268,54 +268,36 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
         if (!canUseCache || !isNativeOfflineApp()) {
           if (active && thisRequestId === requestId) {
             setIsOffline(isNativeOfflineApp() && !navigator.onLine)
-            setSaveError(
-              reason instanceof Error
-                ? reason.message
-                : "Unable to load payment settings.",
-            )
+            setSaveError(reason instanceof Error ? reason.message : "Unable to load payment settings.")
           }
           return
         }
         try {
-          const cached = await readOfflineCollection<PaymentMethodsSnapshot>(
-            businessId,
-            cacheKey,
-          )
+          const cached = await readOfflineCollection<PaymentMethodsSnapshot>(businessId, cacheKey)
           if (active && thisRequestId === requestId && isNativeOfflineApp()) {
             setIsOffline(true)
           }
           if (!active || thisRequestId !== requestId) return
           if (!cached) {
-            throw new Error(
-              "Payment method settings are not available offline yet. Connect to the internet once to load them.",
-            )
+            throw new Error("Payment method settings are not available offline yet. Connect to the internet once to load them.")
           }
-          setMethods((current) =>
-            current.map((method) => ({
-              ...method,
-              enabled: cached.methods[method.id] ?? method.enabled,
-            })),
-          )
+          setMethods(current => current.map(method => ({
+            ...method,
+            enabled: cached.methods[method.id] ?? method.enabled,
+          })))
           hasPaymentMethodsSnapshot.current = true
           setShowMpesaConfig(false)
           setShowBankConfig(false)
           setShowCashConfig(false)
           setShowCreditConfig(false)
-          const updatedAt = await readOfflineCollectionUpdatedAt(
-            businessId,
-            cacheKey,
-          )
+          const updatedAt = await readOfflineCollectionUpdatedAt(businessId, cacheKey)
           if (!active || thisRequestId !== requestId) return
           setSnapshotUpdatedAt(updatedAt)
           setIsOfflineSnapshot(true)
           setSaveError("")
         } catch (cacheReason) {
           if (active && thisRequestId === requestId) {
-            setSaveError(
-              cacheReason instanceof Error
-                ? cacheReason.message
-                : "Unable to load saved payment settings.",
-            )
+            setSaveError(cacheReason instanceof Error ? cacheReason.message : "Unable to load saved payment settings.")
           }
         }
       }
@@ -341,16 +323,39 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
     }
   }, [])
 
-  const applyMpesaIntegration = (integration: MpesaIntegration) => {
-    setMpesaIntegration(integration)
-    if (!integration.configured) return
-    setMpesaForm({
-      environment: integration.environment ?? "sandbox",
-      accountType: integration.accountType ?? "TILL",
-      shortcode: integration.shortcode ?? "",
-      partyB: integration.partyB ?? integration.shortcode ?? "",
-      accountReference: integration.accountReference ?? "",
-    })
+  const applyMpesaIntegration = (response: MpesaIntegrationResponse) => {
+    const sandbox =
+      response.integrations?.sandbox ??
+      (response.integration.environment === "sandbox"
+        ? response.integration
+        : { configured: false, environment: "sandbox" as const })
+    const production =
+      response.integrations?.production ??
+      (response.integration.environment === "production"
+        ? response.integration
+        : { configured: false, environment: "production" as const })
+    const profiles = { sandbox, production }
+    const environment =
+      response.environment ?? response.integration.environment ?? "sandbox"
+    const integration = profiles[environment]
+    setMpesaProfiles(profiles)
+    if (integration.configured) {
+      setMpesaForm({
+        environment,
+        accountType: integration.accountType ?? "TILL",
+        shortcode: integration.shortcode ?? "",
+        partyB: integration.partyB ?? integration.shortcode ?? "",
+        accountReference: integration.accountReference ?? "",
+      })
+    } else {
+      setMpesaForm((current) => ({
+        environment,
+        accountType: current.accountType,
+        shortcode: "",
+        partyB: "",
+        accountReference: "",
+      }))
+    }
     setMpesaCredentialDrafts({
       sandbox: { consumerKey: "", consumerSecret: "", passkey: "" },
       production: { consumerKey: "", consumerSecret: "", passkey: "" },
@@ -359,16 +364,90 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
     setMpesaFormDirty(false)
   }
 
+  const applySavedMpesaIntegration = (integration: MpesaIntegration) => {
+    const environment = integration.environment ?? mpesaForm.environment
+    setMpesaProfiles((current) => ({ ...current, [environment]: integration }))
+    setMpesaCredentialDrafts((current) => ({
+      ...current,
+      [environment]: { consumerKey: "", consumerSecret: "", passkey: "" },
+    }))
+    setShowMpesaCredentials(false)
+  }
+
+  const selectMpesaEnvironment = async (
+    environment: MpesaForm["environment"],
+  ) => {
+    setMpesaForm((current) => ({
+      ...current,
+      environment,
+      shortcode: "",
+      partyB: "",
+      accountReference: "",
+    }))
+    setShowMpesaCredentials(false)
+    const session = getClientSession()
+    if (!session) {
+      setSaveError("Sign in again to load M-Pesa configuration.")
+      return
+    }
+    setMpesaLoading(true)
+    setMpesaProfileMessage(`Fetching the saved ${environment} profile…`)
+    setPendingMpesaEnvironment(environment)
+    const requestId = ++mpesaProfileRequestId.current
+    try {
+      const response = await apiFetch<MpesaIntegrationResponse>(
+        `/api/payments/mpesa-integration?businessId=${encodeURIComponent(session.user.businessId)}&environment=${environment}`,
+        { cache: "no-store" },
+      )
+      if (requestId !== mpesaProfileRequestId.current) return
+      const integration = response.integration
+      setMpesaProfiles((current) => ({ ...current, [environment]: integration }))
+      setMpesaForm({
+        environment,
+        accountType: integration.accountType ?? "TILL",
+        shortcode: integration.shortcode ?? "",
+        partyB: integration.partyB ?? integration.shortcode ?? "",
+        accountReference: integration.accountReference ?? "",
+      })
+      setMpesaFormDirty(true)
+      setShowMpesaCredentials(false)
+      setMpesaProfileMessage(
+        integration.configured
+          ? `Loaded ${environment}: ${integration.accountType ?? "TILL"} ${integration.shortcode ?? ""}`
+          : `No saved ${environment} profile was returned by the backend.`,
+      )
+    } catch (reason) {
+      if (requestId !== mpesaProfileRequestId.current) return
+      setMpesaProfileMessage(`Could not fetch the ${environment} profile.`)
+      setSaveError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to load the selected M-Pesa environment.",
+      )
+    } finally {
+      if (requestId === mpesaProfileRequestId.current) {
+        setMpesaLoading(false)
+        setPendingMpesaEnvironment(null)
+      }
+    }
+  }
+
   useEffect(() => {
     const session = getClientSession()
     if (!session) return
     const loadMpesaIntegration = () => {
+      const currentRequestId = ++mpesaProfileRequestId.current
       setMpesaLoading(true)
       apiFetch<MpesaIntegrationResponse>(
         `/api/payments/mpesa-integration?businessId=${encodeURIComponent(session.user.businessId)}`,
+        { cache: "no-store" },
       )
-        .then((response) => applyMpesaIntegration(response.integration))
+        .then((response) => {
+          if (currentRequestId === mpesaProfileRequestId.current)
+            applyMpesaIntegration(response)
+        })
         .catch((reason) => {
+          if (currentRequestId !== mpesaProfileRequestId.current) return
           if (isNativeOfflineApp() && !navigator.onLine) return
           setSaveError(
             reason instanceof Error
@@ -376,7 +455,12 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
               : "Unable to load M-Pesa configuration.",
           )
         })
-        .finally(() => setMpesaLoading(false))
+        .finally(() => {
+          if (currentRequestId === mpesaProfileRequestId.current) {
+            setMpesaLoading(false)
+            setPendingMpesaEnvironment(null)
+          }
+        })
     }
     if (!isNativeOfflineApp() || navigator.onLine) loadMpesaIntegration()
     window.addEventListener("online", loadMpesaIntegration)
@@ -411,20 +495,15 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
 
   const validateMpesaForm = () => {
     if (!/^\d{5,8}$/.test(mpesaForm.shortcode.trim()))
-      return "Enter a valid 5 to 8 digit business shortcode."
-    if (
-      mpesaForm.accountType === "TILL" &&
-      !/^\d{5,8}$/.test(mpesaForm.partyB.trim())
-    )
-      return "Enter a valid 5 to 8 digit Till number for Party B."
+      return "Enter a valid 5 to 8 digit business short code."
+    if (!/^\d{5,8}$/.test(mpesaForm.partyB.trim()))
+      return "Enter a valid 5 to 8 digit receiver number for Party B."
     if (
       !mpesaForm.accountReference.trim() ||
       mpesaForm.accountReference.trim().length > 12
     )
       return "Enter an account reference of up to 12 characters."
-    const credentialsRequired =
-      !mpesaIntegration.configured ||
-      (mpesaIntegration.environment ?? "sandbox") !== mpesaForm.environment
+    const credentialsRequired = !mpesaIntegration.configured
     if (
       credentialsRequired &&
       (!activeMpesaCredentials.consumerKey.trim() ||
@@ -468,7 +547,7 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
             }),
           },
         )
-        applyMpesaIntegration(response.integration)
+        applySavedMpesaIntegration(response.integration)
         setMpesaFormDirty(false)
       }
       const response = await apiFetch<SettingsResponse>("/api/settings", {
@@ -594,24 +673,8 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
           </div>
         )}
         {isOfflineSnapshot && (
-          <div
-            role="status"
-            style={{
-              background: c.cardAlt,
-              color: c.muted,
-              borderRadius: 12,
-              padding: "12px 16px",
-              marginBottom: 16,
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            Showing saved payment method status
-            {snapshotUpdatedAt
-              ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}`
-              : ""}
-            . Payment settings and account details are not editable or stored in
-            this offline view.
+          <div role="status" style={{ background: c.cardAlt, color: c.muted, borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 12, lineHeight: 1.5 }}>
+            Showing saved payment method status{snapshotUpdatedAt ? ` from ${new Date(snapshotUpdatedAt).toLocaleString()}` : ''}. Payment settings and account details are not editable or stored in this offline view.
           </div>
         )}
 
@@ -674,39 +737,36 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {!isOffline &&
-                    (m.id === "mpesa" ||
-                      (m.enabled &&
-                        (m.id === "bank" ||
-                          m.id === "cash" ||
-                          m.id === "credit"))) && (
-                      <button
-                        className="btn"
-                        disabled={isOffline}
-                        onClick={() => {
-                          if (isOffline) return
-                          if (m.id === "mpesa") setShowMpesaConfig((v) => !v)
-                          if (m.id === "bank") setShowBankConfig((v) => !v)
-                          if (m.id === "cash") setShowCashConfig((v) => !v)
-                          if (m.id === "credit") setShowCreditConfig((v) => !v)
-                        }}
-                        style={{
-                          background: "none",
-                          border: `1px solid ${
-                            c.isDark ? "#1A3366" : "#E8ECF4"
-                          }`,
-                          borderRadius: 8,
-                          padding: "4px 10px",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: c.muted,
-                          cursor: "pointer",
-                          fontFamily: "inherit",
-                        }}
-                      >
-                        Configure
-                      </button>
-                    )}
+                  {!isOffline && (m.id === "mpesa" ||
+                    (m.enabled &&
+                      (m.id === "bank" ||
+                        m.id === "cash" ||
+                        m.id === "credit"))) && (
+                    <button
+                      className="btn"
+                      disabled={isOffline}
+                      onClick={() => {
+                        if (isOffline) return
+                        if (m.id === "mpesa") setShowMpesaConfig((v) => !v)
+                        if (m.id === "bank") setShowBankConfig((v) => !v)
+                        if (m.id === "cash") setShowCashConfig((v) => !v)
+                        if (m.id === "credit") setShowCreditConfig((v) => !v)
+                      }}
+                      style={{
+                        background: "none",
+                        border: `1px solid ${c.isDark ? "#1A3366" : "#E8ECF4"}`,
+                        borderRadius: 8,
+                        padding: "4px 10px",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: c.muted,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      Configure
+                    </button>
+                  )}
                   <button
                     className="btn"
                     disabled={isOffline}
@@ -783,8 +843,9 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                             key={environment}
                             type="button"
                             className="btn"
+                            disabled={mpesaLoading}
                             aria-pressed={mpesaForm.environment === environment}
-                            onClick={() => updateMpesaForm({ environment })}
+                            onClick={() => selectMpesaEnvironment(environment)}
                             style={{
                               flex: 1,
                               padding: "9px",
@@ -817,6 +878,21 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                         ),
                       )}
                     </div>
+                    {mpesaProfileMessage && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        style={{
+                          color: c.muted,
+                          fontSize: 11,
+                          marginTop: 8,
+                        }}
+                      >
+                        {mpesaLoading
+                          ? `Fetching the saved ${pendingMpesaEnvironment ?? mpesaForm.environment} profile…`
+                          : mpesaProfileMessage}
+                      </div>
+                    )}
                   </div>
                   <div
                     role="status"
@@ -901,146 +977,100 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                       </button>
                     ))}
                   </div>
-                  {mpesaForm.accountType === "TILL" ? (
-                    <>
-                      <div style={{ marginBottom: 12 }}>
-                        <label
-                          htmlFor="mpesa-business-shortcode"
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: c.muted,
-                            display: "block",
-                            marginBottom: 6,
-                          }}
-                        >
-                          Business Short Code
-                        </label>
-                        <input
-                          id="mpesa-business-shortcode"
-                          className="input"
-                          inputMode="numeric"
-                          maxLength={8}
-                          placeholder="Short Code approved for STK Push"
-                          value={mpesaForm.shortcode}
-                          onChange={(e) =>
-                            updateMpesaForm({
-                              shortcode: e.target.value.replace(/\D/g, ""),
-                            })
-                          }
-                        />
-                      </div>
-                      <div style={{ marginBottom: 12 }}>
-                        <label
-                          htmlFor="mpesa-till-party-b"
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: c.muted,
-                            display: "block",
-                            marginBottom: 6,
-                          }}
-                        >
-                          Till Number (Party B)
-                        </label>
-                        <input
-                          id="mpesa-till-party-b"
-                          className="input"
-                          inputMode="numeric"
-                          maxLength={8}
-                          placeholder="Till number"
-                          value={mpesaForm.partyB}
-                          onChange={(e) =>
-                            updateMpesaForm({
-                              partyB: e.target.value.replace(/\D/g, ""),
-                            })
-                          }
-                        />
-                      </div>
-                      <div style={{ marginBottom: 12 }}>
-                        <label
-                          htmlFor="mpesa-account-reference"
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: c.muted,
-                            display: "block",
-                            marginBottom: 6,
-                          }}
-                        >
-                          Account Reference
-                        </label>
-                        <input
-                          id="mpesa-account-reference"
-                          className="input"
-                          maxLength={12}
-                          placeholder="e.g. MobiDuka"
-                          value={mpesaForm.accountReference}
-                          onChange={(e) =>
-                            updateMpesaForm({
-                              accountReference: e.target.value,
-                            })
-                          }
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <div style={{ flex: 1 }}>
-                        <label
-                          htmlFor="mpesa-paybill-number"
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: c.muted,
-                            display: "block",
-                            marginBottom: 6,
-                          }}
-                        >
-                          Paybill No.
-                        </label>
-                        <input
-                          id="mpesa-paybill-number"
-                          className="input"
-                          inputMode="numeric"
-                          maxLength={8}
-                          placeholder="e.g. 400200"
-                          value={mpesaForm.shortcode}
-                          onChange={(e) =>
-                            updateMpesaForm({
-                              shortcode: e.target.value.replace(/\D/g, ""),
-                            })
-                          }
-                        />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label
-                          htmlFor="mpesa-paybill-account"
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: c.muted,
-                            display: "block",
-                            marginBottom: 6,
-                          }}
-                        >
-                          Account No.
-                        </label>
-                        <input
-                          id="mpesa-paybill-account"
-                          className="input"
-                          maxLength={12}
-                          placeholder="Account"
-                          value={mpesaForm.accountReference}
-                          onChange={(e) =>
-                            updateMpesaForm({
-                              accountReference: e.target.value,
-                            })
-                          }
-                        />
-                      </div>
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div>
+                      <label
+                        htmlFor="mpesa-business-shortcode"
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: c.muted,
+                          display: "block",
+                          marginBottom: 6,
+                        }}
+                      >
+                        Business Short Code
+                      </label>
+                      <input
+                        id="mpesa-business-shortcode"
+                        className="input"
+                        inputMode="numeric"
+                        maxLength={8}
+                        placeholder="e.g. 1316920"
+                        value={mpesaForm.shortcode}
+                        onChange={(e) =>
+                          updateMpesaForm({
+                            shortcode: e.target.value.replace(/\D/g, ""),
+                          })
+                        }
+                      />
                     </div>
-                  )}
+                    <div>
+                      <label
+                        htmlFor="mpesa-party-b"
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: c.muted,
+                          display: "block",
+                          marginBottom: 6,
+                        }}
+                      >
+                        {mpesaForm.accountType === "TILL"
+                          ? "Till Number (Party B)"
+                          : "Party B / Receiver Number"}
+                      </label>
+                      <input
+                        id="mpesa-party-b"
+                        className="input"
+                        inputMode="numeric"
+                        maxLength={8}
+                        placeholder={
+                          mpesaForm.accountType === "TILL"
+                            ? "e.g. 1787049"
+                            : "e.g. 400200"
+                        }
+                        value={mpesaForm.partyB}
+                        onChange={(e) =>
+                          updateMpesaForm({
+                            partyB: e.target.value.replace(/\D/g, ""),
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 12, marginBottom: 12 }}>
+                    <label
+                      htmlFor="mpesa-account-reference"
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: c.muted,
+                        display: "block",
+                        marginBottom: 6,
+                      }}
+                    >
+                      {mpesaForm.accountType === "TILL"
+                        ? "Account Reference"
+                        : "Account No."}
+                    </label>
+                    <input
+                      id="mpesa-account-reference"
+                      className="input"
+                      maxLength={12}
+                      placeholder={
+                        mpesaForm.accountType === "TILL"
+                          ? "e.g. MobiDuka"
+                            : "e.g. MobiDuka"
+                      }
+                      value={mpesaForm.accountReference}
+                      onChange={(e) =>
+                        updateMpesaForm({
+                          accountReference: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
                   <div
                     style={{
                       borderTop: c.divider,
@@ -1072,8 +1102,8 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                         className="btn"
                         aria-label={
                           showMpesaCredentials
-                            ? "Hide M-Pesa credential values"
-                            : "Show M-Pesa credential values"
+                            ? "Hide entered M-Pesa credential values"
+                            : "Show entered M-Pesa credential values"
                         }
                         onClick={() =>
                           setShowMpesaCredentials((visible) => !visible)
@@ -1089,7 +1119,9 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                           cursor: "pointer",
                         }}
                       >
-                        {showMpesaCredentials ? "Hide values" : "Show values"}
+                        {showMpesaCredentials
+                          ? "Hide entered values"
+                          : "Show entered values"}
                       </button>
                     </div>
                     <div
@@ -1100,9 +1132,9 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                         marginBottom: 14,
                       }}
                     >
-                      Use {mpesaForm.environment} credentials approved for this
-                      business shortcode. Credentials are encrypted by the
-                      backend before storage.
+                      Use matching {mpesaForm.environment} credentials for this
+                      merchant&apos;s Till or Paybill. Credentials are encrypted
+                      by the backend before storage.
                     </div>
                     {hasStoredCredentialsForSelectedEnvironment && (
                       <div
@@ -1113,9 +1145,25 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                           marginBottom: 14,
                         }}
                       >
-                        If the server encryption key changed, restore its
-                        original value or enter all three credentials here to
+                        Credentials are saved for this {mpesaForm.environment}
+                        profile. Leave these fields blank to keep using them;
+                        saved values are not sent back to or displayed in the
+                        browser. If the server encryption key changed, restore
+                        its original value or enter all three credentials to
                         replace them.
+                      </div>
+                    )}
+                    {!hasStoredCredentialsForSelectedEnvironment && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: c.muted,
+                          lineHeight: 1.5,
+                          marginBottom: 14,
+                        }}
+                      >
+                        No credentials are saved for this environment. Enter
+                        all three to configure it.
                       </div>
                     )}
                     {[
@@ -1301,101 +1349,94 @@ export default function PaymentMethodsScreen({ onNavigate }: Props) {
                 </div>
               )}
 
-              {!isOffline &&
-                m.id === "credit" &&
-                m.enabled &&
-                showCreditConfig && (
+              {!isOffline && m.id === "credit" && m.enabled && showCreditConfig && (
+                <div
+                  style={{
+                    background: c.cardAlt,
+                    padding: "16px",
+                    borderBottom: i < arr.length - 1 ? c.divider : "none",
+                  }}
+                >
                   <div
                     style={{
-                      background: c.cardAlt,
-                      padding: "16px",
-                      borderBottom: i < arr.length - 1 ? c.divider : "none",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: c.muted,
+                      marginBottom: 12,
                     }}
                   >
-                    <div
+                    CREDIT / TAB SETTINGS
+                  </div>
+                  <div style={{ marginBottom: 14 }}>
+                    <label
                       style={{
                         fontSize: 12,
-                        fontWeight: 700,
+                        fontWeight: 600,
                         color: c.muted,
-                        marginBottom: 12,
+                        display: "block",
+                        marginBottom: 6,
                       }}
                     >
-                      CREDIT / TAB SETTINGS
-                    </div>
-                    <div style={{ marginBottom: 14 }}>
-                      <label
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: c.muted,
-                          display: "block",
-                          marginBottom: 6,
-                        }}
-                      >
-                        Default Credit Limit (KSh)
-                      </label>
-                      <input
-                        className="input"
-                        type="number"
-                        placeholder="5000"
-                        value={creditLimit}
-                        onChange={(e) => setCreditLimit(e.target.value)}
-                      />
-                    </div>
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 12 }}
-                    >
-                      <div style={{ flex: 1 }}>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: c.text,
-                          }}
-                        >
-                          Require manager approval
-                        </div>
-                        <div
-                          style={{ fontSize: 11, color: c.muted, marginTop: 2 }}
-                        >
-                          For credit sales above the limit
-                        </div>
-                      </div>
-                      <button
-                        className="btn"
-                        onClick={() => setRequireApproval((v) => !v)}
-                        style={{
-                          width: 48,
-                          height: 27,
-                          borderRadius: 14,
-                          background: requireApproval
-                            ? "#D32F2F"
-                            : c.isDark
-                              ? "#1A3366"
-                              : "#D0D7E8",
-                          border: "none",
-                          cursor: "pointer",
-                          position: "relative",
-                          transition: "background 0.2s",
-                        }}
-                      >
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: 3,
-                            left: requireApproval ? 24 : 3,
-                            width: 21,
-                            height: 21,
-                            borderRadius: "50%",
-                            background: "white",
-                            transition: "left 0.2s",
-                            boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
-                          }}
-                        />
-                      </button>
-                    </div>
+                      Default Credit Limit (KSh)
+                    </label>
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="5000"
+                      value={creditLimit}
+                      onChange={(e) => setCreditLimit(e.target.value)}
+                    />
                   </div>
-                )}
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 12 }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div
+                        style={{ fontSize: 13, fontWeight: 600, color: c.text }}
+                      >
+                        Require manager approval
+                      </div>
+                      <div
+                        style={{ fontSize: 11, color: c.muted, marginTop: 2 }}
+                      >
+                        For credit sales above the limit
+                      </div>
+                    </div>
+                    <button
+                      className="btn"
+                      onClick={() => setRequireApproval((v) => !v)}
+                      style={{
+                        width: 48,
+                        height: 27,
+                        borderRadius: 14,
+                        background: requireApproval
+                          ? "#D32F2F"
+                          : c.isDark
+                            ? "#1A3366"
+                            : "#D0D7E8",
+                        border: "none",
+                        cursor: "pointer",
+                        position: "relative",
+                        transition: "background 0.2s",
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 3,
+                          left: requireApproval ? 24 : 3,
+                          width: 21,
+                          height: 21,
+                          borderRadius: "50%",
+                          background: "white",
+                          transition: "left 0.2s",
+                          boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+                        }}
+                      />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

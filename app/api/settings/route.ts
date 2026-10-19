@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { authenticatedBusinessId, requireBusinessAccess } from "@/lib/auth"
 import {
   paymentConfigEnablesMpesa,
+  paymentConfigMpesaEnvironment,
   validPaymentConfig,
 } from "@/lib/payment-config"
 import { hasMpesaIntegration } from "@/lib/mpesa-integration-store"
@@ -322,7 +323,8 @@ export async function PATCH(request: Request) {
     }
     const requestedMpesaEnabled = configuredMpesaEnabled ?? body.mpesaEnabled
     if (requestedMpesaEnabled === true) {
-      if (!(await hasMpesaIntegration(businessId))) {
+      const environment = paymentConfigMpesaEnvironment(body.paymentConfig)
+      if (!(await hasMpesaIntegration(businessId, prisma, environment))) {
         return NextResponse.json(
           {
             error:

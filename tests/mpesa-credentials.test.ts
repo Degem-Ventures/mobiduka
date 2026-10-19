@@ -134,6 +134,14 @@ test("accepts only the defined public payment configuration fields", () => {
 
   assert.equal(validPaymentConfig(config), true)
   assert.equal(
+    validPaymentConfig({ ...config, mpesaEnvironment: "production" }),
+    true,
+  )
+  assert.equal(
+    validPaymentConfig({ ...config, mpesaEnvironment: "invalid" }),
+    false,
+  )
+  assert.equal(
     validPaymentConfig({ ...config, merchantLabel: "Kiosk A" }),
     false,
   )

@@ -13,7 +13,16 @@ export type MpesaIntegrationRecord = {
   updatedAt: Date
 }
 
-type MpesaIntegrationInput = Pick<MpesaIntegrationRecord, "businessId" | "environment" | "accountType" | "shortcode" | "partyB" | "accountReference" | "credentialCiphertext">
+type MpesaIntegrationInput = Pick<
+  MpesaIntegrationRecord,
+  | "businessId"
+  | "environment"
+  | "accountType"
+  | "shortcode"
+  | "partyB"
+  | "accountReference"
+  | "credentialCiphertext"
+>
 
 type MpesaIntegrationDelegate = {
   findUnique: (args: unknown) => Promise<MpesaIntegrationRecord | null>
@@ -43,32 +52,59 @@ function database(client: unknown): MpesaIntegrationDatabase {
  */
 export async function findMpesaIntegration(
   businessId: string,
-  integrationId?: string | null,
+  options: { environment?: string; integrationId?: string | null } = {},
   client: unknown = prisma,
 ): Promise<MpesaIntegrationRecord | null> {
   const db = database(client)
   if (db.mpesaIntegration) {
-    if (integrationId) {
+    if (options.integrationId) {
       return db.mpesaIntegration.findFirst({
-        where: { id: integrationId, businessId },
+        where: { id: options.integrationId, businessId },
       })
     }
-    return db.mpesaIntegration.findUnique({ where: { businessId } })
+    if (options.environment) {
+      return db.mpesaIntegration.findUnique({
+        where: {
+          businessId_environment: {
+            businessId,
+            environment: options.environment,
+          },
+        },
+      })
+    }
+    const sandbox = await db.mpesaIntegration.findFirst({
+      where: { businessId, environment: "sandbox" },
+    })
+    if (sandbox) return sandbox
+    const production = await db.mpesaIntegration.findFirst({
+      where: { businessId, environment: "production" },
+    })
+    if (production) return production
+    return db.mpesaIntegration.findFirst({ where: { businessId } })
   }
 
-  const rows = integrationId
+  const rows = options.integrationId
     ? await db.$queryRaw<MpesaIntegrationRecord[]>`
-        SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB", "accountReference",
-          "credentialCiphertext", "updatedAt"
+        SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB",
+          "accountReference", "credentialCiphertext", "updatedAt"
         FROM "MpesaIntegration"
-        WHERE "id" = ${integrationId} AND "businessId" = ${businessId}
+        WHERE "id" = ${options.integrationId} AND "businessId" = ${businessId}
         LIMIT 1
       `
+    : options.environment
+      ? await db.$queryRaw<MpesaIntegrationRecord[]>`
+          SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB",
+            "accountReference", "credentialCiphertext", "updatedAt"
+          FROM "MpesaIntegration"
+          WHERE "businessId" = ${businessId} AND "environment" = ${options.environment}
+          LIMIT 1
+        `
     : await db.$queryRaw<MpesaIntegrationRecord[]>`
-        SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB", "accountReference",
-          "credentialCiphertext", "updatedAt"
+        SELECT "id", "businessId", "environment", "accountType", "shortcode", "partyB",
+          "accountReference", "credentialCiphertext", "updatedAt"
         FROM "MpesaIntegration"
         WHERE "businessId" = ${businessId}
+        ORDER BY CASE WHEN "environment" = 'sandbox' THEN 0 ELSE 1 END
         LIMIT 1
       `
   return rows[0] ?? null
@@ -79,31 +115,41 @@ export async function upsertMpesaIntegration(
   client: unknown = prisma,
 ): Promise<MpesaIntegrationRecord> {
   const db = database(client)
+  const normalizedInput = {
+    ...input,
+    partyB: input.partyB ?? input.shortcode,
+  }
+
   if (db.mpesaIntegration) {
     return db.mpesaIntegration.upsert({
-      where: { businessId: input.businessId },
-      create: input,
+      where: {
+        businessId_environment: {
+          businessId: normalizedInput.businessId,
+          environment: normalizedInput.environment,
+        },
+      },
+      create: normalizedInput,
       update: {
-        environment: input.environment,
-        accountType: input.accountType,
-        shortcode: input.shortcode,
-        partyB: input.partyB,
-        accountReference: input.accountReference,
-        credentialCiphertext: input.credentialCiphertext,
+        environment: normalizedInput.environment,
+        accountType: normalizedInput.accountType,
+        shortcode: normalizedInput.shortcode,
+        partyB: normalizedInput.partyB,
+        accountReference: normalizedInput.accountReference,
+        credentialCiphertext: normalizedInput.credentialCiphertext,
       },
     })
   }
 
   const rows = await db.$queryRaw<MpesaIntegrationRecord[]>`
     INSERT INTO "MpesaIntegration" (
-      "id", "businessId", "environment", "accountType", "shortcode", "partyB", "accountReference",
-      "credentialCiphertext", "createdAt", "updatedAt"
+      "id", "businessId", "environment", "accountType", "shortcode", "partyB",
+      "accountReference", "credentialCiphertext", "createdAt", "updatedAt"
     ) VALUES (
-      ${randomUUID()}, ${input.businessId}, ${input.environment}, ${input.accountType}, ${input.shortcode},
-      ${input.partyB}, ${input.accountReference}, ${input.credentialCiphertext}, CURRENT_TIMESTAMP,
+      ${randomUUID()}, ${normalizedInput.businessId}, ${normalizedInput.environment}, ${normalizedInput.accountType}, ${normalizedInput.shortcode},
+      ${normalizedInput.partyB}, ${normalizedInput.accountReference}, ${normalizedInput.credentialCiphertext}, CURRENT_TIMESTAMP,
       CURRENT_TIMESTAMP
     )
-    ON CONFLICT ("businessId") DO UPDATE SET
+    ON CONFLICT ("businessId", "environment") DO UPDATE SET
       "environment" = EXCLUDED."environment",
       "accountType" = EXCLUDED."accountType",
       "shortcode" = EXCLUDED."shortcode",
@@ -113,7 +159,6 @@ export async function upsertMpesaIntegration(
       "updatedAt" = CURRENT_TIMESTAMP
     RETURNING "id", "businessId", "environment", "accountType", "shortcode", "partyB",
       "accountReference", "credentialCiphertext", "updatedAt"
-      "credentialCiphertext", "updatedAt"
   `
   const integration = rows[0]
   if (!integration) {
@@ -125,8 +170,14 @@ export async function upsertMpesaIntegration(
 export async function hasMpesaIntegration(
   businessId: string,
   client: unknown = prisma,
+  environment?: string,
 ) {
-  return Boolean(await findMpesaIntegration(businessId, undefined, client))
+  if (environment) {
+    return Boolean(
+      await findMpesaIntegration(businessId, { environment }, client),
+    )
+  }
+  return Boolean(await findMpesaIntegration(businessId, {}, client))
 }
 
 export async function assignMpesaTransactionIntegration(
