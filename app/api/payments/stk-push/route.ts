@@ -9,7 +9,10 @@ import {
   MpesaConfigurationError,
 } from "@/lib/mpesa"
 import { assignMpesaTransactionIntegration } from "@/lib/mpesa-integration-store"
-import { paymentConfigEnablesMpesa } from "@/lib/payment-config"
+import {
+  paymentConfigEnablesMpesa,
+  paymentConfigMpesaEnvironment,
+} from "@/lib/payment-config"
 import { prisma } from "@/lib/prisma"
 
 export const runtime = "nodejs"
@@ -85,7 +88,9 @@ export async function POST(request: Request) {
       )
     }
 
-    const integration = await loadTenantMpesaIntegration(businessId)
+    const integration = await loadTenantMpesaIntegration(businessId, {
+      environment: paymentConfigMpesaEnvironment(paymentSettings.paymentConfig),
+    })
     const requestTimestamp = timestamp()
     const transactionType = mpesaTransactionType(integration.accountType)
     const reference = (integration.accountReference || "MobiDuka POS").slice(

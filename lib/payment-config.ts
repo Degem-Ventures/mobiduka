@@ -26,6 +26,7 @@ const SENSITIVE_PAYMENT_FIELD_FRAGMENTS = [
 const PAYMENT_CONFIG_KEYS = new Set([
   "methods",
   "mpesaConfig",
+  "mpesaEnvironment",
   "bankConfig",
   "roundCash",
   "creditLimit",
@@ -90,6 +91,9 @@ export function validPaymentConfig(value: unknown) {
   }
 
   return (
+    (config.mpesaEnvironment === undefined ||
+      config.mpesaEnvironment === "sandbox" ||
+      config.mpesaEnvironment === "production") &&
     (mpesa.type === "till" || mpesa.type === "paybill") &&
     [mpesa.till, mpesa.paybill, mpesa.account].every(
       (field) => typeof field === "string",
@@ -112,4 +116,16 @@ export function paymentConfigEnablesMpesa(value: unknown) {
     return false
   }
   return (methods as Record<string, unknown>).mpesa === true
+}
+
+export function paymentConfigMpesaEnvironment(
+  value: unknown,
+): "sandbox" | "production" | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined
+  }
+  const environment = (value as Record<string, unknown>).mpesaEnvironment
+  return environment === "sandbox" || environment === "production"
+    ? environment
+    : undefined
 }

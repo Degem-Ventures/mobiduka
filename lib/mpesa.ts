@@ -85,16 +85,16 @@ function assertEnvironment(value: string): MpesaEnvironment {
 
 async function storedIntegration(
   businessId: string,
-  integrationId?: string | null,
+  options: { environment?: MpesaEnvironment; integrationId?: string | null } = {},
 ): Promise<StoredIntegration | null> {
-  return findMpesaIntegration(businessId, integrationId)
+  return findMpesaIntegration(businessId, options)
 }
 
 export async function loadTenantMpesaIntegration(
   businessId: string,
-  integrationId?: string | null,
+  options: { environment?: MpesaEnvironment; integrationId?: string | null } = {},
 ) {
-  const integration = await storedIntegration(businessId, integrationId)
+  const integration = await storedIntegration(businessId, options)
   if (!integration) {
     throw new MpesaConfigurationError(
       "M-Pesa has not been configured for this business.",

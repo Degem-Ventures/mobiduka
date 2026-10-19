@@ -13,8 +13,8 @@ const integration = {
   businessId: "business-1",
   environment: "sandbox",
   accountType: "TILL",
-  shortcode: "123456",
-  partyB: "123456",
+  shortcode: "1316920",
+  partyB: "1787049",
   accountReference: "MOBIDUKA",
   credentialCiphertext: "ciphertext",
   updatedAt: new Date("2026-10-02T00:00:00.000Z"),
@@ -42,10 +42,17 @@ test("uses the generated M-Pesa delegate when it is available", async () => {
   }
 
   assert.equal(
-    await findMpesaIntegration("business-1", undefined, client),
+    await findMpesaIntegration("business-1", { environment: "sandbox" }, client),
     integration,
   )
-  assert.deepEqual(lookup, { where: { businessId: "business-1" } })
+  assert.deepEqual(lookup, {
+    where: {
+      businessId_environment: {
+        businessId: "business-1",
+        environment: "sandbox",
+      },
+    },
+  })
   assert.equal(await hasMpesaIntegration("business-1", client), true)
 
   await upsertMpesaIntegration(
@@ -54,20 +61,25 @@ test("uses the generated M-Pesa delegate when it is available", async () => {
       environment: "production",
       accountType: "PAYBILL",
       shortcode: "654321",
-      partyB: "654321",
+      partyB: "222222",
       accountReference: "ORDER1",
       credentialCiphertext: "replacement",
     },
     client,
   )
   assert.deepEqual(upsert, {
-    where: { businessId: "business-1" },
+    where: {
+      businessId_environment: {
+        businessId: "business-1",
+        environment: "production",
+      },
+    },
     create: {
       businessId: "business-1",
       environment: "production",
       accountType: "PAYBILL",
       shortcode: "654321",
-      partyB: "654321",
+      partyB: "222222",
       accountReference: "ORDER1",
       credentialCiphertext: "replacement",
     },
@@ -75,11 +87,56 @@ test("uses the generated M-Pesa delegate when it is available", async () => {
       environment: "production",
       accountType: "PAYBILL",
       shortcode: "654321",
-      partyB: "654321",
+      partyB: "222222",
       accountReference: "ORDER1",
       credentialCiphertext: "replacement",
     },
   })
+})
+
+test("prefers sandbox when no environment is selected", async () => {
+  const sandboxIntegration = { ...integration, environment: "sandbox" }
+  const productionIntegration = { ...integration, environment: "production" }
+  const lookups: unknown[] = []
+  const client = {
+    mpesaIntegration: {
+      findUnique: async () => null,
+      findFirst: async (args: unknown) => {
+        lookups.push(args)
+        const environment = (args as { where: { environment?: string } }).where.environment
+        if (environment === "sandbox") return sandboxIntegration
+        if (environment === "production") return productionIntegration
+        return null
+      },
+      upsert: async () => productionIntegration,
+    },
+    $queryRaw: async () => [],
+    $executeRaw: async () => 1,
+  }
+
+  assert.equal(await findMpesaIntegration("business-1", {}, client), sandboxIntegration)
+  assert.deepEqual(lookups, [
+    { where: { businessId: "business-1", environment: "sandbox" } },
+  ])
+
+  lookups.length = 0
+  const productionOnlyClient = {
+    mpesaIntegration: {
+      findUnique: async () => null,
+      findFirst: async (args: unknown) => {
+        return (args as { where: { environment?: string } }).where.environment === "production"
+          ? productionIntegration
+          : null
+      },
+      upsert: async () => productionIntegration,
+    },
+    $queryRaw: async () => [],
+    $executeRaw: async () => 1,
+  }
+  assert.equal(
+    await findMpesaIntegration("business-1", {}, productionOnlyClient),
+    productionIntegration,
+  )
 })
 
 test("uses parameterized raw queries only when the generated delegate is absent", async () => {
@@ -109,19 +166,19 @@ test("uses parameterized raw queries only when the generated delegate is absent"
   }
 
   assert.equal(
-    await findMpesaIntegration("business-1", undefined, client),
+    await findMpesaIntegration("business-1", { environment: "sandbox" }, client),
     integration,
   )
   assert.match(queries[0].sql, /SELECT "id", "businessId"/)
-  assert.deepEqual(queries[0].values, ["business-1"])
+  assert.deepEqual(queries[0].values, ["business-1", "sandbox"])
 
   await upsertMpesaIntegration(
     {
       businessId: "business-1",
       environment: "sandbox",
       accountType: "TILL",
-      shortcode: "123456",
-      partyB: "789012",
+      shortcode: "1316920",
+      partyB: "1787049",
       accountReference: "MOBIDUKA",
       credentialCiphertext: "ciphertext",
     },
@@ -132,8 +189,8 @@ test("uses parameterized raw queries only when the generated delegate is absent"
     "business-1",
     "sandbox",
     "TILL",
-    "123456",
-    "789012",
+    "1316920",
+    "1787049",
     "MOBIDUKA",
     "ciphertext",
   ])

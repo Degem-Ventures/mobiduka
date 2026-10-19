@@ -119,7 +119,7 @@ export async function POST(request: Request) {
 
     const integration = await loadTenantMpesaIntegration(
       businessId,
-      integrationId,
+      { integrationId },
     )
     const requestTimestamp = timestamp()
     const token = await mpesaAccessToken(

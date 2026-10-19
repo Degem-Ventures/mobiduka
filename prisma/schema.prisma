@@ -104,7 +104,7 @@ model Business {
   cashSessions              CashSession[]
   purchaseOrders            PurchaseOrder[]
   creditEntries             CreditLedgerEntry[]
-  mpesaIntegration          MpesaIntegration?
+  mpesaIntegrations         MpesaIntegration[]
   mpesaTransactions         MpesaTransaction[]
   mpesaSmsReceipts          MpesaSmsReceipt[]
   auditLogs                 AuditLog[]
@@ -444,7 +444,7 @@ model CreditLedgerEntry {
 
 model MpesaIntegration {
   id                   String   @id @default(uuid())
-  businessId           String   @unique
+  businessId           String
   environment          String   @default("sandbox")
   accountType          String
   shortcode            String
@@ -456,6 +456,8 @@ model MpesaIntegration {
 
   business     Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
   transactions MpesaTransaction[]
+
+  @@unique([businessId, environment])
 }
 
 model MpesaTransaction {
