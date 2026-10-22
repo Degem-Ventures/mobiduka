@@ -29,6 +29,7 @@ export function colors(isDark: boolean) {
     warning: isDark ? "#FFD166" : "#8A6500",
     error: isDark ? "#FF8A80" : "#D32F2F",
     gold: isDark ? "#F0D060" : "#D4AF37",
+    goldText: "#0D1B3D",
     onNavy: "#FFFFFF",
     onNavyMuted: "rgba(255,255,255,0.72)",
     onNavyFaint: "rgba(255,255,255,0.52)",
@@ -37,6 +38,9 @@ export function colors(isDark: boolean) {
     navyDivider: "rgba(255,255,255,0.12)",
     headerGradient:
       "linear-gradient(145deg, #09152A 0%, #123A8F 68%, #1A4FBF 100%)",
+    desktopSidebarGradient: isDark
+      ? "linear-gradient(180deg, #162B5A 0%, #0F2040 100%)"
+      : "linear-gradient(145deg, #09152A 0%, #123A8F 68%, #1A4FBF 100%)",
     primaryGradient: "linear-gradient(135deg, #123A8F, #1A4FBF)",
     successGradient: "linear-gradient(90deg, #D4AF37, #F0D060)",
     shadow: isDark
