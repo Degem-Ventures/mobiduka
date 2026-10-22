@@ -378,7 +378,7 @@ function DesktopInner() {
     return (
       <div className="desktop-login" data-theme={isDark ? 'dark' : 'light'} style={desktopVars}>
         <section className="desktop-login-story">
-          <div className="desktop-login-brand"><span><Icon name="store" size={22}/></span><strong>MobiDuka</strong><small>POS</small></div>
+          <div className="desktop-login-brand"><span><img src="/icon.svg" alt=""/></span><strong>MobiDuka</strong><small>POS</small></div>
           <div className="desktop-login-copy">
             <span className="desktop-eyebrow">DESKTOP WORKSPACE</span>
             <h1>Run your whole store from one clear view.</h1>
@@ -415,8 +415,8 @@ function DesktopInner() {
       {navOpen && <button className="desktop-nav-scrim" onClick={() => setNavOpen(false)} aria-label="Close navigation"/>}
       <aside className={`desktop-sidebar ${navOpen ? 'mobile-open' : ''}`}>
         <div className="desktop-brand">
-          <span className="desktop-brand-mark"><Icon name="store" size={21}/></span>
-          <div className="desktop-brand-name"><strong>MobiDuka</strong><span>POS DESKTOP</span></div>
+          <span className="desktop-brand-mark"><img src="/icon.svg" alt=""/></span>
+          <div className="desktop-brand-name"><strong>MobiDuka</strong><span>POS</span></div>
           <button className="desktop-collapse" onClick={() => setCollapsed(value => !value)} aria-label="Collapse navigation"><Icon name="panel"/></button>
         </div>
         <div className="desktop-store-switcher">
