@@ -69,6 +69,7 @@
 .mk-hero h1 em { color: var(--mk-blue); font-style: normal; }
 .mk-hero-copy > p { max-width: 570px; margin: 24px 0 28px; color: var(--mk-muted); font-size: 16px; line-height: 1.75; }
 .mk-hero-actions { display: flex; gap: 10px; }
+.mk-desktop-link { text-decoration: none; }
 .mk-hero-trust { display: flex; align-items: center; gap: 12px; margin-top: 26px; }
 .mk-avatar-stack { display: flex; }
 .mk-avatar-stack span { width: 30px; height: 30px; display: grid; place-items: center; margin-left: -6px; border: 2px solid white; border-radius: 50%; background: var(--mk-navy); color: white; font-size: 8px; font-weight: 800; }
@@ -140,7 +141,7 @@
 }
 
 @media (max-width:520px) {
-  .mk-hero h1 { font-size:38px; }.mk-hero-copy > p { font-size:14px; }.mk-hero-actions { flex-direction:column; }.mk-hero-actions button { width:100%; }
+  .mk-hero h1 { font-size:38px; }.mk-hero-copy > p { font-size:14px; }.mk-hero-actions { flex-direction:column; }.mk-hero-actions > * { width:100%; }
   .mk-hero-visual { min-height:345px; }.mk-laptop { width:100%; }.mk-laptop-screen { height:230px; grid-template-columns:68px 1fr; border-width:7px; }.mk-web-main { padding:14px; }.mk-web-kpis { gap:4px; }.mk-web-kpis > div { padding:7px; }.mk-web-kpis strong { font-size:7px; }.mk-web-chart { height:100px; padding:8px; }.mk-web-chart svg { height:55px; }.hero-phone { width:108px; }.mk-float-card { padding:8px; }.mk-float-card.sale { left:4px; bottom:8px; }.mk-float-card.pay { display:none; }
   .mk-benefit-bar .mk-container { grid-template-columns:repeat(2,1fr); }.mk-tabs { width:100%; }.mk-tabs button { flex:1; padding:0 8px; }.mk-experience-stage { min-height:auto; padding:28px 20px; gap:30px; }.mk-experience-copy h3 { font-size:25px; }.mk-device-stage { min-height:390px; }.mk-device-stage .mk-phone { width:170px; }.mk-device-stage .secondary-phone { width:140px; }.mk-device-stage.web .mk-laptop { width:100%; }
   .mk-feature-grid,.mk-industry-grid { grid-template-columns:1fr; }.mk-feature-grid p,.mk-feature-grid h3 { min-height:0; }.mk-security-list { grid-template-columns:1fr; }

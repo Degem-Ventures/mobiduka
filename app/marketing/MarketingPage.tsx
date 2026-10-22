@@ -130,7 +130,7 @@ export default function MarketingPage() {
               <div className="mk-eyebrow"><span/> Retail management, reimagined</div>
               <h1>Your Shop. Your Stock. Your Sales. <em>Under Control.</em></h1>
               <p>Say goodbye to scattered records and guesswork. MobiDuka helps you record sales, track inventory, manage payments and understand your business performance.</p>
-              <div className="mk-hero-actions"><button className="mk-primary" onClick={() => setContactOpen(true)}>Get Started <MarketingIcon name="arrow" size={17}/></button><button className="mk-secondary" onClick={() => scrollTo('how-it-works')}>See How It Works</button></div>
+              <div className="mk-hero-actions"><button className="mk-primary" onClick={() => setContactOpen(true)}>Get Started <MarketingIcon name="arrow" size={17}/></button><button className="mk-secondary" onClick={() => scrollTo('how-it-works')}>See How It Works</button><Link className="mk-secondary mk-desktop-link" href="/desktop"><MarketingIcon name="monitor" size={17}/> Open Desktop Workspace</Link></div>
               <div className="mk-hero-trust"><div className="mk-avatar-stack"><span>DK</span><span>GW</span><span>AM</span></div><p>Designed for Kenyan dukas, mini-shops and growing retailers.</p></div>
             </div>
             <div className="mk-hero-visual">
