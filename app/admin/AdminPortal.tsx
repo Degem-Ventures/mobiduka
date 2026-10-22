@@ -2,8 +2,24 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { createContext, useContext, useMemo, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTheme } from '../context/ThemeContext'
+import { formatPlanPrice, planCatalog } from '../plans/plan-catalog'
+import { AdminDataProvider, useAdminData, type AdminModalType } from './AdminDataProvider'
+import {
+  adminPageMeta,
+  apiRateData,
+  initialExpenseAudits,
+  initialInfrastructureSentryEvents,
+  initialProcurementOrders,
+  initialSyncConflicts,
+  liveTransactions,
+  overviewTrendData,
+  type ExpenseAudit,
+  type ProcurementOrder,
+  type SyncConflict,
+  type Tenant,
+} from './admin-data'
 import {
   Area,
   AreaChart,
@@ -148,35 +164,6 @@ const navigationGroups = [
   ] },
 ]
 
-type UserRecord = {
-  initials: string; display: string; legal: string; id: string; email: string
-  role: string; tenant: string; sessions: number; lastSeen: string; status: string
-}
-
-type AdminModalType = 'tenant' | 'user' | 'license' | null
-
-type AdminContext = {
-  tenants: Tenant[]
-  setTenants: Dispatch<SetStateAction<Tenant[]>>
-  users: UserRecord[]
-  setUsers: Dispatch<SetStateAction<UserRecord[]>>
-  licenses: LicenseRecord[]
-  setLicenses: Dispatch<SetStateAction<LicenseRecord[]>>
-  period: '30 Days' | 'Quarter' | 'Year'
-  setPeriod: Dispatch<SetStateAction<'30 Days' | 'Quarter' | 'Year'>>
-  monitorOpen: boolean
-  setMonitorOpen: Dispatch<SetStateAction<boolean>>
-  openCreate: (type: Exclude<AdminModalType, null>) => void
-}
-
-const AdminDataContext = createContext<AdminContext | null>(null)
-
-const useAdminData = () => {
-  const context = useContext(AdminDataContext)
-  if (!context) throw new Error('Admin pages must be rendered inside the admin layout.')
-  return context
-}
-
 function downloadCsv(filename: string, rows: Record<string, string | number | boolean>[]) {
   if (!rows.length) return
   const headers = Object.keys(rows[0])
@@ -265,81 +252,32 @@ function AdminCrudModal({ type, onClose, onCreate }: {
   )
 }
 
-const pageMeta: Record<string, { eyebrow: string; title: string; description: string }> = {
-  '/admin': { eyebrow: 'Platform pulse', title: 'Global Overview', description: 'Live operating health across every MobiDuka tenant.' },
-  '/admin/infrastructure': { eyebrow: 'Engineering operations', title: 'System Infrastructure & Telemetry Node', description: 'Backend routes, reconciliation, workers, devices, and hidden ecosystem pipelines.' },
-  '/admin/tenants': { eyebrow: 'Business registry', title: 'Tenants & Businesses', description: 'Manage storefronts, owners, gateways, and platform access.' },
-  '/admin/identity': { eyebrow: 'Access control', title: 'Identity & Roles', description: 'Platform-wide users, sessions, and role assignments.' },
-  '/admin/licenses': { eyebrow: 'Monetization', title: 'License Management', description: 'Plans, renewals, enforcement, and recurring revenue controls.' },
-}
-
-export function AdminLayout({ children }: { children: ReactNode }) {
+function AdminLayoutContent({ children }: { children: ReactNode }) {
+  const { createModal, openCreate: openCreateData, closeCreate, createRecord } = useAdminData()
   const { theme, isDark, setTheme } = useTheme()
   const pathname = usePathname()
   const slug = pathname.split('/').filter(Boolean).at(-1) ?? 'admin'
   const readableSlug = slug.replace(/-/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
-  const meta = pageMeta[pathname] ?? { eyebrow: 'Control plane', title: readableSlug, description: 'Platform-wide operations and administrative controls.' }
-  const [tenants, setTenants] = useState<Tenant[]>(tenantData)
-  const [users, setUsers] = useState<UserRecord[]>(initialUsers)
-  const [licenses, setLicenses] = useState<LicenseRecord[]>(initialLicenses)
-  const [period, setPeriod] = useState<'30 Days' | 'Quarter' | 'Year'>('30 Days')
-  const [monitorOpen, setMonitorOpen] = useState(false)
-  const [createModal, setCreateModal] = useState<AdminModalType>(null)
+  const meta = adminPageMeta[pathname] ?? { eyebrow: 'Control plane', title: readableSlug, description: 'Platform-wide operations and administrative controls.' }
   const [quickOpen, setQuickOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
-  const openCreate = (type: Exclude<AdminModalType, null>) => {
-    setCreateModal(type)
+  const openCreate = (type: 'tenant' | 'user' | 'license') => {
+    openCreateData(type)
     setQuickOpen(false)
   }
 
-  const createRecord = (payload: Record<string, string>) => {
-    if (createModal === 'tenant') {
-      setTenants(current => [{
-        id: `TEN-KE-${String(1900 + current.length).padStart(5, '0')}`,
-        business: payload.business, location: payload.location, owner: payload.owner, email: payload.email,
-        plan: payload.plan, status: 'trial', cache: '0 MB', mpesa: payload.shortcode,
-        type: payload.accountType as 'Till' | 'Paybill', reference: payload.reference || 'MOBIDUKA', lastSync: 'Not synced',
-      }, ...current])
-    }
-    if (createModal === 'user') {
-      const names = payload.legal.trim().split(/\s+/)
-      setUsers(current => [{
-        initials: names.map(name => name[0]).join('').slice(0, 2).toUpperCase(),
-        display: `${names[0]} ${names[1]?.[0] ? `${names[1][0]}.` : ''}`.trim(),
-        legal: payload.legal, email: payload.email, id: `UID-${3001035 + current.length}`,
-        role: payload.role, tenant: payload.tenant, sessions: 0, lastSeen: 'Invitation pending', status: 'invited',
-      }, ...current])
-    }
-    if (createModal === 'license') {
-      const expiry = new Date(payload.expires)
-      const days = Math.max(0, Math.ceil((expiry.getTime() - Date.now()) / 86400000))
-      setLicenses(current => [{
-        id: `LIC-${88202 + current.length}`, tenant: payload.tenant, plan: payload.plan,
-        expires: expiry.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-        days, renewal: true, amount: Number(payload.amount), status: 'active',
-      }, ...current])
-    }
-    setCreateModal(null)
-  }
-
-  const context: AdminContext = {
-    tenants, setTenants, users, setUsers, licenses, setLicenses,
-    period, setPeriod, monitorOpen, setMonitorOpen, openCreate,
-  }
-
   return (
-    <AdminDataContext.Provider value={context}>
     <div className={`admin-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
       <aside className="admin-sidebar">
         <div className="admin-brand">
-          <div className="admin-brand-mark">M</div>
+          <div className="admin-brand-mark"><img src="/mobiduka_icon.svg" alt=""/></div>
           <div className="admin-brand-copy">
             <strong>MobiDuka</strong>
-            <span>Control Plane</span>
+            <span>POS</span>
           </div>
           <button className="admin-sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? '›' : '‹'}</button>
         </div>
@@ -450,30 +388,22 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           {children}
         </div>
       </main>
-      {createModal && <AdminCrudModal type={createModal} onClose={() => setCreateModal(null)} onCreate={createRecord}/>}
+      {createModal && <AdminCrudModal type={createModal} onClose={closeCreate} onCreate={createRecord}/>}
     </div>
-    </AdminDataContext.Provider>
   )
 }
 
-const trendData = [
-  { day: '01', volume: 920, tenants: 34 }, { day: '04', volume: 1080, tenants: 36 },
-  { day: '07', volume: 990, tenants: 39 }, { day: '10', volume: 1340, tenants: 41 },
-  { day: '13', volume: 1260, tenants: 46 }, { day: '16', volume: 1640, tenants: 49 },
-  { day: '19', volume: 1520, tenants: 55 }, { day: '22', volume: 1920, tenants: 58 },
-  { day: '25', volume: 2140, tenants: 63 }, { day: '28', volume: 2360, tenants: 67 },
-]
-
-const liveTransactions = [
-  { id: 'STK_9K4H2', store: 'Barngetuny Plaza · Shop 18', amount: 'KSh 4,850', time: '00:18', status: 'pending' },
-  { id: 'STK_Q81MX', store: 'MobiDuka Eldoret · Main', amount: 'KSh 12,400', time: '00:04', status: 'complete' },
-  { id: 'STK_4PA7D', store: 'Tulia Mini Mart · Kisumu', amount: 'KSh 890', time: '00:31', status: 'pending' },
-  { id: 'STK_N2R9C', store: 'Jirani Stores · Nakuru', amount: 'KSh 2,150', time: '00:09', status: 'failed' },
-]
+export function AdminLayout({ children }: { children: ReactNode }) {
+  return (
+    <AdminDataProvider>
+      <AdminLayoutContent>{children}</AdminLayoutContent>
+    </AdminDataProvider>
+  )
+}
 
 export function AdminOverview() {
   const { period, setPeriod, monitorOpen, setMonitorOpen } = useAdminData()
-  const chartData = useMemo(() => trendData.map((point, index) => ({
+  const chartData = useMemo(() => overviewTrendData.map((point, index) => ({
     ...point,
     volume: Math.round(point.volume * (period === 'Quarter' ? 1.85 : period === 'Year' ? 4.6 : 1)),
     tenants: Math.round(point.tenants * (period === 'Quarter' ? 1.18 : period === 'Year' ? 1.62 : 1)),
@@ -597,40 +527,17 @@ export function AdminOverview() {
   )
 }
 
-const apiRateData = [
-  { time: '09:00', requests: 182 }, { time: '09:10', requests: 248 },
-  { time: '09:20', requests: 216 }, { time: '09:30', requests: 354 },
-  { time: '09:40', requests: 328 }, { time: '09:50', requests: 412 },
-  { time: '10:00', requests: 386 }, { time: '10:10', requests: 468 },
-]
-
-type SyncConflict = { id: string; tenant: string; store: string; profile: string; description: string; updated: string }
-type ExpenseAudit = { id: string; tenant: string; category: string; amount: number; owner: string; status: 'awaiting' | 'approved' | 'rejected' }
-type ProcurementOrder = { id: string; supplier: string; tenant: string; value: number; progress: number; eta: string }
-
 export function AdminInfrastructure() {
-  const [conflicts, setConflicts] = useState<SyncConflict[]>([
-    { id: 'SYNC-CF-104', tenant: 'T-002', store: 'Barngetuny Plaza Shop 18', profile: 'HALTED - CONFLICT', description: 'Conflict on Product SKU 104 (Maize Flour): Terminal update (Qty: 10) vs Store Owner update (Qty: 15)', updated: '12 sec ago' },
-    { id: 'SYNC-CF-091', tenant: 'T-018', store: 'Tulia Mini Mart', profile: 'RETRYING', description: 'Receipt sequence 44019 has diverging offline tax totals on TERMINAL_KSM_04.', updated: '41 sec ago' },
-  ])
+  const [conflicts, setConflicts] = useState<SyncConflict[]>(initialSyncConflicts)
   const [broadcast, setBroadcast] = useState({ target: 'All Cashier Terminals', title: 'Scheduled Daraja Maintenance', message: 'Service Alert: Safaricom Daraja core ledger maintenance tonight from 11:59 PM EAT.' })
   const [broadcastStatus, setBroadcastStatus] = useState('')
   const [cron, setCron] = useState({ running: false, last: 'Today, 06:00 AM', next: 'Tomorrow, 06:00 AM', duration: '142ms' })
   const [deviceOpen, setDeviceOpen] = useState(true)
   const [deviceConfirm, setDeviceConfirm] = useState(false)
   const [apiToken, setApiToken] = useState('')
-  const [sentryEvents, setSentryEvents] = useState([
-    { id: 'SEN-401-8F2', message: 'ERROR: 401 Unauthorized API request failed caused by invalid token on sourcemap upload node.', trace: 'at uploadSourceMap (/app/build/sentry.ts:84:17)', time: '10:14:08.291 EAT', resolved: false },
-    { id: 'SEN-500-2A9', message: 'ERROR: Prisma connection pool timeout after 10,000ms on tenant shard KE-WEST-02.', trace: 'at TenantPrisma.acquire (/app/db/pool.ts:119:9)', time: '09:52:44.018 EAT', resolved: false },
-  ])
-  const [expenses, setExpenses] = useState<ExpenseAudit[]>([
-    { id: 'EXP-90218', tenant: 'T-002', category: 'Supplier Petty Cash', amount: 12000, owner: 'Brian Kiptoo', status: 'awaiting' },
-    { id: 'EXP-90177', tenant: 'T-018', category: 'Emergency Generator Fuel', amount: 8500, owner: 'Achieng Otieno', status: 'approved' },
-  ])
-  const [orders, setOrders] = useState<ProcurementOrder[]>([
-    { id: 'PO-2026-00918', supplier: 'Eldoret Wholesalers Ltd', tenant: 'T-002', value: 284000, progress: 68, eta: 'ETA 14 Oct · 16:30 EAT' },
-    { id: 'PO-2026-00911', supplier: 'Rift Valley FMCG Supply', tenant: 'T-041', value: 148500, progress: 92, eta: 'ETA today · 18:00 EAT' },
-  ])
+  const [sentryEvents, setSentryEvents] = useState(initialInfrastructureSentryEvents)
+  const [expenses, setExpenses] = useState<ExpenseAudit[]>(initialExpenseAudits)
+  const [orders, setOrders] = useState<ProcurementOrder[]>(initialProcurementOrders)
 
   const runCron = () => {
     setCron(current => ({ ...current, running: true }))
@@ -748,20 +655,6 @@ export function AdminInfrastructure() {
   )
 }
 
-type Tenant = {
-  id: string; business: string; location: string; owner: string; email: string
-  plan: string; status: 'active' | 'trial' | 'suspended'; cache: string; mpesa: string
-  type: 'Till' | 'Paybill'; reference: string; lastSync: string
-}
-
-const tenantData: Tenant[] = [
-  { id: 'TEN-KE-01842', business: 'MobiDuka Eldoret Branch', location: 'Eldoret, Uasin Gishu', owner: 'Diana Kiplagat', email: 'diana@mobiduka.co.ke', plan: 'Enterprise', status: 'active', cache: '2.8 GB', mpesa: '4360760', type: 'Till', reference: 'ELDORET01', lastSync: '18 sec ago' },
-  { id: 'TEN-KE-01839', business: 'Barngetuny Plaza Shop 18', location: 'Nandi Hills, Nandi', owner: 'Brian Kiptoo', email: 'brian@barngetuny.co.ke', plan: 'Growth', status: 'active', cache: '846 MB', mpesa: '1787049', type: 'Till', reference: 'SHOP18', lastSync: '42 sec ago' },
-  { id: 'TEN-KE-01811', business: 'Tulia Mini Mart', location: 'Kisumu Central', owner: 'Achieng Otieno', email: 'admin@tuliamart.co.ke', plan: 'Growth', status: 'active', cache: '1.2 GB', mpesa: '400200', type: 'Paybill', reference: 'TULIAHQ', lastSync: '1 min ago' },
-  { id: 'TEN-KE-01798', business: 'Jirani Stores Nakuru', location: 'Nakuru East', owner: 'Samuel Mwangi', email: 'sam@jiranistores.co.ke', plan: 'Basic', status: 'trial', cache: '312 MB', mpesa: '512900', type: 'Paybill', reference: 'JIRANI', lastSync: '7 min ago' },
-  { id: 'TEN-KE-01777', business: 'Pamoja Household Goods', location: 'Thika, Kiambu', owner: 'Faith Wambua', email: 'faith@pamojahg.co.ke', plan: 'Basic', status: 'suspended', cache: '188 MB', mpesa: '902144', type: 'Till', reference: 'PAMOJA', lastSync: '3 days ago' },
-]
-
 export function AdminTenants() {
   const { tenants, setTenants, openCreate } = useAdminData()
   const [query, setQuery] = useState('')
@@ -867,14 +760,6 @@ export function AdminTenants() {
   )
 }
 
-const initialUsers: UserRecord[] = [
-  { initials: 'DK', display: 'Dan Kip', legal: 'Daniel Kamar', id: 'UID-3001034', email: 'kamarster@gmail.com', role: 'SUPER_ADMIN', tenant: 'Platform', sessions: 3, lastSeen: 'Now', status: 'active' },
-  { initials: 'DO', display: 'Diana O.', legal: 'Diana Kiplagat', id: 'USR-01842', email: 'diana@mobiduka.co.ke', role: 'STORE_OWNER', tenant: 'MobiDuka Eldoret', sessions: 2, lastSeen: '4 min ago', status: 'active' },
-  { initials: 'BK', display: 'Brian K.', legal: 'Brian Kiptoo', id: 'USR-01839', email: 'brian@barngetuny.co.ke', role: 'STORE_OWNER', tenant: 'Barngetuny Plaza', sessions: 1, lastSeen: '18 min ago', status: 'active' },
-  { initials: 'GW', display: 'Grace W.', legal: 'Grace Wanjiku', id: 'USR-08411', email: 'grace@barngetuny.co.ke', role: 'CASHIER', tenant: 'Barngetuny Plaza', sessions: 1, lastSeen: 'Now', status: 'active' },
-  { initials: 'FO', display: 'Faith O.', legal: 'Faith Otieno', id: 'USR-07738', email: 'faith@tuliamart.co.ke', role: 'ACCOUNTANT', tenant: 'Tulia Mini Mart', sessions: 0, lastSeen: '2 days ago', status: 'locked' },
-]
-
 export function AdminIdentity() {
   const { users, setUsers, openCreate } = useAdminData()
   const [query, setQuery] = useState('')
@@ -951,28 +836,12 @@ export function AdminIdentity() {
   )
 }
 
-type LicenseRecord = {
-  id: string; tenant: string; plan: string; expires: string; days: number
-  renewal: boolean; amount: number; status: 'active' | 'grace' | 'revoked'
-}
-
-const initialLicenses: LicenseRecord[] = [
-  { id: 'LIC-88201', tenant: 'MobiDuka Eldoret Branch', plan: 'Enterprise', expires: '30 Sep 2026', days: 356, renewal: true, amount: 12500, status: 'active' },
-  { id: 'LIC-88194', tenant: 'Barngetuny Plaza Shop 18', plan: 'Growth', expires: '18 Nov 2025', days: 40, renewal: true, amount: 5500, status: 'active' },
-  { id: 'LIC-88122', tenant: 'Tulia Mini Mart', plan: 'Growth', expires: '02 Nov 2025', days: 24, renewal: false, amount: 5500, status: 'grace' },
-  { id: 'LIC-88098', tenant: 'Jirani Stores Nakuru', plan: 'Basic', expires: '12 Oct 2025', days: 3, renewal: false, amount: 2500, status: 'grace' },
-  { id: 'LIC-88044', tenant: 'Pamoja Household Goods', plan: 'Basic', expires: 'Expired 4 days ago', days: -4, renewal: false, amount: 2500, status: 'revoked' },
-]
-
 export function AdminLicenses() {
   const { licenses, setLicenses, openCreate } = useAdminData()
-  const [rules, setRules] = useState<Record<string, boolean>>({ Basic: true, Growth: true, Enterprise: false })
+  const [rules, setRules] = useState<Record<string, boolean>>(
+    Object.fromEntries(planCatalog.map(plan => [plan.name, plan.upgradeRulesEnabled])),
+  )
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null)
-  const plans = [
-    { name: 'Basic', subtitle: 'Standard Duka', price: '2,500', tenants: 734, color: 'blue', features: ['1 store · 3 users', 'Core POS & inventory', 'Standard support'] },
-    { name: 'Growth', subtitle: 'Multi-store operator', price: '5,500', tenants: 421, color: 'green', features: ['3 stores · 15 users', 'Reports & staff controls', 'Priority support'] },
-    { name: 'Enterprise', subtitle: 'Mega-supermarket', price: '12,500+', tenants: 129, color: 'gold', features: ['Unlimited terminals', 'Advanced IAM & API', 'Dedicated success manager'] },
-  ]
   const toggleRenewal = (id: string) => setLicenses(current => current.map(license => license.id === id ? { ...license, renewal: !license.renewal } : license))
   const revoke = (id: string) => {
     setLicenses(current => current.map(license => license.id === id ? { ...license, status: 'revoked', renewal: false } : license))
@@ -989,11 +858,11 @@ export function AdminLicenses() {
       </section>
 
       <section className="admin-plan-grid">
-        {plans.map(plan => (
+        {planCatalog.map(plan => (
           <article className={`admin-plan-card ${plan.color}`} key={plan.name}>
             <div className="admin-plan-head"><div><span>{plan.subtitle}</span><h2>{plan.name}</h2></div><span className={`admin-plan-badge ${plan.name.toLowerCase()}`}>{plan.tenants} tenants</span></div>
-            <div className="admin-plan-price"><strong>KSh {plan.price}</strong><span>/ month</span></div>
-            <ul>{plan.features.map(feature => <li key={feature}><AdminIcon name="check" size={13}/>{feature}</li>)}</ul>
+            <div className="admin-plan-price"><strong>KSh {formatPlanPrice(plan)}</strong><span>/ month</span></div>
+            <ul>{plan.adminFeatures.map(feature => <li key={feature}><AdminIcon name="check" size={13}/>{feature}</li>)}</ul>
             <div className="admin-plan-rule">
               <div><strong>Deploy live upgrade rules</strong><span>Auto-enforce limits and upsell prompts</span></div>
               <button className={`admin-toggle ${rules[plan.name] ? 'on' : ''}`} onClick={() => setRules(current => ({ ...current, [plan.name]: !current[plan.name] }))} aria-pressed={rules[plan.name]}><span/></button>

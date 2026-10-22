@@ -31,10 +31,12 @@
 
 .mk-nav-inner { min-height: 72px; display: flex; align-items: center; gap: 34px; }
 .mk-brand { display: flex; align-items: center; gap: 9px; padding: 0; border: 0; background: transparent; color: var(--mk-navy); cursor: pointer; }
-.mk-brand > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: linear-gradient(145deg,var(--mk-blue),#1a4fbf); color: white; font-weight: 900; box-shadow: 0 7px 18px rgba(18,58,143,.18); }
-.mk-brand > div { display: flex; align-items: baseline; gap: 4px; }
+.mk-brand > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: linear-gradient(145deg,var(--mk-blue),#1a4fbf); box-shadow: 0 7px 18px rgba(18,58,143,.18); overflow: hidden; }
+.mk-brand > span img { width: 100%; height: 100%; object-fit: contain; }
+.mk-brand > div { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
 .mk-brand strong { font-size: 16px; letter-spacing: -.4px; }
-.mk-brand small { color: var(--mk-gold); font-size: 10px; font-weight: 800; }
+.mk-brand small { padding: 2px 5px; border-radius: 4px; background: rgba(18,58,143,.1); color: var(--mk-blue); font-size: 8px; font-weight: 800; letter-spacing: .12em; }
+.mk-footer .mk-brand small { background: rgba(255,255,255,.1); color: white; }
 .mk-nav nav { flex: 1; display: flex; align-items: center; justify-content: center; gap: 24px; }
 .mk-nav nav button, .mk-footer button { padding: 0; border: 0; background: transparent; color: #536079; font-size: 12px; font-weight: 600; cursor: pointer; }
 .mk-nav nav button:hover { color: var(--mk-blue); }
@@ -81,7 +83,8 @@
 .mk-laptop-screen { height: 355px; display: grid; grid-template-columns: 96px 1fr; border: 10px solid #111827; border-radius: 18px 18px 9px 9px; background: white; overflow: hidden; }
 .mk-laptop-base { width: 112%; height: 18px; position: relative; left: -6%; border-radius: 3px 3px 18px 18px; background: linear-gradient(180deg,#d7dce3,#aeb6c2); box-shadow: 0 9px 13px rgba(0,0,0,.12); }
 .mk-web-sidebar { display: flex; flex-direction: column; gap: 8px; padding: 16px 9px; background: #0d1b3d; }
-.mk-mini-logo { width: 26px; height: 26px; display: grid; place-items: center; margin-bottom: 14px; border-radius: 7px; background: var(--mk-gold); color: #0d1b3d; font-size: 9px; font-weight: 900; }
+.mk-mini-logo { width: 26px; height: 26px; display: grid; place-items: center; margin-bottom: 14px; border-radius: 7px; background: var(--mk-gold); overflow: hidden; }
+.mk-mini-logo img { width: 100%; height: 100%; object-fit: contain; }
 .mk-web-sidebar span { padding: 7px; border-radius: 6px; color: #8fa1c6; font-size: 7px; }.mk-web-sidebar span.active { background: rgba(255,255,255,.1); color: white; }
 .mk-web-main { min-width: 0; padding: 22px; background: #f7f9fc; }
 .mk-web-head { display: flex; justify-content: space-between; align-items: flex-start; }.mk-web-head > div { display: flex; flex-direction: column; gap: 4px; }.mk-web-head small { color: #8090a9; font-size: 6px; letter-spacing: .8px; }.mk-web-head strong { color: var(--mk-navy); font-size: 14px; }.mk-web-head > span { padding: 4px 7px; border-radius: 100px; background: #e8f5e9; color: #2e7d32; font-size: 6px; font-weight: 700; }
