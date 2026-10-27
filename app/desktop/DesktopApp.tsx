@@ -134,6 +134,7 @@ function DesktopInner() {
   const [isHydratingSession, setIsHydratingSession] = useState(true)
   const [session, setSession] = useState<ClientSession | null>(null)
   const [screen, setScreen] = useState<Screen>('dashboard')
+  const [openStartShift, setOpenStartShift] = useState(false)
   const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>()
   const [inventoryProductId, setInventoryProductId] = useState<string | undefined>()
   const [posCartItem, setPosCartItem] = useState<{
@@ -292,12 +293,14 @@ function DesktopInner() {
     options?: {
       barcode?: string
       productId?: string
+      startNewShift?: boolean
       cartItem?: { id: string; name: string; price: number; emoji: string }
     },
   ) => {
     if (!Object.prototype.hasOwnProperty.call(screenTitles, next)) return
     const nextScreen = next as Screen
     if (offlineSession && nextScreen !== 'pos' && nextScreen !== 'scan') return
+    setOpenStartShift(nextScreen === 'shifts' && options?.startNewShift === true)
     setInventoryBarcode(nextScreen === 'inventory' ? options?.barcode : undefined)
     setInventoryProductId(nextScreen === 'inventory' ? options?.productId : undefined)
     setPosCartItem(nextScreen === 'pos' ? options?.cartItem : undefined)
@@ -345,7 +348,7 @@ function DesktopInner() {
       case 'sessions': return <ActiveSessionsScreen onNavigate={navigate} />
       case 'twofa': return <TwoFactorScreen onNavigate={navigate} />
       case 'register': return <AdminRegisterScreen onNavigate={navigate} />
-      case 'shifts': return <ShiftsScreen onNavigate={navigate} />
+      case 'shifts': return <ShiftsScreen onNavigate={navigate} openStartShift={openStartShift} />
       case 'payments': return <PaymentMethodsScreen onNavigate={navigate} />
       case 'roles': return <ManageRolesScreen onNavigate={navigate} />
       case 'receiptsettings': return <ReceiptSettingsScreen onNavigate={navigate} />

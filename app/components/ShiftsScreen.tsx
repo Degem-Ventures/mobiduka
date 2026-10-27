@@ -42,7 +42,11 @@ interface ShiftRecord {
   start: string; end: string | null; openedAt: string; closedAt: string | null; sales: number; amount: number; date: string
 }
 
-interface Props { onNavigate: (s: string) => void; openActiveShift?: boolean }
+interface Props {
+  onNavigate: (s: string) => void
+  openActiveShift?: boolean
+  openStartShift?: boolean
+}
 
 const timeToMinutes = (value: string) => {
   const [hours, minutes] = value.split(':').map(Number)
@@ -178,7 +182,11 @@ const isShiftTypeAvailableNow = (shiftType: ShiftType, now = new Date()) => {
   return currentMinutes >= startMinutes || currentMinutes < endMinutes
 }
 
-export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Props) {
+export default function ShiftsScreen({
+  onNavigate,
+  openActiveShift = false,
+  openStartShift = false,
+}: Props) {
   const c = useColors()
   const session = getClientSession()
   const [view, setView] = useState<'list' | 'start' | 'active' | 'types'>('list')
@@ -415,6 +423,10 @@ export default function ShiftsScreen({ onNavigate, openActiveShift = false }: Pr
     await loadShiftData()
     setView('start')
   }
+
+  useEffect(() => {
+    if (openStartShift) setView('start')
+  }, [openStartShift])
 
   const saveShiftType = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()

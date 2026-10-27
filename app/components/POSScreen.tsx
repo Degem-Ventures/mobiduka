@@ -123,8 +123,28 @@ type PosDraft = {
   selectedOperatorId: string
 }
 
+type SuspendedCart = {
+  id: string
+  heldAt: string
+  timestamp: string
+  cart: CartItem[]
+  total: number
+  discount: number
+  paymentMethod: "cash" | "mpesa" | "credit"
+  mpesaPhone: string
+  selectedCreditor: PosDraft["selectedCreditor"]
+  view: "pos" | "cart" | "payment"
+  checkoutRequestId: string | null
+}
+
 const cartDraftKey = (businessId: string, userId: string) =>
   `mobiduka.pos_draft.v1:${businessId}:${userId}`
+const suspendedCartsKey = (businessId: string, userId: string) =>
+  `mobiduka.pos_held_carts.v1:${businessId}:${userId}`
+const registerLockKey = (businessId: string) =>
+  `mobiduka-pos-register:${businessId}`
+const formatHeldTimestamp = (date: Date) =>
+  date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
 const receiptPageSize = 10
 const receiptHistoryCacheKey = "pos.receipt_history.v1"
 const deviceUuidStorageKey = (businessId: string) =>
@@ -168,7 +188,10 @@ const mapQueuedSalesToReceipts = (
   }))
 
 interface Props {
-  onNavigate: (screen: string) => void
+  onNavigate: (
+    screen: string,
+    options?: { startNewShift?: boolean },
+  ) => void
   initialCartItem?: Omit<CartItem, "qty">
 }
 
@@ -312,6 +335,12 @@ function POSScreenContent({
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState("All")
   const [cart, setCart] = useState<CartItem[]>([])
+  const [suspendedCarts, setSuspendedCarts] = useState<SuspendedCart[]>([])
+  const [registerTabStatus, setRegisterTabStatus] = useState<
+    "checking" | "active" | "blocked" | "error"
+  >("checking")
+  const [registerTabMessage, setRegisterTabMessage] = useState("")
+  const [saleCommitStarted, setSaleCommitStarted] = useState(false)
   const [productView, setProductView] = useState<"grid" | "details">("grid")
   const [view, setView] = useState<
     "pos" | "cart" | "payment" | "receipt" | "history"
@@ -342,6 +371,7 @@ function POSScreenContent({
   const [quickName, setQuickName] = useState("")
   const [quickPhone, setQuickPhone] = useState("")
   const [activeOperators, setActiveOperators] = useState<ActiveOperator[]>([])
+  const [hasLoadedActiveShifts, setHasLoadedActiveShifts] = useState(false)
   const [selectedOperatorId, setSelectedOperatorId] = useState("")
   const [deviceUuid, setDeviceUuid] = useState("")
   const [currentDeviceShiftId, setCurrentDeviceShiftId] = useState("")
@@ -359,6 +389,8 @@ function POSScreenContent({
   const [historicalReceipt, setHistoricalReceipt] = useState<HistoricalReceipt | null>(null)
   const [viewingPastReceipt, setViewingPastReceipt] = useState(false)
   const [isCartDraftReady, setIsCartDraftReady] = useState(false)
+  const [areSuspendedCartsReady, setAreSuspendedCartsReady] = useState(false)
+  const [canPersistSuspendedCarts, setCanPersistSuspendedCarts] = useState(false)
   const [hasLoadedPOSData, setHasLoadedPOSData] = useState(false)
   const [isPOSDataSnapshot, setIsPOSDataSnapshot] = useState(false)
   const [posProductsUpdatedAt, setPosProductsUpdatedAt] = useState<string | null>(null)
@@ -369,6 +401,9 @@ function POSScreenContent({
   const [cartBannerPosition, setCartBannerPosition] = useState({ x: 0, y: 68 })
   const cartBannerDrag = useRef<{ x: number; y: number } | null>(null)
   const cartBannerWasDragged = useRef(false)
+  const saleAttemptId = useRef(0)
+  const saleCommitStartedRef = useRef(false)
+  const activeCheckoutRequestId = useRef<string | null>(null)
   const c = useColors()
   const session = getClientSession()
   const currentBusinessId = session?.user.businessId ?? ""
@@ -377,6 +412,65 @@ function POSScreenContent({
     products.some((product) => product.category === row.name && product.stock > 0),
   )
   const categories = [{ name: "All", emoji: null }, ...populatedCategories]
+
+  useEffect(() => {
+    setRegisterTabStatus("checking")
+    setRegisterTabMessage("")
+    if (!currentBusinessId) {
+      setRegisterTabStatus("active")
+      return
+    }
+
+    const lockKey = registerLockKey(currentBusinessId)
+    if (!navigator.locks) {
+      setRegisterTabStatus("error")
+      setRegisterTabMessage(
+        "This browser cannot safely lock the register across tabs. Use a supported browser to continue.",
+      )
+      return
+    }
+
+    let disposed = false
+    let retryTimer: number | null = null
+    let releaseLock: (() => void) | null = null
+    const requestLock = () => {
+      if (disposed) return
+      void navigator.locks
+        .request(lockKey, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+          if (disposed) return
+          if (!lock) {
+            setRegisterTabStatus("blocked")
+            setRegisterTabMessage(
+              "This business register is already active in another tab. This page will retry automatically when it becomes available.",
+            )
+            retryTimer = window.setTimeout(requestLock, 1500)
+            return
+          }
+          setRegisterTabStatus("active")
+          setRegisterTabMessage("")
+          await new Promise<void>((resolve) => {
+            releaseLock = resolve
+          })
+        })
+        .catch((reason: unknown) => {
+          if (disposed) return
+          setRegisterTabStatus("error")
+          setRegisterTabMessage(
+            reason instanceof Error
+              ? reason.message
+              : "Unable to secure this register tab.",
+          )
+        })
+    }
+
+    requestLock()
+
+    return () => {
+      disposed = true
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
+      releaseLock?.()
+    }
+  }, [currentBusinessId])
 
   useEffect(() => {
     if (!currentBusinessId) return
@@ -405,6 +499,7 @@ function POSScreenContent({
   // any state back to browser storage, so navigation never clears the cart.
   useEffect(() => {
     setIsCartDraftReady(false)
+    if (registerTabStatus !== "active") return
     if (!currentBusinessId || !currentUserId) {
       setIsCartDraftReady(true)
       return
@@ -460,10 +555,16 @@ function POSScreenContent({
     } finally {
       setIsCartDraftReady(true)
     }
-  }, [currentBusinessId, currentUserId])
+  }, [currentBusinessId, currentUserId, registerTabStatus])
 
   useEffect(() => {
-    if (!isCartDraftReady || !currentBusinessId || !currentUserId) return
+    if (
+      registerTabStatus !== "active" ||
+      !isCartDraftReady ||
+      !currentBusinessId ||
+      !currentUserId
+    )
+      return
     const key = cartDraftKey(currentBusinessId, currentUserId)
     // A completed receipt must never be restored as an unpaid cart.
     if (cart.length === 0 || (view === "receipt" && !viewingPastReceipt)) {
@@ -488,10 +589,105 @@ function POSScreenContent({
     isCartDraftReady,
     mpesaPhone,
     paymentMethod,
+    registerTabStatus,
     selectedCreditor,
     selectedOperatorId,
     viewingPastReceipt,
     view,
+  ])
+
+  useEffect(() => {
+    setAreSuspendedCartsReady(false)
+    setCanPersistSuspendedCarts(false)
+    if (registerTabStatus !== "active" || !currentBusinessId || !currentUserId)
+      return
+    try {
+      const raw = window.localStorage.getItem(
+        suspendedCartsKey(currentBusinessId, currentUserId),
+      )
+      const parsed = raw ? (JSON.parse(raw) as unknown) : []
+      if (!Array.isArray(parsed)) {
+        throw new Error("The held-cart queue is invalid.")
+      }
+      const validCarts = parsed.filter(
+        (held): held is SuspendedCart =>
+          Boolean(held) &&
+          typeof held.id === "string" &&
+          typeof held.heldAt === "string" &&
+          typeof held.timestamp === "string" &&
+          Array.isArray(held.cart) &&
+          held.cart.every(
+            (item: CartItem) =>
+              Boolean(item) &&
+              typeof item.id === "string" &&
+              typeof item.name === "string" &&
+              Number.isFinite(item.price) &&
+              Number.isInteger(item.qty) &&
+              item.qty > 0,
+          ) &&
+          Number.isFinite(held.total) &&
+          Number.isFinite(held.discount) &&
+          typeof held.mpesaPhone === "string" &&
+          (held.view === "pos" ||
+            held.view === "cart" ||
+            held.view === "payment") &&
+          (held.selectedCreditor === null ||
+            (typeof held.selectedCreditor?.id === "string" &&
+              typeof held.selectedCreditor.name === "string" &&
+              typeof held.selectedCreditor.phone === "string")) &&
+          (held.paymentMethod === "cash" ||
+            held.paymentMethod === "mpesa" ||
+            held.paymentMethod === "credit") &&
+          (held.checkoutRequestId === null ||
+            typeof held.checkoutRequestId === "string"),
+      )
+      if (validCarts.length !== parsed.length) {
+        throw new Error("One or more held carts could not be restored.")
+      }
+      setSuspendedCarts(validCarts)
+      setCanPersistSuspendedCarts(true)
+    } catch (reason) {
+      setDataError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to restore held carts.",
+      )
+    } finally {
+      setAreSuspendedCartsReady(true)
+    }
+  }, [currentBusinessId, currentUserId, registerTabStatus, setDataError])
+
+  useEffect(() => {
+    if (
+      registerTabStatus !== "active" ||
+      !areSuspendedCartsReady ||
+      !canPersistSuspendedCarts ||
+      !currentBusinessId ||
+      !currentUserId
+    )
+      return
+    const key = suspendedCartsKey(currentBusinessId, currentUserId)
+    try {
+      if (suspendedCarts.length === 0) {
+        window.localStorage.removeItem(key)
+      } else {
+        window.localStorage.setItem(key, JSON.stringify(suspendedCarts))
+      }
+    } catch (reason) {
+      setDataError(
+        reason instanceof Error
+          ? `Unable to save held carts: ${reason.message}`
+          : "Unable to save held carts.",
+      )
+    }
+  }, [
+    areSuspendedCartsReady,
+    canPersistSuspendedCarts,
+    currentBusinessId,
+    currentUserId,
+    registerTabStatus,
+    setDataError,
+    suspendedCarts,
   ])
 
   useEffect(() => {
@@ -725,6 +921,7 @@ function POSScreenContent({
     if (!session || !currentBusinessId) return
     let cancelled = false
     let loading = false
+    setHasLoadedActiveShifts(false)
     const scopeOperatorsToOfflineCashier = (operators: ActiveOperator[]) =>
       session.user.offline
         ? operators.filter((operator) => operator.id === session.user.id)
@@ -945,6 +1142,7 @@ function POSScreenContent({
         }
       } finally {
         loading = false
+        if (!cancelled) setHasLoadedActiveShifts(true)
       }
     }
 
@@ -1124,6 +1322,380 @@ function POSScreenContent({
   const total = subtotal - discountAmt
   const cartCount = cart.reduce((s, x) => s + x.qty, 0)
 
+  const createSuspendedCart = (
+    cartItems: CartItem[],
+    cartTotal: number,
+    cartDiscount: number,
+    cartPaymentMethod: "cash" | "mpesa" | "credit",
+    phone: string,
+    creditor: PosDraft["selectedCreditor"],
+    cartView: "pos" | "cart" | "payment" | "receipt" | "history",
+    checkoutRequestId: string | null,
+  ): SuspendedCart => {
+    const now = new Date()
+    return {
+      id: `HOLD-${now.getTime()}-${window.crypto.randomUUID()}`,
+      heldAt: now.toISOString(),
+      timestamp: formatHeldTimestamp(now),
+      cart: cartItems.map((item) => ({ ...item })),
+      total: cartTotal,
+      discount: cartDiscount,
+      paymentMethod: cartPaymentMethod,
+      mpesaPhone: phone,
+      selectedCreditor: creditor ? { ...creditor } : null,
+      view: cartView === "receipt" || cartView === "history" ? "pos" : cartView,
+      checkoutRequestId,
+    }
+  }
+
+  const persistSuspendedCarts = (carts: SuspendedCart[]) => {
+    try {
+      const key = suspendedCartsKey(currentBusinessId, currentUserId)
+      if (carts.length === 0) {
+        window.localStorage.removeItem(key)
+      } else {
+        window.localStorage.setItem(key, JSON.stringify(carts))
+      }
+      return true
+    } catch (reason) {
+      setDataError(
+        reason instanceof Error
+          ? `Unable to save held carts: ${reason.message}`
+          : "Unable to save held carts.",
+      )
+      return false
+    }
+  }
+
+  const holdCurrentCart = () => {
+    if (
+      cart.length === 0 ||
+      !areSuspendedCartsReady ||
+      !canPersistSuspendedCarts
+    )
+      return
+    if (saleCommitStartedRef.current) {
+      setDataError(
+        "The sale is being recorded. Wait for it to finish before holding this cart.",
+      )
+      return
+    }
+    if (isCompletingSale && !activeCheckoutRequestId.current) {
+      setDataError("Wait for the M-PESA prompt to start before holding this cart.")
+      return
+    }
+    const heldCart = createSuspendedCart(
+      cart,
+      total,
+      discount,
+      paymentMethod,
+      mpesaPhone,
+      selectedCreditor,
+      view,
+      paymentMethod === "mpesa" ? activeCheckoutRequestId.current : null,
+    )
+    const nextSuspendedCarts = [heldCart, ...suspendedCarts]
+    if (!persistSuspendedCarts(nextSuspendedCarts)) return
+    if (isCompletingSale) {
+      saleAttemptId.current += 1
+      setIsCompletingSale(false)
+    }
+    activeCheckoutRequestId.current = null
+    saleCommitStartedRef.current = false
+    setSaleCommitStarted(false)
+    setSuspendedCarts(nextSuspendedCarts)
+    clearCart()
+    setMpesaPhone("254")
+    setMpesaStatus("")
+    setShowMpesaQr(false)
+    setMpesaQrDetails(null)
+    setView("pos")
+  }
+
+  const resumeSuspendedCart = (heldCart: SuspendedCart) => {
+    if (saleCommitStartedRef.current) {
+      setDataError(
+        "The current sale is being recorded. Wait for it to finish before resuming another cart.",
+      )
+      return
+    }
+    if (cart.length > 0) {
+      const shouldReplace = window.confirm(
+        "Your current cart will be saved to the held queue before this cart is resumed. Continue?",
+      )
+      if (!shouldReplace) return
+    }
+    if (isCompletingSale && !activeCheckoutRequestId.current) {
+      setDataError("Wait for the M-PESA prompt to start before switching carts.")
+      return
+    }
+
+    const currentHeldCart =
+      cart.length > 0
+        ? createSuspendedCart(
+            cart,
+            total,
+            discount,
+            paymentMethod,
+            mpesaPhone,
+            selectedCreditor,
+            view,
+            paymentMethod === "mpesa" ? activeCheckoutRequestId.current : null,
+          )
+        : null
+    const nextSuspendedCarts = [
+      ...(currentHeldCart ? [currentHeldCart] : []),
+      ...suspendedCarts.filter((item) => item.id !== heldCart.id),
+    ]
+    if (!persistSuspendedCarts(nextSuspendedCarts)) return
+    if (isCompletingSale) {
+      saleAttemptId.current += 1
+      setIsCompletingSale(false)
+    }
+    activeCheckoutRequestId.current = heldCart.checkoutRequestId
+    saleCommitStartedRef.current = false
+    setSaleCommitStarted(false)
+    setSuspendedCarts(nextSuspendedCarts)
+    clearCart()
+    setCart(heldCart.cart.map((item) => ({ ...item })))
+    setDiscount(heldCart.discount)
+    setPaymentMethod(heldCart.paymentMethod)
+    setMpesaPhone(heldCart.mpesaPhone)
+    setSelectedCreditor(heldCart.selectedCreditor)
+    setMpesaStatus(
+      heldCart.checkoutRequestId
+        ? "Existing M-PESA prompt restored. Check its status before sending another prompt."
+        : "",
+    )
+    setShowMpesaQr(false)
+    setMpesaQrDetails(null)
+    setView(
+      heldCart.checkoutRequestId
+        ? "payment"
+        : heldCart.view,
+    )
+  }
+
+  const renderNoActiveShiftNotice = () =>
+    hasLoadedActiveShifts &&
+    activeOperators.length === 0 && (
+      <div
+        role="alert"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          marginBottom: 14,
+          padding: 14,
+          border: `1px solid ${c.isDark ? "rgba(255,193,7,0.28)" : "#F2D38A"}`,
+          borderRadius: 16,
+          background: c.isDark
+            ? "linear-gradient(135deg, rgba(255,193,7,0.12), rgba(255,255,255,0.035))"
+            : "linear-gradient(135deg, #FFF9E8, #FFFFFF)",
+          boxShadow: c.isDark
+            ? "0 8px 24px rgba(0,0,0,0.12)"
+            : "0 8px 24px rgba(100,75,0,0.07)",
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            display: "grid",
+            placeItems: "center",
+            width: 42,
+            height: 42,
+            flexShrink: 0,
+            borderRadius: 13,
+            background: c.isDark ? "rgba(255,193,7,0.16)" : "#FFF0C2",
+            color: c.isDark ? "#FFD56A" : "#805B00",
+          }}
+        >
+          <svg
+            width="21"
+            height="21"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <strong
+            style={{
+              display: "block",
+              color: c.text,
+              fontSize: 13,
+              marginBottom: 3,
+            }}
+          >
+            No active shift
+          </strong>
+          <span style={{ color: c.muted, fontSize: 11, lineHeight: 1.4 }}>
+            Start a cashier shift to enable checkout.
+          </span>
+        </span>
+        <button
+          type="button"
+          aria-label="Start a new shift"
+          title="Start a new shift"
+          onClick={() => onNavigate("shifts", { startNewShift: true })}
+          style={{
+            display: "grid",
+            placeItems: "center",
+            width: 42,
+            height: 42,
+            flexShrink: 0,
+            border: "none",
+            borderRadius: 13,
+            background: "linear-gradient(135deg, #123A8F, #1A4FBF)",
+            color: "white",
+            cursor: "pointer",
+            boxShadow: "0 5px 14px rgba(18,58,143,0.24)",
+          }}
+        >
+          <svg
+            width="19"
+            height="19"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      </div>
+    )
+
+  const renderSuspendedCartQueue = () => (
+    <section
+      aria-label="Held carts"
+      style={{
+        padding: 14,
+        marginBottom: 14,
+        border: `1px solid ${c.divider}`,
+        borderRadius: 14,
+        background: c.card,
+        color: c.text,
+      }}
+    >
+      {cart.length > 0 && (
+        <button
+          type="button"
+          className="btn"
+          onClick={holdCurrentCart}
+          disabled={
+            !areSuspendedCartsReady ||
+            !canPersistSuspendedCarts ||
+            saleCommitStarted ||
+            (isCompletingSale && !activeCheckoutRequestId.current)
+          }
+          style={{
+            width: "100%",
+            minHeight: 46,
+            marginBottom: suspendedCarts.length > 0 ? 12 : 0,
+            border: "1px solid rgba(46,125,50,0.28)",
+            borderRadius: 11,
+            background: c.isDark ? "rgba(46,125,50,0.2)" : "#E8F5E9",
+            color: c.isDark ? "#8FE39A" : "#1B5E20",
+            fontSize: 13,
+            fontWeight: 800,
+            cursor: saleCommitStarted ? "not-allowed" : "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          📥 Hold Current Cart (
+          {paymentMethod === "mpesa"
+            ? "M-Pesa Waiting"
+            : paymentMethod === "credit"
+              ? "Credit Waiting"
+              : "Cash Waiting"}
+          )
+        </button>
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: suspendedCarts.length > 0 ? 10 : 0,
+        }}
+      >
+        <strong style={{ fontSize: 13 }}>Held carts</strong>
+        <span style={{ fontSize: 11, color: c.muted }}>
+          {suspendedCarts.length} waiting
+        </span>
+      </div>
+      {!areSuspendedCartsReady ? (
+        <div style={{ color: c.muted, fontSize: 12 }}>Loading held carts…</div>
+      ) : suspendedCarts.length === 0 ? (
+        <div style={{ color: c.muted, fontSize: 12 }}>
+          Held carts will appear here.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {suspendedCarts.map((heldCart) => (
+            <div
+              key={heldCart.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 11px",
+                border: `1px solid ${c.divider}`,
+                borderRadius: 11,
+                background: c.isDark ? "rgba(255,255,255,0.035)" : "#F8FAFC",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <strong style={{ display: "block", fontSize: 12 }}>
+                  {heldCart.timestamp}
+                  {heldCart.checkoutRequestId ? " · M-PESA waiting" : ""}
+                </strong>
+                <span style={{ color: c.muted, fontSize: 11 }}>
+                  {heldCart.cart.reduce((count, item) => count + item.qty, 0)}{" "}
+                  items · KSh {heldCart.total.toLocaleString()}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => resumeSuspendedCart(heldCart)}
+                disabled={
+                  !areSuspendedCartsReady ||
+                  !canPersistSuspendedCarts ||
+                  saleCommitStarted
+                }
+                style={{
+                  minHeight: 36,
+                  padding: "0 12px",
+                  border: "none",
+                  borderRadius: 9,
+                  background: "#2E7D32",
+                  color: "white",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: saleCommitStarted ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Resume ⚡
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+
   const openMpesaQr = async () => {
     if (!currentBusinessId || total <= 0 || !Number.isInteger(total)) {
       setMpesaQrError(
@@ -1221,6 +1793,7 @@ function POSScreenContent({
   const completeSale = async (confirmMpesaQr = false) => {
     if (
       subscriptionBlocked ||
+      registerTabStatus !== "active" ||
       !session ||
       !selectedOperatorId ||
       !currentDeviceShiftId ||
@@ -1229,50 +1802,62 @@ function POSScreenContent({
       (confirmMpesaQr && paymentMethod !== "mpesa")
     )
       return
+    const attemptId = ++saleAttemptId.current
+    saleCommitStartedRef.current = false
+    setSaleCommitStarted(false)
     setIsCompletingSale(true)
     setMpesaStatus("")
     let mpesaReceipt: string | undefined
+    let checkoutRequestId = activeCheckoutRequestId.current
     try {
       if (paymentMethod === "mpesa" && confirmMpesaQr) {
         setMpesaStatus("Cashier confirmed M-PESA QR payment. Completing sale…")
       } else if (paymentMethod === "mpesa") {
-        const enteredPhone = mpesaPhone.replace(/\s+/g, "").replace(/^\+/, "")
-        const normalizedPhone = enteredPhone.startsWith("0")
-          ? `254${enteredPhone.slice(1)}`
-          : enteredPhone.startsWith("254")
-            ? enteredPhone
-            : `254${enteredPhone}`
-        if (!/^254(?:7|1)\d{8}$/.test(normalizedPhone))
-          throw new Error(
-            "Enter a valid Kenyan phone number, for example 254712345678.",
+        if (!checkoutRequestId) {
+          const enteredPhone = mpesaPhone.replace(/\s+/g, "").replace(/^\+/, "")
+          const normalizedPhone = enteredPhone.startsWith("0")
+            ? `254${enteredPhone.slice(1)}`
+            : enteredPhone.startsWith("254")
+              ? enteredPhone
+              : `254${enteredPhone}`
+          if (!/^254(?:7|1)\d{8}$/.test(normalizedPhone))
+            throw new Error(
+              "Enter a valid Kenyan phone number, for example 254712345678.",
+            )
+          setMpesaPhone(normalizedPhone)
+          const confirmed = window.confirm(
+            `Send an M-Pesa payment prompt?\n\nAmount: KSh ${total.toLocaleString()}\nCustomer phone: ${normalizedPhone}\n\nThe customer must enter their M-Pesa PIN before the sale is completed.`,
           )
-        setMpesaPhone(normalizedPhone)
-        const confirmed = window.confirm(
-          `Send an M-Pesa payment prompt?\n\nAmount: KSh ${total.toLocaleString()}\nCustomer phone: ${normalizedPhone}\n\nThe customer must enter their M-Pesa PIN before the sale is completed.`,
-        )
-        if (!confirmed) return
-        setMpesaStatus("Sending STK prompt to the customer phone…")
-        const push = await apiFetch<{
-          success: boolean
-          checkoutRequestId?: string
-          darajaResult?: { CheckoutRequestID?: string }
-          error?: string
-        }>("/api/payments/stk-push", {
-          method: "POST",
-          body: JSON.stringify({
-            phoneNumber: normalizedPhone,
-            amount: total,
-            businessId: currentBusinessId,
-          }),
-        })
-        const checkoutRequestId =
-          push.checkoutRequestId ?? push.darajaResult?.CheckoutRequestID
-        if (!push.success || !checkoutRequestId)
-          throw new Error(push.error ?? "Unable to start the M-Pesa payment.")
+          if (!confirmed) return
+          setMpesaStatus("Sending STK prompt to the customer phone…")
+          const push = await apiFetch<{
+            success: boolean
+            checkoutRequestId?: string
+            darajaResult?: { CheckoutRequestID?: string }
+            error?: string
+          }>("/api/payments/stk-push", {
+            method: "POST",
+            body: JSON.stringify({
+              phoneNumber: normalizedPhone,
+              amount: total,
+              businessId: currentBusinessId,
+            }),
+          })
+          if (saleAttemptId.current !== attemptId) return
+          checkoutRequestId =
+            push.checkoutRequestId ?? push.darajaResult?.CheckoutRequestID ?? null
+          if (!push.success || !checkoutRequestId)
+            throw new Error(push.error ?? "Unable to start the M-Pesa payment.")
+          activeCheckoutRequestId.current = checkoutRequestId
+        } else {
+          setMpesaStatus("Checking the existing M-PESA payment prompt…")
+        }
 
         for (let attempt = 0; attempt < 20; attempt += 1) {
+          if (saleAttemptId.current !== attemptId) return
           setMpesaStatus("Waiting for the customer to enter their M-Pesa PIN…")
           await new Promise((resolve) => window.setTimeout(resolve, 3000))
+          if (saleAttemptId.current !== attemptId) return
           const status = await apiFetch<{
             status: string
             receipt?: string
@@ -1284,15 +1869,19 @@ function POSScreenContent({
               businessId: currentBusinessId,
             }),
           })
+          if (saleAttemptId.current !== attemptId) return
           if (status.status === "SUCCESS") {
             mpesaReceipt = status.receipt
+            activeCheckoutRequestId.current = null
             setMpesaStatus("M-Pesa payment verified. Completing sale…")
             break
           }
-          if (status.status === "FAILED" || status.status === "CANCELLED")
+          if (status.status === "FAILED" || status.status === "CANCELLED") {
+            activeCheckoutRequestId.current = null
             throw new Error(
               status.message ?? "M-Pesa payment was not completed.",
             )
+          }
           if (attempt === 19)
             throw new Error(
               "M-Pesa verification timed out. Check the customer phone before retrying.",
@@ -1308,6 +1897,9 @@ function POSScreenContent({
         business: { name: string; branch: string | null }
       }
       let syncState: ReceiptInfo["syncState"] = "SYNCED"
+      if (saleAttemptId.current !== attemptId) return
+      saleCommitStartedRef.current = true
+      setSaleCommitStarted(true)
       try {
         receipt = await apiFetch("/api/sales", {
           method: "POST",
@@ -1384,6 +1976,7 @@ function POSScreenContent({
         )
         setPendingOfflineSales((count) => count + 1)
       }
+      activeCheckoutRequestId.current = null
       window.dispatchEvent(new Event("mobiduka-notification"))
       setReceiptInfo({
         saleNumber: receipt.saleNumber,
@@ -1399,6 +1992,7 @@ function POSScreenContent({
       setMpesaQrDetails(null)
       setView("receipt")
     } catch (reason) {
+      if (saleAttemptId.current !== attemptId) return
       if (
         reason instanceof ApiResponseError &&
         reason.code === "SUBSCRIPTION_WRITE_LOCKED"
@@ -1423,7 +2017,11 @@ function POSScreenContent({
         6000,
       )
     } finally {
-      setIsCompletingSale(false)
+      if (saleAttemptId.current === attemptId) {
+        setIsCompletingSale(false)
+        saleCommitStartedRef.current = false
+        setSaleCommitStarted(false)
+      }
     }
   }
 
@@ -1484,6 +2082,49 @@ function POSScreenContent({
     : [receiptInfo?.businessName, receiptInfo?.businessBranch]
         .filter(Boolean)
         .join(" · ")
+
+  if (registerTabStatus !== "active") {
+    return (
+      <div
+        className="screen"
+        role={registerTabStatus === "error" ? "alert" : "status"}
+        style={{
+          display: "grid",
+          placeItems: "center",
+          padding: 24,
+          background: c.bg,
+          color: c.text,
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 420,
+            padding: 24,
+            border: `1px solid ${c.divider}`,
+            borderRadius: 18,
+            background: c.card,
+          }}
+        >
+          <div style={{ fontSize: 36, marginBottom: 12 }}>
+            {registerTabStatus === "checking" ? "⏳" : "🔒"}
+          </div>
+          <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>
+            {registerTabStatus === "checking"
+              ? "Securing register"
+              : registerTabStatus === "error"
+                ? "Register unavailable"
+                : "Register already open"}
+          </h2>
+          <p style={{ margin: 0, color: c.muted, fontSize: 13, lineHeight: 1.5 }}>
+            {registerTabMessage ||
+              "Checking that this is the only active register tab for this business."}
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   if (view === "receipt") {
     const receiptOperator = activeOperators.find(
@@ -2402,6 +3043,25 @@ function POSScreenContent({
               {dataError}
             </div>
           )}
+          {renderNoActiveShiftNotice()}
+          {renderSuspendedCartQueue()}
+          {activeCheckoutRequestId.current && (
+            <div
+              role="status"
+              style={{
+                marginBottom: 14,
+                padding: "11px 13px",
+                borderRadius: 10,
+                background: c.isDark ? "rgba(46,125,50,0.18)" : "#E8F5E9",
+                color: c.isDark ? "#A5D6A7" : "#1B5E20",
+                fontSize: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              {mpesaStatus ||
+                "An M-PESA prompt is already active. Check its status before sending another prompt."}
+            </div>
+          )}
           {(pendingOfflineSales > 0 || failedOfflineSales > 0) && (
             <div
               role="status"
@@ -2485,6 +3145,10 @@ function POSScreenContent({
               <button
                 key={m.key}
                 className="btn"
+                disabled={
+                  Boolean(activeCheckoutRequestId.current) &&
+                  m.key !== "mpesa"
+                }
                 onClick={() =>
                   setPaymentMethod(m.key as "cash" | "mpesa" | "credit")
                 }
@@ -2501,7 +3165,10 @@ function POSScreenContent({
                     paymentMethod === m.key
                       ? `2px solid ${m.color}`
                       : "1.5px solid #E8ECF4",
-                  cursor: "pointer",
+                  cursor:
+                    activeCheckoutRequestId.current && m.key !== "mpesa"
+                      ? "not-allowed"
+                      : "pointer",
                   fontFamily: "inherit",
                   boxShadow:
                     paymentMethod === m.key
@@ -3378,23 +4045,6 @@ function POSScreenContent({
               ))}
             </div>
           )}
-          {activeOperators.length === 0 && (
-            <div
-              role="alert"
-              style={{
-                marginTop: 20,
-                padding: "12px 14px",
-                borderRadius: 12,
-                background: c.warningBg,
-                color: c.muted,
-                fontSize: 12,
-              }}
-            >
-              No active cashier shifts are available for this device. Start a
-              shift before completing a sale.
-            </div>
-          )}
-
           {(() => {
             const canComplete =
               !subscriptionBlocked &&
@@ -3531,6 +4181,8 @@ function POSScreenContent({
           </div>
         </div>
         <div className="scroll-area" style={{ padding: "16px", flex: 1 }}>
+          {renderNoActiveShiftNotice()}
+          {renderSuspendedCartQueue()}
           {selectedCreditor && paymentMethod === "credit" && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 12px", marginBottom: 14, borderRadius: 10, background: "rgba(211,47,47,0.09)", color: "#B71C1C" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -4066,6 +4718,8 @@ function POSScreenContent({
         className="scroll-area"
         style={{ padding: "12px", paddingBottom: 80 }}
       >
+        {renderNoActiveShiftNotice()}
+        {renderSuspendedCartQueue()}
         <div
           style={{
             display: "flex",

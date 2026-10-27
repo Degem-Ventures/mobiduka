@@ -171,6 +171,7 @@ function AppInner() {
   const [activeShiftsUpdatedAt, setActiveShiftsUpdatedAt] =
     useState<string | null>(null)
   const [openActiveShift, setOpenActiveShift] = useState(false)
+  const [openStartShift, setOpenStartShift] = useState(false)
   const [shiftBannerPosition, setShiftBannerPosition] = useState({ y: 0 })
   const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null)
   const shiftBannerWasDragged = useRef(false)
@@ -394,6 +395,7 @@ function AppInner() {
     options?: {
       barcode?: string
       productId?: string
+      startNewShift?: boolean
       cartItem?: {
         id: string
         name: string
@@ -409,7 +411,13 @@ function AppInner() {
       nextScreen !== "scan"
     )
       return
-    if (nextScreen !== "shifts") setOpenActiveShift(false)
+    if (options?.startNewShift) {
+      setOpenActiveShift(false)
+      setOpenStartShift(true)
+    } else if (nextScreen !== "shifts") {
+      setOpenActiveShift(false)
+      setOpenStartShift(false)
+    }
     setInventoryBarcode(
       nextScreen === "inventory" ? options?.barcode : undefined,
     )
@@ -488,6 +496,7 @@ function AppInner() {
           <ShiftsScreen
             onNavigate={handleNavigate}
             openActiveShift={openActiveShift}
+            openStartShift={openStartShift}
           />
         )
       case "payments":
