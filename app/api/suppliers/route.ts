@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 const supplierSelect = {
   id: true,
@@ -53,6 +54,8 @@ export async function POST(request: Request) {
     const businessId = requireBusinessAccess(request, body.businessId);
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!businessId || !name) return NextResponse.json({ error: "Authenticated business context and supplier name are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const duplicate = await prisma.supplier.findFirst({ where: { businessId, name }, select: { id: true } });
     if (duplicate) return NextResponse.json({ error: "A supplier with this name already exists." }, { status: 409 });
@@ -93,6 +96,8 @@ export async function PATCH(request: Request) {
     const supplierId = typeof body.id === "string" ? body.id.trim() : new URL(request.url).searchParams.get("id")?.trim();
     const businessId = requireBusinessAccess(request, body.businessId);
     if (!businessId || !supplierId) return NextResponse.json({ error: "Authenticated business context and supplier id are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const existing = await prisma.supplier.findFirst({ where: { id: supplierId, businessId }, select: { id: true, name: true } });
     if (!existing) return NextResponse.json({ error: "Supplier was not found." }, { status: 404 });
@@ -130,6 +135,8 @@ export async function DELETE(request: Request) {
     const supplierId = url.searchParams.get("id")?.trim();
     const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
     if (!businessId || !supplierId) return NextResponse.json({ error: "Authenticated business context and supplier id are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const supplier = await prisma.supplier.findFirst({ where: { id: supplierId, businessId }, select: { id: true, _count: { select: { products: true, purchaseOrders: true } } } });
     if (!supplier) return NextResponse.json({ error: "Supplier was not found." }, { status: 404 });

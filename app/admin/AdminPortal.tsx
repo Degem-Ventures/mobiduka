@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { formatPlanPrice, planCatalog } from '../plans/plan-catalog'
 import { AdminDataProvider, useAdminData, type AdminModalType } from './AdminDataProvider'
@@ -378,7 +378,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
                 <div className="admin-quick-menu">
                   <button onClick={() => openCreate('tenant')}><AdminIcon name="tenants" size={16}/><div><strong>Tenant workspace</strong><span>Business, owner and M-PESA node</span></div></button>
                   <button onClick={() => openCreate('user')}><AdminIcon name="identity" size={16}/><div><strong>User identity</strong><span>Invite and assign RBAC scope</span></div></button>
-                  <button onClick={() => openCreate('license')}><AdminIcon name="licenses" size={16}/><div><strong>Strategic license</strong><span>Provision tier and contract</span></div></button>
+                  <Link href="/admin/licenses" onClick={() => setQuickOpen(false)}><AdminIcon name="licenses" size={16}/><div><strong>Manage licenses</strong><span>View trials, plans and enforcement</span></div></Link>
                 </div>
               )}
             </div>
@@ -837,58 +837,120 @@ export function AdminIdentity() {
 }
 
 export function AdminLicenses() {
-  const { licenses, setLicenses, openCreate } = useAdminData()
-  const [rules, setRules] = useState<Record<string, boolean>>(
-    Object.fromEntries(planCatalog.map(plan => [plan.name, plan.upgradeRulesEnabled])),
-  )
-  const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null)
-  const toggleRenewal = (id: string) => setLicenses(current => current.map(license => license.id === id ? { ...license, renewal: !license.renewal } : license))
-  const revoke = (id: string) => {
-    setLicenses(current => current.map(license => license.id === id ? { ...license, status: 'revoked', renewal: false } : license))
-    setConfirmRevoke(null)
+  type SubscriptionRecord = {
+    id: string
+    businessId: string
+    planType: string
+    status: string
+    trialEndsAt: string | null
+    currentPeriodEndsAt: string | null
+    graceEndsAt: string | null
+    licenseCost: number
+    autoRenewActive: boolean
+    business: { id: string; name: string; ownerName: string | null; email: string | null }
   }
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [pendingId, setPendingId] = useState<string | null>(null)
+
+  const refreshSubscriptions = async () => {
+    const response = await fetch('/api/admin/licenses', { cache: 'no-store' })
+    const result = await response.json() as { subscriptions?: SubscriptionRecord[]; error?: string }
+    if (!response.ok) throw new Error(result.error ?? 'Unable to load subscriptions.')
+    setSubscriptions(result.subscriptions ?? [])
+  }
+
+  useEffect(() => {
+    void refreshSubscriptions()
+      .catch(error => setLoadError(error instanceof Error ? error.message : 'Unable to load subscriptions.'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const updateSubscription = async (subscription: SubscriptionRecord, action: 'ACTIVATE' | 'RENEW' | 'REVOKE' | 'AUTO_RENEW') => {
+    setActionError('')
+    setPendingId(subscription.id)
+    try {
+      const response = await fetch('/api/admin/licenses', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          subscriptionId: subscription.id,
+          planType: subscription.planType,
+          durationDays: 30,
+          ...(action === 'AUTO_RENEW' ? { autoRenewActive: !subscription.autoRenewActive } : {}),
+        }),
+      })
+      const result = await response.json() as { error?: string }
+      if (!response.ok) throw new Error(result.error ?? 'Unable to update subscription.')
+      await refreshSubscriptions()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to update subscription.')
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  const trialCount = subscriptions.filter(subscription => subscription.status === 'TRIAL').length
+  const activeCount = subscriptions.filter(subscription => subscription.status === 'ACTIVE').length
+  const attentionCount = subscriptions.filter(subscription => ['GRACE', 'EXPIRED', 'REVOKED'].includes(subscription.status)).length
 
   return (
     <div className="admin-page-stack">
       <section className="admin-license-metrics">
-        <div><span>Monthly recurring revenue</span><strong>KSh 4.05M</strong><small>+16.8% year over year</small></div>
-        <div><span>Paid licenses</span><strong>1,253</strong><small>97.6% collection rate</small></div>
-        <div><span>Renewal pipeline</span><strong>KSh 682K</strong><small>Due within 30 days</small></div>
-        <div><span>Grace period</span><strong>19</strong><small>7 require intervention</small></div>
+        <div><span>Businesses with subscriptions</span><strong>{subscriptions.length}</strong><small>Current platform records</small></div>
+        <div><span>Active subscriptions</span><strong>{activeCount}</strong><small>Paid period in effect</small></div>
+        <div><span>14-day trials</span><strong>{trialCount}</strong><small>Trial access running</small></div>
+        <div><span>Requires attention</span><strong>{attentionCount}</strong><small>Grace, expired, or revoked</small></div>
       </section>
 
       <section className="admin-plan-grid">
         {planCatalog.map(plan => (
           <article className={`admin-plan-card ${plan.color}`} key={plan.name}>
-            <div className="admin-plan-head"><div><span>{plan.subtitle}</span><h2>{plan.name}</h2></div><span className={`admin-plan-badge ${plan.name.toLowerCase()}`}>{plan.tenants} tenants</span></div>
+            <div className="admin-plan-head"><div><span>{plan.subtitle}</span><h2>{plan.name}</h2></div><span className={`admin-plan-badge ${plan.name.toLowerCase()}`}>{subscriptions.filter(subscription => subscription.planType === plan.name.toUpperCase()).length} tenants</span></div>
             <div className="admin-plan-price"><strong>KSh {formatPlanPrice(plan)}</strong><span>/ month</span></div>
             <ul>{plan.adminFeatures.map(feature => <li key={feature}><AdminIcon name="check" size={13}/>{feature}</li>)}</ul>
             <div className="admin-plan-rule">
-              <div><strong>Deploy live upgrade rules</strong><span>Auto-enforce limits and upsell prompts</span></div>
-              <button className={`admin-toggle ${rules[plan.name] ? 'on' : ''}`} onClick={() => setRules(current => ({ ...current, [plan.name]: !current[plan.name] }))} aria-pressed={rules[plan.name]}><span/></button>
+              <div><strong>Trial entitlement</strong><span>New businesses receive a 14-day Basic trial.</span></div>
             </div>
           </article>
         ))}
       </section>
 
       <div className="admin-table-panel">
-        <div className="admin-table-title-row"><div><span>License ledger</span><h2>Contracts & enforcement</h2></div><div><button className="admin-secondary-button" onClick={() => downloadCsv('mobiduka-contract-matrix.csv', licenses.map(license => ({
-          LicenseID: license.id, Tenant: license.tenant, Tier: license.plan, Expiration: license.expires,
-          AutomaticRenewal: license.renewal, MonthlyValueKSh: license.amount, Status: license.status,
-        })))}>Export Contract Matrix Ledger</button><button className="admin-primary-button" onClick={() => openCreate('license')}>Provision Strategic Tier Extension</button></div></div>
+        <div className="admin-table-title-row"><div><span>Subscription ledger</span><h2>Contracts & enforcement</h2></div><div><button className="admin-secondary-button" onClick={() => downloadCsv('mobiduka-subscriptions.csv', subscriptions.map(subscription => ({
+          SubscriptionID: subscription.id, BusinessID: subscription.businessId, Business: subscription.business.name,
+          Plan: subscription.planType, Status: subscription.status, TrialEndsAt: subscription.trialEndsAt ?? '',
+          PeriodEndsAt: subscription.currentPeriodEndsAt ?? '', GraceEndsAt: subscription.graceEndsAt ?? '',
+          MonthlyValueKSh: subscription.licenseCost, AutoRenew: subscription.autoRenewActive,
+        })))}>Export Subscription Ledger</button><button className="admin-secondary-button" onClick={() => void refreshSubscriptions().catch(error => setLoadError(error instanceof Error ? error.message : 'Unable to reload subscriptions.'))}>Refresh</button></div></div>
+        {loadError && <div className="admin-empty-state" role="alert">{loadError}</div>}
+        {actionError && <div className="admin-empty-state" role="alert">{actionError}</div>}
         <div className="admin-table-scroll">
           <table className="admin-table license-table">
-            <thead><tr><th>Tenant identifier</th><th>License tier</th><th>Contract expiration</th><th>Auto renewal</th><th>Monthly value</th><th>Enforcement</th></tr></thead>
-            <tbody>{licenses.map(license => (
-              <tr key={license.id}>
-                <td><div className="admin-person-cell"><strong>{license.tenant}</strong><span>{license.id}</span></div></td>
-                <td><span className={`admin-plan-badge ${license.plan.toLowerCase()}`}>{license.plan}</span></td>
-                <td><strong>{license.expires}</strong><span className={`admin-countdown ${license.days <= 7 ? 'urgent' : license.days <= 30 ? 'warning' : ''}`}>{license.days > 0 ? `${license.days} days remaining` : `${Math.abs(license.days)} days overdue`}</span></td>
-                <td><div className="admin-renewal-cell"><button className={`admin-toggle ${license.renewal ? 'on' : ''}`} onClick={() => toggleRenewal(license.id)} disabled={license.status === 'revoked'} aria-pressed={license.renewal}><span/></button><small>{license.renewal ? 'Enabled' : 'Disabled'}</small></div></td>
-                <td><strong className="admin-mono">KSh {license.amount.toLocaleString()}</strong></td>
-                <td>{license.status === 'revoked' ? <div className="admin-row-actions"><span className="admin-status-badge suspended"><i/>Revoked</span><button className="admin-row-button" aria-label="Delete license" onClick={() => setLicenses(current => current.filter(record => record.id !== license.id))}><AdminIcon name="close" size={13}/></button></div> : <div className="admin-confirm-anchor"><button className="admin-danger-button" onClick={() => setConfirmRevoke(license.id)}>Revoke Operational Access Node</button>{confirmRevoke === license.id && <div className="admin-confirm-popover"><AdminIcon name="warning" size={17}/><div><strong>Strategic Contract License Expiration Revocation</strong><span>POS terminals will be blocked immediately.</span><div><button onClick={() => setConfirmRevoke(null)}>Cancel</button><button onClick={() => revoke(license.id)}>Confirm Access Node Revocation</button></div><button className="admin-permanent-remove" onClick={() => { setLicenses(current => current.filter(record => record.id !== license.id)); setConfirmRevoke(null) }}>Permanently Remove Revoked Ledger Record</button></div></div>}</div>}</td>
-              </tr>
-            ))}</tbody>
+            <thead><tr><th>Business</th><th>Plan</th><th>Trial / period end</th><th>Monthly price</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>{loading ? <tr><td colSpan={6}>Loading subscription records…</td></tr> : subscriptions.length === 0 ? <tr><td colSpan={6}>No subscriptions have been provisioned.</td></tr> : subscriptions.map(subscription => {
+              const expiresAt = subscription.status === 'TRIAL' ? subscription.trialEndsAt : subscription.status === 'GRACE' ? subscription.graceEndsAt : subscription.currentPeriodEndsAt
+              const locked = ['EXPIRED', 'REVOKED'].includes(subscription.status)
+              return (
+                <tr key={subscription.id}>
+                  <td><div className="admin-person-cell"><strong>{subscription.business.name}</strong><span>{subscription.business.ownerName ?? subscription.business.email ?? subscription.businessId}</span></div></td>
+                  <td><span className={`admin-plan-badge ${subscription.planType.toLowerCase()}`}>{subscription.planType}</span></td>
+                  <td><strong>{expiresAt ? new Date(expiresAt).toLocaleDateString('en-KE') : '—'}</strong><span className="admin-countdown">{subscription.status === 'TRIAL' ? 'Trial ends' : subscription.status === 'GRACE' ? 'Grace ends' : 'Current period ends'}</span></td>
+                  <td><strong className="admin-mono">KSh {subscription.licenseCost.toLocaleString()}</strong></td>
+                  <td><span className={`admin-status-badge ${locked ? 'suspended' : subscription.status === 'GRACE' ? 'warning' : 'active'}`}><i/>{subscription.status}</span></td>
+                  <td><div className="admin-row-actions">
+                    <button className="admin-row-button" disabled={pendingId === subscription.id} onClick={() => void updateSubscription(subscription, locked ? 'ACTIVATE' : 'RENEW')}>{pendingId === subscription.id ? 'Saving…' : locked ? 'Activate 30 days' : 'Renew 30 days'}</button>
+                    <button className="admin-row-button" disabled={pendingId === subscription.id || !subscription.autoRenewActive} onClick={() => void updateSubscription(subscription, 'AUTO_RENEW')}>{subscription.autoRenewActive ? 'Disable auto-renew' : 'Enable auto-renew'}</button>
+                    {!locked && <button className="admin-danger-button" disabled={pendingId === subscription.id} onClick={() => {
+                      if (window.confirm(`Revoke subscription access for ${subscription.business.name}?`)) void updateSubscription(subscription, 'REVOKE')
+                    }}>Revoke</button>}
+                  </div></td>
+                </tr>
+              )
+            })}</tbody>
           </table>
         </div>
       </div>

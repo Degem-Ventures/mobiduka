@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { canWriteForSubscription, SubscriptionWriteDeniedError } from "@/lib/subscriptions";
 
 class InvalidCashSessionError extends Error {}
 
@@ -245,6 +246,10 @@ export async function POST(request: Request) {
     const saleTotal = Number(totalAmount ?? computedTotal);
 
     const completedSale = await prisma.$transaction(async (tx) => {
+      const subscriptionAccess = await canWriteForSubscription(tx, resolvedBusinessId);
+      if (!subscriptionAccess.allowed) {
+        throw new SubscriptionWriteDeniedError(subscriptionAccess.status, subscriptionAccess.endsAt);
+      }
       if (cashSessionId) {
         const activeSession = await tx.cashSession.findFirst({
           where: {
@@ -404,6 +409,14 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error: any) {
+    if (error instanceof SubscriptionWriteDeniedError) {
+      return NextResponse.json({
+        error: error.message,
+        code: "SUBSCRIPTION_WRITE_LOCKED",
+        subscriptionStatus: error.status,
+        endsAt: error.endsAt?.toISOString() ?? null,
+      }, { status: 402 });
+    }
     if (error instanceof InvalidCashSessionError) {
       return NextResponse.json({ error: error.message }, { status: 409 })
     }

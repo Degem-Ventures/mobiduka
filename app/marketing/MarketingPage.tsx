@@ -109,7 +109,7 @@ export default function MarketingPage() {
               )}
             </div>
             <Link href="/">Log in</Link>
-            <button className="mk-primary small" onClick={() => setContactOpen(true)}>Get Started</button>
+            <Link className="mk-primary small" href="/signup">Get Started</Link>
           </div>
           <button className="mk-mobile-toggle" onClick={() => setMobileMenu(value => !value)} aria-label="Toggle menu"><MarketingIcon name={mobileMenu ? 'close' : 'menu'}/></button>
         </div>
@@ -122,7 +122,7 @@ export default function MarketingPage() {
               <div className="mk-eyebrow"><span/> Retail management, reimagined</div>
               <h1>Your Shop. Your Stock. Your Sales. <em>Under Control.</em></h1>
               <p>Say goodbye to scattered records and guesswork. MobiDuka helps you record sales, track inventory, manage payments and understand your business performance.</p>
-              <div className="mk-hero-actions"><button className="mk-primary" onClick={() => setContactOpen(true)}>Get Started <MarketingIcon name="arrow" size={17}/></button><button className="mk-secondary" onClick={() => scrollTo('how-it-works')}>See How It Works</button><Link className="mk-secondary mk-desktop-link" href="/desktop"><MarketingIcon name="monitor" size={17}/> Open Desktop Workspace</Link></div>
+              <div className="mk-hero-actions"><Link className="mk-primary" href="/signup">Get Started <MarketingIcon name="arrow" size={17}/></Link><button className="mk-secondary" onClick={() => scrollTo('how-it-works')}>See How It Works</button><Link className="mk-secondary mk-desktop-link" href="/desktop"><MarketingIcon name="monitor" size={17}/> Open Desktop Workspace</Link></div>
               <div className="mk-hero-trust"><div className="mk-avatar-stack"><span>DK</span><span>GW</span><span>AM</span></div><p>Designed for Kenyan dukas, mini-shops and growing retailers.</p></div>
             </div>
             <div className="mk-hero-visual">
@@ -183,7 +183,7 @@ export default function MarketingPage() {
           <div className="mk-container">
             <div className="mk-section-head centered"><span>SIMPLE ONBOARDING</span><h2>Get Started in Three Simple Steps.</h2></div>
             <div className="mk-steps">{onboardingSteps.map(step => <article key={step.number}><span>{step.number}</span><h3>{step.title}</h3><p>{step.description}</p></article>)}</div>
-            <div className="mk-center-action"><button className="mk-primary" onClick={() => setContactOpen(true)}>Get Started <MarketingIcon name="arrow" size={16}/></button></div>
+            <div className="mk-center-action"><Link className="mk-primary" href="/signup">Get Started <MarketingIcon name="arrow" size={16}/></Link></div>
           </div>
         </section>
 
@@ -191,7 +191,7 @@ export default function MarketingPage() {
           <div className="mk-container">
             <div className="mk-section-head centered"><span>PACKAGES</span><h2>Simple Packages. Smarter Retail.</h2><p>Choose the tools that fit your business today, with room to grow.</p></div>
             <div className="mk-billing-toggle"><button className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly billing</button><button className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual billing</button></div>
-            <div className="mk-price-grid">{planCatalog.map(plan => <article className={plan.featured ? 'featured' : ''} key={plan.name}>{plan.featured && <div className="mk-recommended">Configurable recommendation</div>}<span>{plan.audience}</span><h3>{plan.name}</h3><div className="mk-price"><strong>{formatPublicPlanPrice(plan, annual)}</strong>{(annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh) !== null && <small>/ {annual ? 'year' : 'month'}</small>}</div><p>Public pricing and package limits will be published after commercial approval.</p><ul>{plan.marketingFeatures.map(feature => <li key={feature}><MarketingIcon name="check" size={13}/>{feature}</li>)}</ul><button className={plan.featured ? 'mk-primary' : 'mk-secondary'} onClick={() => setContactOpen(true)}>{plan.cta}</button></article>)}</div>
+            <div className="mk-price-grid">{planCatalog.map(plan => <article className={plan.featured ? 'featured' : ''} key={plan.name}>{plan.featured && <div className="mk-recommended">Configurable recommendation</div>}<span>{plan.audience}</span><h3>{plan.name}</h3><div className="mk-price"><strong>{formatPublicPlanPrice(plan, annual)}</strong>{(annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh) !== null && <small>/ {annual ? 'year' : 'month'}</small>}</div><p>Public pricing and package limits will be published after commercial approval.</p><ul>{plan.marketingFeatures.map(feature => <li key={feature}><MarketingIcon name="check" size={13}/>{feature}</li>)}</ul>{plan.name === 'Basic' ? <Link className={plan.featured ? 'mk-primary' : 'mk-secondary'} href="/signup">Start 14-day Basic trial</Link> : <button className={plan.featured ? 'mk-primary' : 'mk-secondary'} onClick={() => setContactOpen(true)}>{plan.cta}</button>}</article>)}</div>
             <div className="mk-pricing-note">Package information is shared with the admin license catalog. Public prices and exact entitlements remain unpublished until formally approved.</div>
           </div>
         </section>
@@ -204,7 +204,7 @@ export default function MarketingPage() {
           <div className="mk-container mk-faq-grid"><div className="mk-section-head"><span>FAQ</span><h2>Clear Answers Before You Get Started.</h2><p>Need help choosing a package or checking compatibility? Talk to our team.</p><button className="mk-secondary" onClick={() => setContactOpen(true)}>Contact MobiDuka</button></div><div>{faqItems.map((faq,index) => <article className={openFaq === index ? 'open' : ''} key={faq[0]}><button onClick={() => setOpenFaq(openFaq === index ? -1 : index)}><span>{faq[0]}</span><i>{openFaq === index ? '−' : '+'}</i></button>{openFaq === index && <p>{faq[1]}</p>}</article>)}</div></div>
         </section>
 
-        <section className="mk-final-cta"><div className="mk-container"><div><span>READY WHEN YOU ARE</span><h2>Ready to Run Your Shop Smarter?</h2><p>Bring sales, stock, expenses and business insights together with MobiDuka POS.</p><div><button className="mk-primary light" onClick={() => setContactOpen(true)}>Get Started <MarketingIcon name="arrow" size={16}/></button><button className="mk-ghost" onClick={() => setContactOpen(true)}>Talk to Our Team</button></div></div><PhoneMockup src={dashboardScreen} alt="MobiDuka POS app dashboard"/></div></section>
+        <section className="mk-final-cta"><div className="mk-container"><div><span>READY WHEN YOU ARE</span><h2>Ready to Run Your Shop Smarter?</h2><p>Bring sales, stock, expenses and business insights together with MobiDuka POS.</p><div><Link className="mk-primary light" href="/signup">Get Started <MarketingIcon name="arrow" size={16}/></Link><button className="mk-ghost" onClick={() => setContactOpen(true)}>Talk to Our Team</button></div></div><PhoneMockup src={dashboardScreen} alt="MobiDuka POS app dashboard"/></div></section>
       </main>
 
       <footer className="mk-footer"><div className="mk-container"><div className="mk-footer-brand"><button className="mk-brand" onClick={() => scrollTo('top')}><span><img src="/mobiduka_icon.svg" alt=""/></span><div><strong>MobiDuka</strong><small>POS</small></div></button><p>Smart Retail Management for Modern Kenyan Businesses.</p></div>{footerGroups.map(group => <div key={group.title}><strong>{group.title}</strong>{group.links.map(item => <button key={item} onClick={() => item === 'Packages' ? scrollTo('packages') : comingSoon(`${item} link will be connected when published.`)}>{item}</button>)}</div>)}</div><div className="mk-container mk-footer-bottom"><span>© 2026 MobiDuka POS. Product preview.</span><span>Built for Kenyan retail.</span></div></footer>

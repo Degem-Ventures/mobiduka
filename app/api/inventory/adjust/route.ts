@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 export async function POST(request: Request) {
   try {
@@ -21,6 +22,8 @@ export async function POST(request: Request) {
         { status: 401 },
       );
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(resolvedBusinessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const quantityDelta = Number(adjustmentQuantity);
 

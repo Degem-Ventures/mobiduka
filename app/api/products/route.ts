@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 import { composeProductDisplayName } from "@/lib/product-display-name";
 
 function optionalIdentityText(value: unknown) {
@@ -68,6 +69,8 @@ export async function POST(request: Request) {
     if (!businessId) {
       return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const hasStructuredIdentity =
       body.brand !== undefined ||
@@ -133,6 +136,8 @@ export async function PATCH(request: Request) {
     if (!businessId || !productId) {
       return NextResponse.json({ error: "Authenticated business context and product id are required." }, { status: 400 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const existing = await prisma.product.findFirst({ where: { id: productId, businessId } });
     if (!existing) return NextResponse.json({ error: "Product was not found." }, { status: 404 });
@@ -235,6 +240,8 @@ export async function DELETE(request: Request) {
     if (!businessId || !productId) {
       return NextResponse.json({ error: "Authenticated business context and product id are required." }, { status: 400 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const product = await prisma.product.findFirst({
       where: {

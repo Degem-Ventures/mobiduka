@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 export async function GET(request: Request) {
   try {
@@ -76,6 +77,8 @@ export async function POST(request: Request) {
     if (!resolvedBusinessId || !normalizedName) {
       return NextResponse.json({ error: "Authenticated business context and name are required." }, { status: 401 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(resolvedBusinessId);
+    if (subscriptionLock) return subscriptionLock;
     if (!Number.isFinite(creditLimit) || creditLimit < 0) {
       return NextResponse.json({ error: "initialCreditLimit must be a non-negative number." }, { status: 400 });
     }
@@ -143,6 +146,8 @@ export async function PATCH(request: Request) {
     const phone = typeof body.phone === "string" ? body.phone.trim() || null : null;
     const creditLimit = body.initialCreditLimit === undefined ? undefined : Number(body.initialCreditLimit);
     if (!businessId || !id || !name) return NextResponse.json({ error: "Authenticated business context, customer id, and name are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     if (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0)) return NextResponse.json({ error: "initialCreditLimit must be a non-negative number." }, { status: 400 });
     const existing = await prisma.customer.findFirst({ where: { id, businessId }, select: { id: true } });
     if (!existing) return NextResponse.json({ error: "Customer was not found." }, { status: 404 });
@@ -163,6 +168,8 @@ export async function DELETE(request: Request) {
     const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
     const id = url.searchParams.get("id")?.trim();
     if (!businessId || !id) return NextResponse.json({ error: "Authenticated business context and customer id are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     const customer = await prisma.customer.findFirst({ where: { id, businessId }, include: { _count: { select: { sales: true, creditEntries: true } } } });
     if (!customer) return NextResponse.json({ error: "Customer was not found." }, { status: 404 });
     if (customer._count.sales || customer._count.creditEntries) return NextResponse.json({ error: "Customers with sales or credit history cannot be deleted." }, { status: 409 });

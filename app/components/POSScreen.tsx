@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { QRCodeSVG } from "qrcode.react"
 import { createPortal } from "react-dom"
 import { useColors } from "../utils/theme"
-import { apiFetch, getClientSession, takeCreditorSaleIntent } from "../../lib/client-api"
+import { apiFetch, ApiResponseError, getClientSession, saveClientSession, takeCreditorSaleIntent, type ClientSession } from "../../lib/client-api"
 import { useAutoDismissMessage } from "../../lib/use-auto-dismiss-message"
 import {
   commitOfflineCashSale,
@@ -173,6 +173,134 @@ interface Props {
 }
 
 export default function POSScreen({ onNavigate, initialCartItem }: Props) {
+  const session = getClientSession()
+  const [subscription, setSubscription] = useState(session?.user.subscription ?? null)
+  const [subscriptionReady, setSubscriptionReady] = useState(Boolean(session?.user.offline))
+  const [paywallDismissed, setPaywallDismissed] = useState(false)
+  const subscriptionBlocked = subscriptionReady && isSubscriptionBlocked(subscription)
+
+  useEffect(() => {
+    if (!session?.user.businessId || session.user.offline) {
+      setSubscriptionReady(true)
+      return
+    }
+    let active = true
+    void apiFetch<{ subscription: NonNullable<ClientSession["user"]["subscription"]> }>("/api/subscription")
+      .then(({ subscription: current }) => {
+        if (!active) return
+        setSubscription(current)
+        setSubscriptionReady(true)
+        const currentSession = getClientSession()
+        if (currentSession) saveClientSession({
+          ...currentSession,
+          user: { ...currentSession.user, subscription: current },
+        })
+      })
+      .catch(error => {
+        if (!active) return
+        console.error("Unable to refresh subscription status.", error)
+        setSubscriptionReady(true)
+      })
+    return () => { active = false }
+  }, [session?.user.businessId, session?.user.offline])
+
+  const handleSubscriptionLock = () => {
+    setSubscription(current => ({
+      planType: current?.planType ?? "BASIC",
+      status: "EXPIRED",
+      trialEndsAt: current?.trialEndsAt ?? null,
+      currentPeriodEndsAt: current?.currentPeriodEndsAt ?? null,
+      graceEndsAt: current?.graceEndsAt ?? null,
+    }))
+    setSubscriptionReady(true)
+    setPaywallDismissed(false)
+  }
+
+  return (
+    <>
+      <POSScreenContent
+        onNavigate={onNavigate}
+        initialCartItem={initialCartItem}
+        subscriptionBlocked={subscriptionBlocked}
+        onSubscriptionLock={handleSubscriptionLock}
+      />
+      {subscriptionBlocked && !paywallDismissed && <SubscriptionPaywallOverlay onDismiss={() => setPaywallDismissed(true)} />}
+    </>
+  )
+}
+
+function isSubscriptionBlocked(subscription: ClientSession["user"]["subscription"] | null) {
+  if (!subscription || ["EXPIRED", "REVOKED", "MISSING"].includes(subscription.status)) return true
+  const now = Date.now()
+  if (subscription.status === "TRIAL") {
+    return !subscription.trialEndsAt || new Date(subscription.trialEndsAt).getTime() <= now
+  }
+  if (subscription.status === "GRACE") {
+    const graceEndsAt = subscription.graceEndsAt
+      ? new Date(subscription.graceEndsAt).getTime()
+      : subscription.currentPeriodEndsAt
+        ? new Date(subscription.currentPeriodEndsAt).getTime() + 7 * 24 * 60 * 60 * 1000
+        : 0
+    return graceEndsAt <= now
+  }
+  if (subscription.status === "ACTIVE") {
+    if (!subscription.currentPeriodEndsAt) return true
+    const periodEndsAt = new Date(subscription.currentPeriodEndsAt).getTime()
+    return periodEndsAt + 7 * 24 * 60 * 60 * 1000 <= now
+  }
+  return false
+}
+
+function SubscriptionPaywallOverlay({ onDismiss }: { onDismiss: () => void }) {
+  const colors = useColors()
+  return createPortal(
+    <div role="presentation" style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10000,
+      display: "grid",
+      placeItems: "center",
+      padding: 20,
+      background: "rgba(5, 11, 24, .7)",
+      backdropFilter: "blur(5px)",
+    }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="subscription-paywall-title" style={{
+        width: "min(100%, 420px)",
+        padding: 28,
+        border: `1px solid ${colors.divider}`,
+        borderRadius: 18,
+        background: colors.card,
+        color: colors.text,
+        boxShadow: "0 24px 70px rgba(0,0,0,.32)",
+        textAlign: "center",
+      }}>
+        <div aria-hidden="true" style={{ fontSize: 38 }}>⏳</div>
+        <h2 id="subscription-paywall-title" style={{ margin: "12px 0 8px", fontSize: 21 }}>Your trial or subscription has ended</h2>
+        <p style={{ margin: "0 auto 20px", maxWidth: 340, color: colors.muted, fontSize: 13, lineHeight: 1.6 }}>
+          Your business data and unsynchronized records remain saved. New sales and data synchronization are paused until the business owner renews the subscription.
+        </p>
+        <button type="button" onClick={onDismiss} style={{
+          width: "100%",
+          minHeight: 44,
+          border: 0,
+          borderRadius: 9,
+          background: "#123A8F",
+          color: "#fff",
+          fontWeight: 800,
+          cursor: "pointer",
+        }}>Continue in read-only mode</button>
+      </section>
+    </div>,
+    document.body,
+  )
+}
+
+function POSScreenContent({
+  onNavigate,
+  initialCartItem,
+  subscriptionBlocked,
+  onSubscriptionLock,
+}: Props & { subscriptionBlocked: boolean; onSubscriptionLock: () => void }) {
   const [products, setProducts] = useState<ProductItem[]>([])
   const [categoryRows, setCategoryRows] = useState<Array<{
     id: string
@@ -1092,6 +1220,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
 
   const completeSale = async (confirmMpesaQr = false) => {
     if (
+      subscriptionBlocked ||
       !session ||
       !selectedOperatorId ||
       !currentDeviceShiftId ||
@@ -1270,6 +1399,9 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
       setMpesaQrDetails(null)
       setView("receipt")
     } catch (reason) {
+      if (reason instanceof ApiResponseError && reason.status === 402) {
+        onSubscriptionLock()
+      }
       const message =
         reason instanceof TypeError &&
         isNativeOfflineApp() &&
@@ -3093,7 +3225,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                         className="btn"
                         type="button"
                         onClick={() => void completeSale(true)}
-                        disabled={!selectedOperatorId || isCompletingSale}
+                        disabled={!selectedOperatorId || isCompletingSale || subscriptionBlocked}
                         style={{
                           width: "100%",
                           marginTop: 16,
@@ -3262,6 +3394,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
 
           {(() => {
             const canComplete =
+              !subscriptionBlocked &&
               !!selectedOperatorId &&
               !!currentDeviceShiftId &&
               (paymentMethod !== "credit" || !!selectedCreditor) &&
@@ -3273,7 +3406,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                 onClick={() => {
                   if (canComplete) void completeSale()
                 }}
-                disabled={!canComplete || isCompletingSale}
+                disabled={!canComplete || isCompletingSale || subscriptionBlocked}
                 style={{
                   width: "100%",
                   marginTop: 28,
@@ -3295,7 +3428,9 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
                     : "none",
                 }}
               >
-                {!selectedOperatorId
+                {subscriptionBlocked
+                  ? "Subscription required to complete sales"
+                  : !selectedOperatorId
                   ? "Select a current shift for this device"
                   : paymentMethod === "credit" && !selectedCreditor
                     ? "Select a customer to proceed"

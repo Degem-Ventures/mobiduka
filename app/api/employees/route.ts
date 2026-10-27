@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { JWT_SECRET, requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
 import { canonicalRoleName } from "@/lib/roles";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 const ALLOWED_ROLES = ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "STOCK_KEEPER", "ACCOUNTANT"] as const;
 
@@ -120,6 +121,8 @@ export async function POST(request: Request) {
     if (!businessId || !fullName || (!role && !roleId)) {
       return NextResponse.json({ error: "Authenticated business context, name, and a valid role are required." }, { status: 401 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     if (pin !== undefined && !/^\d{4}$/.test(pin)) {
       return NextResponse.json({ error: "PIN must contain exactly 4 digits." }, { status: 400 });
     }

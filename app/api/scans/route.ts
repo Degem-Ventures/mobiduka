@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requestedBusinessId } from "@/lib/auth";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 const ALLOWED_OVERRIDES = new Set(["AUTO", "MANUAL"]);
 
@@ -122,6 +123,10 @@ export async function POST(request: NextRequest) {
     }
     if (!["LOOKUP", "ADD_TO_CART", "RESTOCK"].includes(action)) {
       return NextResponse.json({ error: "action must be LOOKUP, ADD_TO_CART, or RESTOCK." }, { status: 400 });
+    }
+    if (action === "RESTOCK") {
+      const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+      if (subscriptionLock) return subscriptionLock;
     }
 
     const matchedProduct = await findProduct(businessId, barcode);

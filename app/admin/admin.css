@@ -29,6 +29,42 @@
   font: inherit;
 }
 
+.admin-auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #050b18;
+  color: #e8eefc;
+  font-family: Inter, "Google Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.admin-auth-card {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 34px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 18px;
+  background: #091326;
+  box-shadow: 0 24px 70px rgba(0,0,0,.35);
+}
+
+.admin-auth-card .admin-brand-mark { width: 46px; height: 46px; }
+.admin-auth-eyebrow { color: #d4af37; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
+.admin-auth-card h1 { margin: 0; font-size: 25px; }
+.admin-auth-card p { margin: 0 0 8px; color: #9ba9c2; font-size: 13px; line-height: 1.6; }
+.admin-auth-card label { display: flex; flex-direction: column; gap: 7px; color: #c5cfe1; font-size: 12px; font-weight: 700; }
+.admin-auth-card input { min-height: 42px; padding: 0 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; outline: none; background: #050b18; color: #e8eefc; }
+.admin-auth-card input:focus { border-color: #4e7fe8; }
+.admin-auth-card > button { min-height: 44px; border: 0; border-radius: 8px; background: #d4af37; color: #0d1b3d; font-weight: 800; cursor: pointer; }
+.admin-auth-card > button:disabled { opacity: .65; cursor: wait; }
+.admin-auth-error { padding: 10px 12px; border: 1px solid rgba(239,83,80,.3); border-radius: 8px; background: rgba(239,83,80,.1); color: #ffaaa5; font-size: 12px; }
+.admin-auth-loading { min-height: 100vh; display: grid; place-items: center; background: #050b18; color: #c5cfe1; font: 13px Inter, sans-serif; }
+.admin-auth-session { position: fixed; right: 20px; bottom: 14px; z-index: 1000; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 11px; border: 1px solid rgba(255,255,255,.12); border-radius: 100px; background: #091326; color: #c5cfe1; font-size: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.admin-auth-session button { padding: 5px 9px; border: 0; border-radius: 100px; background: rgba(255,255,255,.1); color: #fff; font-size: 10px; cursor: pointer; }
+
 .admin-sidebar {
   min-width: 0;
   min-height: 0;
@@ -688,7 +724,7 @@
   padding: 6px;
 }
 
-.admin-quick-menu > button {
+.admin-quick-menu > :is(button, a) {
   width: 100%;
   display: grid;
   grid-template-columns: 28px 1fr;
@@ -701,13 +737,14 @@
   color: #799eee;
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
 }
 
-.admin-quick-menu > button:hover {
+.admin-quick-menu > :is(button, a):hover {
   background: rgba(78,127,232,.08);
 }
 
-.admin-quick-menu > button > div {
+.admin-quick-menu > :is(button, a) > div {
   display: flex;
   flex-direction: column;
   gap: 2px;

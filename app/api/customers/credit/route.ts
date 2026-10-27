@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 const toPositiveAmount = (value: unknown) => {
   const amount = typeof value === "number" ? value : Number(value);
@@ -20,6 +21,8 @@ export async function POST(request: Request) {
         { status: 401 },
       );
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(resolvedBusinessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const customer = await prisma.customer.findFirst({
       where: { id: customerId, businessId: resolvedBusinessId },

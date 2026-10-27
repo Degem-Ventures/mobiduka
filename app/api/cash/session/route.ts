@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server.js";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 export async function GET(request: Request) {
   try {
@@ -34,44 +36,68 @@ export async function GET(request: Request) {
       orderBy: { openedAt: "asc" },
     });
 
-    const enrichedSessions = await Promise.all(
-      sessions.map(async (session) => {
-        const sales = await prisma.sale.aggregate({
-          where: {
-            businessId: resolvedBusinessId,
-            OR: [
-              { cashSessionId: session.id },
-              {
-                cashSessionId: null,
-                cashierId: session.cashierId,
-                createdAt: {
-                  gte: session.openedAt,
-                  ...(session.closedAt ? { lte: session.closedAt } : {}),
-                },
-              },
-            ],
-          },
-          _count: { id: true },
-          _sum: { total: true },
-        });
-
-        return {
-          id: session.id,
-          cashierId: session.cashierId,
-          cashier: session.cashier,
-          shiftType: session.shiftType,
-          shift: session.shift,
-          openedAt: session.openedAt,
-          closedAt: session.closedAt,
-          sales: sales._count.id,
-          amount: Number(sales._sum.total ?? 0),
-          openingBalance: session.openingBalance,
-          closingBalance: session.closingBalance,
-          expectedBalance: session.expectedBalance,
-          variance: session.variance,
-        };
-      }),
+    const salesBySession = sessions.length
+      ? await prisma.$queryRaw<Array<{ sessionId: string; sales: bigint; amount: number }>>(
+          Prisma.sql`
+            WITH requested_sessions ("id", "cashierId", "openedAt", "closedAt") AS (
+              VALUES ${Prisma.join(
+                sessions.map(
+                  (session) => Prisma.sql`(
+                    ${session.id}::text,
+                    ${session.cashierId}::text,
+                    ${session.openedAt}::timestamp,
+                    ${session.closedAt}::timestamp
+                  )`,
+                ),
+              )}
+            )
+            SELECT
+              requested_sessions."id" AS "sessionId",
+              COUNT("Sale"."id")::bigint AS "sales",
+              COALESCE(SUM("Sale"."total"), 0)::float8 AS "amount"
+            FROM requested_sessions
+            LEFT JOIN "Sale"
+              ON "Sale"."businessId" = ${resolvedBusinessId}
+              AND (
+                "Sale"."cashSessionId" = requested_sessions."id"
+                OR (
+                  "Sale"."cashSessionId" IS NULL
+                  AND "Sale"."cashierId" IS NOT DISTINCT FROM requested_sessions."cashierId"
+                  AND "Sale"."createdAt" >= requested_sessions."openedAt"
+                  AND (
+                    requested_sessions."closedAt" IS NULL
+                    OR "Sale"."createdAt" <= requested_sessions."closedAt"
+                  )
+                )
+              )
+            GROUP BY requested_sessions."id"
+          `,
+        )
+      : [];
+    const salesBySessionId = new Map(
+      salesBySession.map((sales) => [
+        sales.sessionId,
+        { count: Number(sales.sales), amount: sales.amount },
+      ]),
     );
+    const enrichedSessions = sessions.map((session) => {
+      const sales = salesBySessionId.get(session.id);
+      return {
+        id: session.id,
+        cashierId: session.cashierId,
+        cashier: session.cashier,
+        shiftType: session.shiftType,
+        shift: session.shift,
+        openedAt: session.openedAt,
+        closedAt: session.closedAt,
+        sales: sales?.count ?? 0,
+        amount: sales?.amount ?? 0,
+        openingBalance: session.openingBalance,
+        closingBalance: session.closingBalance,
+        expectedBalance: session.expectedBalance,
+        variance: session.variance,
+      };
+    });
 
     return NextResponse.json({ sessions: enrichedSessions });
   } catch (error) {
@@ -118,6 +144,8 @@ export async function POST(request: Request) {
     }
 
     if (action === "OPEN") {
+      const subscriptionLock = await subscriptionWriteLockResponse(resolvedBusinessId);
+      if (subscriptionLock) return subscriptionLock;
       if (openingCash === undefined || openingCash === null) {
         return NextResponse.json(
           { error: "Opening cash amount is required to start a shift." },

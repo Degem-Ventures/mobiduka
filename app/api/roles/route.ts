@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { authenticatedUserId, requireBusinessAccess } from "@/lib/auth";
 import { PERMISSION_KEYS } from "@/lib/roles";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 async function authorizedBusinessId(request: Request, requestedBusinessId: unknown) {
   const businessId = requireBusinessAccess(request, requestedBusinessId);
@@ -41,6 +42,8 @@ export async function POST(request: Request) {
     const businessId = await authorizedBusinessId(request, body.businessId);
     const name = body.name?.trim(); const permissions = validatedPermissions(body.permissions ?? []);
     if (!businessId) return NextResponse.json({ error: "Roles permission is required." }, { status: 403 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     if (!name || name.length > 40 || !permissions) return NextResponse.json({ error: "A role name and valid permissions are required." }, { status: 400 });
     const role = await prisma.role.create({ data: { businessId, name, permissions: { createMany: { data: permissions.map(permissionKey => ({ permissionKey })) } } }, select: roleSelect });
     return NextResponse.json({ role: { ...role, permissions: role.permissions.map(permission => permission.permissionKey), userCount: 0 } }, { status: 201 });
@@ -52,6 +55,8 @@ export async function PATCH(request: Request) {
     const body = await request.json() as { businessId?: string; roleId?: string; name?: string; permissions?: unknown };
     const businessId = await authorizedBusinessId(request, body.businessId);
     if (!businessId) return NextResponse.json({ error: "Roles permission is required." }, { status: 403 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     const role = body.roleId ? await prisma.role.findFirst({ where: { id: body.roleId, businessId }, select: { id: true, isSystem: true } }) : null;
     if (!role) return NextResponse.json({ error: "Role not found." }, { status: 404 });
     const permissions = body.permissions === undefined ? undefined : validatedPermissions(body.permissions);
@@ -71,6 +76,8 @@ export async function DELETE(request: Request) {
     const body = await request.json() as { businessId?: string; roleId?: string };
     const businessId = await authorizedBusinessId(request, body.businessId);
     if (!businessId) return NextResponse.json({ error: "Roles permission is required." }, { status: 403 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     const role = body.roleId ? await prisma.role.findFirst({ where: { id: body.roleId, businessId }, select: { id: true, isSystem: true, _count: { select: { users: true } } } }) : null;
     if (!role) return NextResponse.json({ error: "Role not found." }, { status: 404 });
     if (role.isSystem) return NextResponse.json({ error: "System roles cannot be deleted." }, { status: 400 });

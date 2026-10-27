@@ -2,18 +2,8 @@ import { NextResponse } from "next/server.js";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { JWT_SECRET } from "@/lib/auth";
-
-function signToken(payload: Record<string, unknown>) {
-  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = crypto
-    .createHmac("sha256", JWT_SECRET)
-    .update(`${header}.${body}`)
-    .digest("base64url");
-
-  return `${header}.${body}.${signature}`;
-}
+import { createAuthToken } from "@/lib/auth";
+import { effectiveSubscriptionStatus } from "@/lib/subscriptions";
 
 function normalizeUserLookup(value: string) {
   return value.trim().toLowerCase();
@@ -52,6 +42,7 @@ export async function POST(request: Request) {
               orderBy: { expiryDate: "desc" },
               take: 1,
             },
+            platformSubscription: true,
           },
         },
       },
@@ -126,24 +117,27 @@ function completeLogin(user: any, password: string, pin: string) {
       );
     }
 
-    const license = user.business.licenses[0];
-    const licenseExpiresAt = license?.expiryDate
-      ? Math.floor(license.expiryDate.getTime() / 1000)
-      : undefined;
-    const nowUnixTime = Math.floor(Date.now() / 1000);
+    const subscription = user.business.platformSubscription;
     const businessStatus = user.business.status.trim().toUpperCase();
     const subscriptionStatus =
-      businessStatus !== "ACTIVE" || license?.status?.toUpperCase() === "EXPIRED" ||
-      (licenseExpiresAt !== undefined && nowUnixTime >= licenseExpiresAt)
-        ? "EXPIRED"
-        : businessStatus;
-
-    const token = signToken({
+      businessStatus === "ACTIVE"
+        ? effectiveSubscriptionStatus(subscription)
+        : "REVOKED";
+    const subscriptionEndsAt =
+      subscriptionStatus === "TRIAL"
+        ? subscription?.trialEndsAt
+        : subscriptionStatus === "GRACE"
+          ? subscription?.graceEndsAt
+          : subscription?.currentPeriodEndsAt;
+    const legacyLicense = user.business.licenses[0];
+    const token = createAuthToken({
       sub: user.id,
       businessId: user.businessId,
       role: user.role?.name ?? "CASHIER",
       subscriptionStatus,
-      ...(licenseExpiresAt !== undefined ? { subscriptionExpiresAt: licenseExpiresAt } : {}),
+      ...(subscriptionEndsAt ? { subscriptionExpiresAt: Math.floor(subscriptionEndsAt.getTime() / 1000) } : {}),
+      ...(legacyLicense && !subscription ? { legacyLicenseExpiresAt: Math.floor(legacyLicense.expiryDate.getTime() / 1000) } : {}),
+      exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       type: pin ? "pin" : "password",
       email: user.email,
       username: user.username,
@@ -159,6 +153,13 @@ function completeLogin(user: any, password: string, pin: string) {
         username: user.username,
         role: user.role?.name ?? "CASHIER",
         businessId: user.businessId,
+        subscription: {
+          planType: subscription?.planType ?? "BASIC",
+          status: subscriptionStatus,
+          trialEndsAt: subscription?.trialEndsAt?.toISOString() ?? null,
+          currentPeriodEndsAt: subscription?.currentPeriodEndsAt?.toISOString() ?? null,
+          graceEndsAt: subscription?.graceEndsAt?.toISOString() ?? null,
+        },
       },
     });
 }
