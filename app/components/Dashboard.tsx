@@ -5,7 +5,7 @@ import {
   isNativeOfflineApp,
   readOfflineCollectionUpdatedAt,
 } from '../../lib/offline-store'
-import { getClientSession } from '../../lib/client-api'
+import { ApiResponseError, getClientSession } from '../../lib/client-api'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
@@ -220,7 +220,11 @@ export default function Dashboard({ onNavigate }: Props) {
         `/api/notifications?businessId=${encodeURIComponent(session.user.businessId)}`,
       )
         .then(response => setUnreadNotifications(response.unreadCount))
-        .catch(reason => console.error('Unable to load the dashboard notification count.', reason))
+        .catch(reason => {
+          if (!(reason instanceof ApiResponseError && reason.status === 402)) {
+            console.error('Unable to load the dashboard notification count.', reason)
+          }
+        })
     }
     refreshUnreadCount()
     window.addEventListener('mobiduka-notification', refreshUnreadCount)

@@ -26,6 +26,8 @@ export class ApiResponseError extends Error {
   }
 }
 
+export const SUBSCRIPTION_REQUIRED_EVENT = "mobiduka-subscription-required";
+
 const SESSION_KEY = "mobiduka_session";
 const PIN_LOGIN_CONTEXT_KEY = "mobiduka_pin_login_context";
 const LAST_SCREEN_KEY = "mobiduka_last_screen";
@@ -142,7 +144,22 @@ export async function apiFetchResponse(
       clearLastScreen();
       window.dispatchEvent(new Event("mobiduka-auth-expired"));
     }
-    const payload = await response.clone().json().catch(() => ({}));
+    const payload = await response.clone().json().catch(() => ({})) as {
+      error?: unknown;
+      message?: unknown;
+    };
+    if (response.status === 402 && typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(SUBSCRIPTION_REQUIRED_EVENT, {
+          detail: {
+            message:
+              typeof payload.message === "string"
+                ? payload.message
+                : "Renew your subscription to continue creating and syncing business records. Your existing data is retained.",
+          },
+        }),
+      );
+    }
     throw new ApiResponseError(
       typeof payload.error === "string"
         ? payload.error
