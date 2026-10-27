@@ -6,6 +6,13 @@ export type ClientSession = {
     businessId: string;
     role: string;
     offline?: boolean;
+    subscription?: {
+      planType: string;
+      status: "TRIAL" | "ACTIVE" | "GRACE" | "EXPIRED" | "REVOKED" | "MISSING";
+      trialEndsAt: string | null;
+      currentPeriodEndsAt: string | null;
+      graceEndsAt: string | null;
+    };
   };
 };
 

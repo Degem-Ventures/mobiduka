@@ -9,6 +9,7 @@ import {
 } from "@/lib/payment-config"
 import { hasMpesaIntegration } from "@/lib/mpesa-integration-store"
 import { requireBusinessPermission } from "@/lib/permissions"
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard"
 
 const RECEIPT_FORMATS = new Set(["80mm", "58mm", "a4", "sms"])
 const TAX_RATES = new Set(["standard", "reduced", "zero", "exempt"])
@@ -246,6 +247,8 @@ export async function PATCH(request: Request) {
         { error: "Authenticated business context is required." },
         { status: 401 },
       )
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId)
+    if (subscriptionLock) return subscriptionLock
     if (body.paymentConfig !== undefined || body.mpesaEnabled !== undefined) {
       const paymentAccess = await requireBusinessPermission(
         request,

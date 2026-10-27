@@ -150,6 +150,14 @@ async function main() {
       timezone: "Africa/Nairobi",
       subscriptionPlan: "starter",
       status: "ACTIVE",
+      platformSubscription: {
+        create: {
+          planType: "BASIC",
+          status: "TRIAL",
+          trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+          licenseCost: 2500,
+        },
+      },
     },
   });
   await prisma.businessSettings.create({

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { authenticatedBusinessId, requireBusinessAccess } from "@/lib/auth";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 const businessSelect = { id: true, name: true, branch: true, country: true, phone: true, email: true, kraPin: true, currency: true, timezone: true } as const;
 const CURRENCIES = new Set(["KES", "UGX", "TZS", "USD", "GBP", "EUR"]);
@@ -22,6 +23,8 @@ export async function PATCH(request: Request) {
     const body = await request.json() as { businessId?: string; name?: string; branch?: string | null; country?: string | null; phone?: string | null; email?: string | null; taxPin?: string | null; currency?: string };
     const businessId = requireBusinessAccess(request, body.businessId);
     if (!businessId) return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     if (body.name !== undefined && !body.name.trim()) return NextResponse.json({ error: "Business name is required." }, { status: 400 });
     if (body.currency !== undefined && !CURRENCIES.has(body.currency)) return NextResponse.json({ error: "Unsupported currency." }, { status: 400 });
     const email = body.email === undefined ? undefined : body.email?.trim().toLowerCase() || null;

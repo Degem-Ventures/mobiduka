@@ -8,6 +8,7 @@ import {
   validateCloudBackupEncryptionKey,
 } from "@/lib/cloud-backup-crypto"
 import { prisma } from "@/lib/prisma"
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard"
 import { requireBusinessPermission } from "@/lib/permissions"
 import {
   restoreServerBusinessBackupSnapshot,
@@ -105,6 +106,8 @@ export async function POST(request: Request) {
         { status: 403 },
       )
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId)
+    if (subscriptionLock) return subscriptionLock
 
     let body: unknown
     try {

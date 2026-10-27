@@ -39,6 +39,15 @@ test('cash sales create a cash payment record', async () => {
       },
     });
     businessId = business.id;
+    await prisma.platformSubscription.create({
+      data: {
+        businessId,
+        planType: "BASIC",
+        status: "TRIAL",
+        trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+        licenseCost: 2500,
+      },
+    });
 
     const role = await prisma.role.upsert({
       where: { businessId_name: { businessId: business.id, name: roleName } },

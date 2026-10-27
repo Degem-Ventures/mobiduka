@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authenticatedBusinessId } from "@/lib/auth";
 import { canonicalRoleName } from "@/lib/roles";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 const ROLE_NAMES = new Set(["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"]);
 
@@ -12,6 +13,8 @@ export async function POST(request: Request) {
     if (!businessId) {
       return NextResponse.json({ error: "Authenticated business context is required." }, { status: 401 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const body = await request.json();
     const fullName = String(body.name ?? body.fullName ?? "").trim();

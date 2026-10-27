@@ -14,6 +14,7 @@ import {
   paymentConfigMpesaEnvironment,
 } from "@/lib/payment-config"
 import { prisma } from "@/lib/prisma"
+import { canWriteForSubscription } from "@/lib/subscriptions"
 
 export const runtime = "nodejs"
 
@@ -72,6 +73,19 @@ export async function POST(request: Request) {
             "Authenticated business context, a valid Kenyan phone number, and a positive amount are required.",
         },
         { status: 401 },
+      )
+    }
+
+    const subscriptionAccess = await canWriteForSubscription(prisma, businessId)
+    if (!subscriptionAccess.allowed) {
+      return NextResponse.json(
+        {
+          error: "The subscription does not allow new writes. Historical data remains available.",
+          code: "SUBSCRIPTION_WRITE_LOCKED",
+          subscriptionStatus: subscriptionAccess.status,
+          endsAt: subscriptionAccess.endsAt?.toISOString() ?? null,
+        },
+        { status: 402 },
       )
     }
 

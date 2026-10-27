@@ -56,6 +56,7 @@
 .mk-primary, .mk-secondary, .mk-ghost {
   min-height: 48px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 20px; border-radius: 12px; font-size: 13px; font-weight: 800; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease;
 }
+.mk-primary, .mk-secondary { text-decoration: none; }
 .mk-primary { border: 1px solid var(--mk-blue); background: var(--mk-blue); color: white; box-shadow: 0 12px 25px rgba(18,58,143,.2); }
 .mk-primary:hover, .mk-secondary:hover { transform: translateY(-1px); }
 .mk-primary.small { min-height: 40px; padding: 0 16px; border-radius: 10px; font-size: 12px; }

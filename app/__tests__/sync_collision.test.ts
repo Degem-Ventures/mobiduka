@@ -70,6 +70,22 @@ describe("Sync ingestion collision ledger", () => {
         status: "ACTIVE",
       },
     });
+    await prisma.platformSubscription.upsert({
+      where: { businessId: mockBusinessId },
+      update: {
+        status: "ACTIVE",
+        currentPeriodEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        graceEndsAt: null,
+        trialEndsAt: null,
+      },
+      create: {
+        businessId: mockBusinessId,
+        planType: "BASIC",
+        status: "ACTIVE",
+        currentPeriodEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        licenseCost: 2500,
+      },
+    });
 
     await prisma.user.create({
       data: {
@@ -106,6 +122,7 @@ describe("Sync ingestion collision ledger", () => {
     await prisma.product.deleteMany({ where: { businessId: mockBusinessId } });
     await prisma.device.deleteMany({ where: { businessId: mockBusinessId } });
     await prisma.user.deleteMany({ where: { businessId: mockBusinessId } });
+    await prisma.platformSubscription.deleteMany({ where: { businessId: mockBusinessId } });
     await prisma.business.deleteMany({ where: { id: mockBusinessId } });
     await prisma.$disconnect();
   });

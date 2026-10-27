@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 export async function GET(request: Request) {
   try {
@@ -27,6 +28,8 @@ export async function POST(request: Request) {
     if (!businessId || !code || !name || !/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduledStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduledEnd)) {
       return NextResponse.json({ error: "Business, code, name, and valid scheduled times are required." }, { status: 400 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     const shiftType = await prisma.shiftType.upsert({
       where: { businessId_code: { businessId, code } },
       update: { name, scheduledStart, scheduledEnd, icon: body.icon ? String(body.icon) : null, color: body.color ? String(body.color) : null, active: body.active !== false },
@@ -52,6 +55,8 @@ export async function PATCH(request: Request) {
     if (!businessId || !id) {
       return NextResponse.json({ error: "Authenticated business context and shift type id are required." }, { status: 400 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     if (!name || !validTime(scheduledStart) || !validTime(scheduledEnd) || (body.icon !== undefined && !icon)) {
       return NextResponse.json({ error: "A shift name, valid scheduled start and end times, and a valid icon are required." }, { status: 400 });
     }
@@ -85,6 +90,8 @@ export async function DELETE(request: Request) {
     if (!businessId || !id) {
       return NextResponse.json({ error: "Authenticated business context and shift type id are required." }, { status: 400 });
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const result = await prisma.shiftType.updateMany({
       where: { id, businessId, active: true },

@@ -31,43 +31,43 @@ model SyncReceipt {
 }
 
 model CloudBackup {
-  id              String             @id @default(uuid())
-  businessId      String
-  backupType      String             @default("DEVICE")
-  checksum        String
-  chunkCount      Int
-  compressedBytes Int
-  originalBytes   Int
-  recordCount       Int?
-  collectionCount   Int?
-  queuedRecordCount Int?
-  triggerType       String             @default("MANUAL")
-  retryCount        Int                @default(0)
-  failureReason     String?
-  progressPercent   Int                @default(0)
-  progressMessage   String?
+  id                     String    @id @default(uuid())
+  businessId             String
+  backupType             String    @default("DEVICE")
+  checksum               String
+  chunkCount             Int
+  compressedBytes        Int
+  originalBytes          Int
+  recordCount            Int?
+  collectionCount        Int?
+  queuedRecordCount      Int?
+  triggerType            String    @default("MANUAL")
+  retryCount             Int       @default(0)
+  failureReason          String?
+  progressPercent        Int       @default(0)
+  progressMessage        String?
   restoreProgressPercent Int?
   restoreProgressMessage String?
-  restoreStartedAt DateTime?
-  status          String             @default("PENDING")
-  createdAt       DateTime           @default(now())
-  completedAt     DateTime?
+  restoreStartedAt       DateTime?
+  status                 String    @default("PENDING")
+  createdAt              DateTime  @default(now())
+  completedAt            DateTime?
 
-  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
   chunks   CloudBackupChunk[]
 
   @@index([businessId, backupType, status, createdAt])
 }
 
 model CloudBackupChunk {
-  id                String      @id @default(uuid())
+  id                String   @id @default(uuid())
   backupId          String
   chunkIndex        Int
   plaintextChecksum String
   nonce             String
   authTag           String
-  ciphertext        String      @db.Text
-  createdAt         DateTime    @default(now())
+  ciphertext        String   @db.Text
+  createdAt         DateTime @default(now())
 
   backup CloudBackup @relation(fields: [backupId], references: [id], onDelete: Cascade)
 
@@ -117,25 +117,57 @@ model Business {
   shiftTypes                ShiftType[]
   roles                     Role[]
   settings                  BusinessSettings?
+  platformSubscription      PlatformSubscription?
+}
+
+model PlatformAdmin {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  passwordHash        String
+  status              String    @default("ACTIVE")
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model PlatformSubscription {
+  id                  String    @id @default(uuid())
+  businessId          String    @unique
+  planType            String    @default("BASIC")
+  status              String    @default("TRIAL")
+  trialEndsAt         DateTime?
+  currentPeriodEndsAt DateTime?
+  graceEndsAt         DateTime?
+  licenseCost         Int       @default(2500)
+  autoRenewActive     Boolean   @default(true)
+  isTrialClaimed      Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([status, trialEndsAt])
+  @@index([status, currentPeriodEndsAt])
 }
 
 model BusinessSettings {
-  id                 String   @id @default(uuid())
-  businessId         String   @unique
-  receiptPrint       Boolean  @default(true)
-  lowStockAlerts     Boolean  @default(true)
-  salesNotifications Boolean  @default(true)
-  dailyReport        Boolean  @default(false)
-  autoBackup         Boolean  @default(true)
-  autoBackupFrequency String  @default("DAILY")
-  autoBackupWifiOnly Boolean  @default(true)
-  mpesaEnabled       Boolean  @default(true)
-  themeMode          String   @default("auto")
-  paymentConfig      Json?
-  receiptConfig      Json?
-  taxConfig          Json?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                  String   @id @default(uuid())
+  businessId          String   @unique
+  receiptPrint        Boolean  @default(true)
+  lowStockAlerts      Boolean  @default(true)
+  salesNotifications  Boolean  @default(true)
+  dailyReport         Boolean  @default(false)
+  autoBackup          Boolean  @default(true)
+  autoBackupFrequency String   @default("DAILY")
+  autoBackupWifiOnly  Boolean  @default(true)
+  mpesaEnabled        Boolean  @default(true)
+  themeMode           String   @default("auto")
+  paymentConfig       Json?
+  receiptConfig       Json?
+  taxConfig           Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 }

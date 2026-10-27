@@ -10,6 +10,7 @@ import {
 } from "@/lib/payment-config"
 import { hasMpesaIntegration } from "@/lib/mpesa-integration-store"
 import { requireBusinessPermission } from "@/lib/permissions"
+import { canWriteForSubscription, SubscriptionWriteDeniedError } from "@/lib/subscriptions"
 
 interface SyncRecord {
   id: string
@@ -122,6 +123,10 @@ export async function POST(request: Request) {
     }> = []
 
     await prisma.$transaction(async (tx) => {
+      const subscriptionAccess = await canWriteForSubscription(tx, resolvedBusinessId);
+      if (!subscriptionAccess.allowed) {
+        throw new SubscriptionWriteDeniedError(subscriptionAccess.status, subscriptionAccess.endsAt);
+      }
       const sortedRecords = [...records].sort(
         (a, b) =>
           new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
@@ -981,6 +986,14 @@ export async function POST(request: Request) {
       { status: 200 },
     )
   } catch (error: any) {
+    if (error instanceof SubscriptionWriteDeniedError) {
+      return NextResponse.json({
+        error: error.message,
+        code: "SUBSCRIPTION_WRITE_LOCKED",
+        subscriptionStatus: error.status,
+        endsAt: error.endsAt?.toISOString() ?? null,
+      }, { status: 402 });
+    }
     return NextResponse.json(
       {
         error: "Atomic transaction batch synchronization processing failed.",

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 function normalizeCategory(value: string) {
   const known: Record<string, string> = {
@@ -53,6 +54,8 @@ export async function POST(request: Request) {
         { status: 401 },
       );
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(resolvedBusinessId);
+    if (subscriptionLock) return subscriptionLock;
     if (Number.isNaN(createdAt.getTime())) {
       return NextResponse.json({ error: "Date must be valid." }, { status: 400 });
     }
@@ -121,6 +124,8 @@ export async function PATCH(request: Request) {
     const description = typeof body.description === "string" ? body.description.trim() : "";
     const createdAt = body.date ? new Date(String(body.date)) : null;
     if (!businessId || !id || !description || !body.category || !Number.isFinite(amount) || amount <= 0) return NextResponse.json({ error: "Authenticated business context, expense details, and a positive amount are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     if (createdAt && Number.isNaN(createdAt.getTime())) return NextResponse.json({ error: "Date must be valid." }, { status: 400 });
     const existing = await prisma.expense.findFirst({ where: { id, businessId }, select: { id: true } });
     if (!existing) return NextResponse.json({ error: "Expense was not found." }, { status: 404 });
@@ -137,6 +142,8 @@ export async function DELETE(request: Request) {
     const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
     const id = url.searchParams.get("id")?.trim();
     if (!businessId || !id) return NextResponse.json({ error: "Authenticated business context and expense id are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
     const deleted = await prisma.expense.deleteMany({ where: { id, businessId } });
     if (!deleted.count) return NextResponse.json({ error: "Expense was not found." }, { status: 404 });
     return NextResponse.json({ success: true });

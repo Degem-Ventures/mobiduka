@@ -109,6 +109,18 @@ async function main() {
     })
   }
 
+  await prisma.platformSubscription.upsert({
+    where: { businessId: business.id },
+    create: {
+      businessId: business.id,
+      planType: "BASIC",
+      status: "TRIAL",
+      trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      licenseCost: 2500,
+    },
+    update: {},
+  })
+
   await deleteTenantData(business.id)
   await prisma.businessSettings.create({
     data: {

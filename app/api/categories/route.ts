@@ -2,6 +2,7 @@ import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requireBusinessAccess } from "@/lib/auth";
 import { createSystemNotification } from "@/lib/notifications";
+import { subscriptionWriteLockResponse } from "@/lib/subscription-write-guard";
 
 export async function GET(request: Request) {
   try {
@@ -46,6 +47,8 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const existing = await prisma.category.findFirst({ where: { businessId, name, deletedAt: null } });
     if (existing) {
@@ -85,6 +88,8 @@ export async function PATCH(request: Request) {
     const categoryId = typeof body.id === "string" ? body.id.trim() : new URL(request.url).searchParams.get("id")?.trim();
     const businessId = requireBusinessAccess(request, body.businessId);
     if (!businessId || !categoryId) return NextResponse.json({ error: "Authenticated business context and category id are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     const existing = await prisma.category.findFirst({ where: { id: categoryId, businessId }, select: { id: true, name: true, deletedAt: true } });
     if (!existing) return NextResponse.json({ error: "Category was not found." }, { status: 404 });
@@ -121,6 +126,8 @@ export async function DELETE(request: Request) {
     const businessId = requireBusinessAccess(request, url.searchParams.get("businessId"));
     const hardDelete = url.searchParams.get("hard") === "true";
     if (!businessId || !categoryId) return NextResponse.json({ error: "Authenticated business context and category id are required." }, { status: 400 });
+    const subscriptionLock = await subscriptionWriteLockResponse(businessId);
+    if (subscriptionLock) return subscriptionLock;
 
     if (hardDelete) {
       const result = await prisma.$transaction(async (tx) => {
