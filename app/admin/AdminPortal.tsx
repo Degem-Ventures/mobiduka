@@ -2,10 +2,10 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { formatPlanPrice, planCatalog } from '../plans/plan-catalog'
-import { AdminDataProvider, useAdminData, type AdminModalType } from './AdminDataProvider'
+import { AdminDataProvider, useAdminData } from './AdminDataProvider'
 import {
   adminPageMeta,
   apiRateData,
@@ -155,7 +155,7 @@ const navigationGroups = [
     { to: '/admin/integrations', label: 'Integrations', icon: 'integration' as IconName },
     { to: '/admin/notifications', label: 'Notifications', icon: 'bell' as IconName },
     { to: '/admin/backups', label: 'Backups', icon: 'backup' as IconName },
-    { to: '/admin/system-settings', label: 'System Settings', icon: 'platformSettings' as IconName },
+    { to: '/admin/system-settings', label: 'Tenant Settings Registry', icon: 'platformSettings' as IconName },
   ] },
   { label: 'Support', icon: 'lifeBuoy' as IconName, items: [
     { to: '/admin/support', label: 'Support Center', icon: 'support' as IconName, badge: '3' },
@@ -177,85 +177,9 @@ function downloadCsv(filename: string, rows: Record<string, string | number | bo
   URL.revokeObjectURL(url)
 }
 
-function AdminCrudModal({ type, onClose, onCreate }: {
-  type: Exclude<AdminModalType, null>
-  onClose: () => void
-  onCreate: (payload: Record<string, string>) => void
-}) {
-  const [form, setForm] = useState<Record<string, string>>(
-    type === 'tenant'
-      ? { business: '', location: '', owner: '', email: '', plan: 'Basic', accountType: 'Till', shortcode: '', reference: '' }
-      : type === 'user'
-        ? { legal: '', email: '', role: 'STORE_OWNER', tenant: 'Platform' }
-        : { tenant: '', plan: 'Basic', expires: '2026-12-31', amount: '2500' },
-  )
-  const titles = {
-    tenant: ['Add tenant', 'Provision a new business workspace and payment node.'],
-    user: ['Invite platform user', 'Create an identity and assign its initial tenant scope.'],
-    license: ['Issue license', 'Provision a commercial tier and enforcement timeline.'],
-  }
-  const update = (key: string, value: string) => setForm(current => ({ ...current, [key]: value }))
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    onCreate(form)
-  }
-
-  return (
-    <div className="admin-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-      <form className="admin-modal" onSubmit={submit}>
-        <div className="admin-modal-head">
-          <div><span>CREATE RECORD</span><h2>{titles[type][0]}</h2><p>{titles[type][1]}</p></div>
-          <button type="button" className="admin-icon-button" onClick={onClose} aria-label="Close"><AdminIcon name="close"/></button>
-        </div>
-        <div className="admin-modal-body">
-          {type === 'tenant' && <>
-            <div className="admin-form-grid two">
-              <label><span>Business name *</span><input required value={form.business} onChange={event => update('business', event.target.value)} placeholder="e.g. MobiDuka Westlands"/></label>
-              <label><span>Location *</span><input required value={form.location} onChange={event => update('location', event.target.value)} placeholder="Town, County"/></label>
-            </div>
-            <div className="admin-form-grid two">
-              <label><span>Owner legal name *</span><input required value={form.owner} onChange={event => update('owner', event.target.value)} placeholder="Full name"/></label>
-              <label><span>Owner email *</span><input required type="email" value={form.email} onChange={event => update('email', event.target.value)} placeholder="owner@business.co.ke"/></label>
-            </div>
-            <div className="admin-form-grid two">
-              <label><span>License tier</span><select value={form.plan} onChange={event => update('plan', event.target.value)}><option>Basic</option><option>Growth</option><option>Enterprise</option></select></label>
-              <label><span>M-PESA account type</span><select value={form.accountType} onChange={event => update('accountType', event.target.value)}><option>Till</option><option>Paybill</option></select></label>
-            </div>
-            <div className="admin-form-grid two">
-              <label><span>Business shortcode *</span><input required value={form.shortcode} onChange={event => update('shortcode', event.target.value.replace(/\D/g, ''))} placeholder="1787049"/></label>
-              <label><span>Account reference</span><input value={form.reference} onChange={event => update('reference', event.target.value)} placeholder="WESTLANDS01"/></label>
-            </div>
-          </>}
-          {type === 'user' && <>
-            <label className="admin-field"><span>Verified legal name *</span><input required value={form.legal} onChange={event => update('legal', event.target.value)} placeholder="Daniel Kamar"/></label>
-            <label className="admin-field"><span>Email ID *</span><input required type="email" value={form.email} onChange={event => update('email', event.target.value)} placeholder="name@mobiduka.co.ke"/></label>
-            <div className="admin-form-grid two">
-              <label><span>Role badge token</span><select value={form.role} onChange={event => update('role', event.target.value)}><option>SUPER_ADMIN</option><option>STORE_OWNER</option><option>ACCOUNTANT</option><option>CASHIER</option></select></label>
-              <label><span>Tenant scope</span><input value={form.tenant} onChange={event => update('tenant', event.target.value)} placeholder="Platform or tenant name"/></label>
-            </div>
-          </>}
-          {type === 'license' && <>
-            <label className="admin-field"><span>Tenant identifier *</span><input required value={form.tenant} onChange={event => update('tenant', event.target.value)} placeholder="Business or tenant ID"/></label>
-            <div className="admin-form-grid two">
-              <label><span>Strategic tier</span><select value={form.plan} onChange={event => { update('plan', event.target.value); update('amount', event.target.value === 'Basic' ? '2500' : event.target.value === 'Growth' ? '5500' : '12500') }}><option>Basic</option><option>Growth</option><option>Enterprise</option></select></label>
-              <label><span>Monthly value (KSh)</span><input required type="number" value={form.amount} onChange={event => update('amount', event.target.value)}/></label>
-            </div>
-            <label className="admin-field"><span>Contract expiration *</span><input required type="date" value={form.expires} onChange={event => update('expires', event.target.value)}/></label>
-          </>}
-        </div>
-        <div className="admin-modal-footer">
-          <button type="button" className="admin-secondary-button" onClick={onClose}>Cancel</button>
-          <button className="admin-primary-button">{type === 'tenant' ? 'Create tenant' : type === 'user' ? 'Send invitation' : 'Provision license'}</button>
-        </div>
-      </form>
-    </div>
-  )
-}
-
 function AdminLayoutContent({ children }: { children: ReactNode }) {
-  const { createModal, openCreate: openCreateData, closeCreate, createRecord } = useAdminData()
   const { theme, isDark, setTheme } = useTheme()
-  const pathname = usePathname()
+  const pathname = usePathname() ?? '/admin'
   const slug = pathname.split('/').filter(Boolean).at(-1) ?? 'admin'
   const readableSlug = slug.replace(/-/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
   const meta = adminPageMeta[pathname] ?? { eyebrow: 'Control plane', title: readableSlug, description: 'Platform-wide operations and administrative controls.' }
@@ -264,11 +188,36 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
+  const [commandOpen, setCommandOpen] = useState(false)
+  const [commandQuery, setCommandQuery] = useState('')
+  const matchingNavigationGroups = useMemo(() => {
+    const query = commandQuery.trim().toLowerCase()
+    return navigationGroups
+      .map(group => ({
+        ...group,
+        items: group.items.filter(item =>
+          !query || `${item.label} ${item.to}`.toLowerCase().includes(query),
+        ),
+      }))
+      .filter(group => group.items.length > 0)
+  }, [commandQuery])
 
-  const openCreate = (type: 'tenant' | 'user' | 'license') => {
-    openCreateData(type)
-    setQuickOpen(false)
-  }
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setCommandOpen(value => !value)
+        setCommandQuery('')
+      } else if (event.key === 'Escape') {
+        setCommandOpen(false)
+        setNotificationsOpen(false)
+        setQuickOpen(false)
+        setThemeMenuOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   return (
     <div className={`admin-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
@@ -304,11 +253,10 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
         <div className="admin-system-card">
           <div className="admin-system-top">
             <span className="admin-live-dot" />
-            <span>All systems operational</span>
+            <span>Health feed not connected</span>
           </div>
           <div className="admin-system-stats">
-            <span>API 99.99%</span>
-            <span>v2.4.18</span>
+            <span>Live status unavailable</span>
           </div>
         </div>
         <a className="admin-back-link" href="/">
@@ -316,9 +264,9 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
           Open POS prototype
         </a>
         <div className="admin-profile">
-          <div className="admin-avatar">DK</div>
+          <div className="admin-avatar">PA</div>
           <div>
-            <strong>Daniel Kamar</strong>
+            <strong>Platform administrator</strong>
             <span>SUPER_ADMIN</span>
           </div>
           <button className="admin-icon-button" aria-label="Admin settings"><AdminIcon name="settings" size={16} /></button>
@@ -328,6 +276,11 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
       <main className="admin-main">
         <header className="admin-topbar">
           <div>
+            <div className="admin-breadcrumbs">
+              <Link href="/admin">MobiDuka</Link>
+              <AdminIcon name="chevron" size={10}/>
+              <strong>{meta.title}</strong>
+            </div>
             <div className="admin-eyebrow">{meta.eyebrow}</div>
             <h1>{meta.title}</h1>
             <p>{meta.description}</p>
@@ -358,7 +311,16 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
             </div>
             <div className="admin-global-search">
               <AdminIcon name="search" size={16} />
-              <input aria-label="Search platform" placeholder="Search tenants, users, IDs…" />
+              <input
+                aria-label="Search control plane"
+                placeholder="Search workspaces…"
+                readOnly
+                title="Open workspace search"
+                onClick={() => {
+                  setCommandOpen(true)
+                  setCommandQuery('')
+                }}
+              />
               <kbd>⌘ K</kbd>
             </div>
             <div className="admin-popover-anchor">
@@ -366,18 +328,16 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
               {notificationsOpen && (
                 <div className="admin-notifications-popover">
                   <div className="admin-popover-head"><div><span>INFRASTRUCTURE LOGS</span><strong>Notifications</strong></div><button className="admin-icon-button" onClick={() => setNotificationsOpen(false)}><AdminIcon name="close" size={14}/></button></div>
-                  <div className="admin-notification warning"><AdminIcon name="warning" size={16}/><div><strong>Webhook delivery failed</strong><span>Shortcode 1786003 · Tenant T-002</span><small>2 minutes ago</small></div></div>
-                  <div className="admin-notification success"><AdminIcon name="check" size={16}/><div><strong>Cryptographic handshake rotation completed</strong><span>Till 1787049 · AES keyring healthy</span><small>11 minutes ago</small></div></div>
-                  <button className="admin-text-button">Open infrastructure log</button>
+                  <div className="admin-notification"><div><strong>Admin notifications are not connected</strong><span>No notification feed is currently available from the backend.</span></div></div>
                 </div>
               )}
             </div>
             <div className="admin-popover-anchor">
-              <button className="admin-primary-button" onClick={() => setQuickOpen(value => !value)}><span>+</span> Quick create</button>
+              <button className="admin-primary-button" onClick={() => setQuickOpen(value => !value)}><span>+</span> Quick access</button>
               {quickOpen && (
                 <div className="admin-quick-menu">
-                  <button onClick={() => openCreate('tenant')}><AdminIcon name="tenants" size={16}/><div><strong>Tenant workspace</strong><span>Business, owner and M-PESA node</span></div></button>
-                  <button onClick={() => openCreate('user')}><AdminIcon name="identity" size={16}/><div><strong>User identity</strong><span>Invite and assign RBAC scope</span></div></button>
+                  <Link href="/admin/tenants" onClick={() => setQuickOpen(false)}><AdminIcon name="tenants" size={16}/><div><strong>Tenant registry</strong><span>View database businesses</span></div></Link>
+                  <Link href="/admin/identity" onClick={() => setQuickOpen(false)}><AdminIcon name="identity" size={16}/><div><strong>User identities</strong><span>View database users</span></div></Link>
                   <Link href="/admin/licenses" onClick={() => setQuickOpen(false)}><AdminIcon name="licenses" size={16}/><div><strong>Manage licenses</strong><span>View trials, plans and enforcement</span></div></Link>
                 </div>
               )}
@@ -388,7 +348,55 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
           {children}
         </div>
       </main>
-      {createModal && <AdminCrudModal type={createModal} onClose={closeCreate} onCreate={createRecord}/>}
+      {commandOpen && (
+        <div
+          className="admin-command-overlay"
+          onMouseDown={event => {
+            if (event.target === event.currentTarget) setCommandOpen(false)
+          }}
+        >
+          <div className="admin-command-palette" role="dialog" aria-modal="true" aria-label="Search admin workspaces">
+            <div className="admin-command-input">
+              <AdminIcon name="search" size={17}/>
+              <input
+                autoFocus
+                value={commandQuery}
+                onChange={event => setCommandQuery(event.target.value)}
+                placeholder="Search admin pages…"
+              />
+              <kbd>ESC</kbd>
+            </div>
+            <div className="admin-command-results">
+              {matchingNavigationGroups.length ? matchingNavigationGroups.map(group => (
+                <section key={group.label}>
+                  <span>{group.label}</span>
+                  {group.items.map(item => (
+                    <Link
+                      key={item.to}
+                      href={item.to}
+                      onClick={() => setCommandOpen(false)}
+                    >
+                      <div className="admin-command-result-icon"><AdminIcon name={item.icon} size={14}/></div>
+                      <div><strong>{item.label}</strong><small>{item.to}</small></div>
+                      <AdminIcon name="chevron" size={12}/>
+                    </Link>
+                  ))}
+                </section>
+              )) : (
+                <div className="admin-command-empty">
+                  <strong>No matching admin pages</strong>
+                  <span>Try a workspace name such as tenants, devices, or licenses.</span>
+                </div>
+              )}
+            </div>
+            <div className="admin-command-footer">
+              <span>Enter to open</span>
+              <span>Esc to close</span>
+              <strong>MobiDuka Control Plane</strong>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -551,6 +559,9 @@ export function AdminInfrastructure() {
 
   return (
     <div className="admin-page-stack">
+      <div className="admin-empty-state" role="note">
+        Infrastructure telemetry and controls are sample-only in this build. No displayed metrics are read from the database, and actions do not change backend records.
+      </div>
       <section className="admin-infra-health">
         <div><span className="admin-live-dot"/><div><span>Daraja Gateway</span><strong>Operational</strong></div><code>182ms</code></div>
         <div><i className="cyan"/><div><span>Synchronization Queue</span><strong>Active · 0ms</strong></div><code>42 events</code></div>
@@ -837,6 +848,16 @@ export function AdminIdentity() {
 }
 
 export function AdminLicenses() {
+  type LegacyLicenseRecord = {
+    id: string
+    businessId: string
+    licenseType: string
+    deviceLimit: number
+    expiryDate: string
+    status: string
+    createdAt: string
+    business: { name: string; ownerName: string | null; email: string | null }
+  }
   type SubscriptionRecord = {
     id: string
     businessId: string
@@ -850,6 +871,8 @@ export function AdminLicenses() {
     business: { id: string; name: string; ownerName: string | null; email: string | null }
   }
   const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([])
+  const [legacyLicenses, setLegacyLicenses] = useState<LegacyLicenseRecord[]>([])
+  const [legacyLicenseCount, setLegacyLicenseCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -857,9 +880,16 @@ export function AdminLicenses() {
 
   const refreshSubscriptions = async () => {
     const response = await fetch('/api/admin/licenses', { cache: 'no-store' })
-    const result = await response.json() as { subscriptions?: SubscriptionRecord[]; error?: string }
+    const result = await response.json() as {
+      subscriptions?: SubscriptionRecord[]
+      legacyLicenses?: LegacyLicenseRecord[]
+      legacyLicenseCount?: number
+      error?: string
+    }
     if (!response.ok) throw new Error(result.error ?? 'Unable to load subscriptions.')
     setSubscriptions(result.subscriptions ?? [])
+    setLegacyLicenses(result.legacyLicenses ?? [])
+    setLegacyLicenseCount(result.legacyLicenseCount ?? 0)
   }
 
   useEffect(() => {
@@ -943,7 +973,7 @@ export function AdminLicenses() {
                   <td><span className={`admin-status-badge ${locked ? 'suspended' : subscription.status === 'GRACE' ? 'warning' : 'active'}`}><i/>{subscription.status}</span></td>
                   <td><div className="admin-row-actions">
                     <button className="admin-row-button" disabled={pendingId === subscription.id} onClick={() => void updateSubscription(subscription, locked ? 'ACTIVATE' : 'RENEW')}>{pendingId === subscription.id ? 'Saving…' : locked ? 'Activate 30 days' : 'Renew 30 days'}</button>
-                    <button className="admin-row-button" disabled={pendingId === subscription.id || !subscription.autoRenewActive} onClick={() => void updateSubscription(subscription, 'AUTO_RENEW')}>{subscription.autoRenewActive ? 'Disable auto-renew' : 'Enable auto-renew'}</button>
+                    <button className="admin-row-button" disabled={pendingId === subscription.id} onClick={() => void updateSubscription(subscription, 'AUTO_RENEW')}>{subscription.autoRenewActive ? 'Disable auto-renew' : 'Enable auto-renew'}</button>
                     {!locked && <button className="admin-danger-button" disabled={pendingId === subscription.id} onClick={() => {
                       if (window.confirm(`Revoke subscription access for ${subscription.business.name}?`)) void updateSubscription(subscription, 'REVOKE')
                     }}>Revoke</button>}
@@ -951,6 +981,31 @@ export function AdminLicenses() {
                 </tr>
               )
             })}</tbody>
+          </table>
+        </div>
+      </div>
+      <div className="admin-table-panel">
+        <div className="admin-table-title-row">
+          <div><span>Legacy device licenses</span><h2>Separate license records</h2></div>
+          <span>Latest {legacyLicenses.length} of {legacyLicenseCount} records · license keys are never returned</span>
+        </div>
+        <div className="admin-table-scroll">
+          <table className="admin-table license-table">
+            <thead><tr><th>Business</th><th>License type</th><th>Device limit</th><th>Expires</th><th>Status</th><th>Created</th></tr></thead>
+            <tbody>
+              {legacyLicenses.map(license => (
+                <tr key={license.id}>
+                  <td><div className="admin-person-cell"><strong>{license.business.name}</strong><span>{license.business.ownerName ?? license.business.email ?? license.businessId}</span></div></td>
+                  <td>{license.licenseType}</td>
+                  <td>{license.deviceLimit}</td>
+                  <td>{new Date(license.expiryDate).toLocaleDateString('en-KE')}</td>
+                  <td><span className={`admin-status-badge ${license.status.toLowerCase() === 'active' ? 'active' : 'suspended'}`}><i/>{license.status}</span></td>
+                  <td>{new Date(license.createdAt).toLocaleDateString('en-KE')}</td>
+                </tr>
+              ))}
+              {!loading && legacyLicenses.length === 0 && <tr><td colSpan={6}>No legacy device-license rows have been recorded.</td></tr>}
+              {loading && legacyLicenses.length === 0 && <tr><td colSpan={6}>Loading legacy license records…</td></tr>}
+            </tbody>
           </table>
         </div>
       </div>

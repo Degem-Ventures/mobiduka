@@ -3,37 +3,49 @@
 import { useEffect, useRef, useState } from "react"
 import { SUBSCRIPTION_REQUIRED_EVENT } from "../../lib/client-api"
 
-type SubscriptionRequiredDetail = { message?: string }
-
-export default function SubscriptionRequiredToast() {
-  const [message, setMessage] = useState<string | null>(null)
-  const visible = useRef(false)
-  const timeout = useRef<number | null>(null)
+export default function SubscriptionRequiredToast({
+  enabled,
+}: {
+  enabled: boolean
+}) {
+  const [visible, setVisible] = useState(false)
+  const timeoutRef = useRef<number | null>(null)
+  const lastShownAtRef = useRef(0)
 
   useEffect(() => {
-    const showToast = (event: Event) => {
-      if (visible.current) return
-      visible.current = true
-      const detail = (event as CustomEvent<SubscriptionRequiredDetail>).detail
-      setMessage(
-        detail?.message ??
-          "Renew your subscription to continue creating and syncing business records. Your existing data is retained.",
-      )
-      timeout.current = window.setTimeout(() => {
-        visible.current = false
-        setMessage(null)
-        timeout.current = null
-      }, 8000)
+    if (!enabled) return
+
+    const showNotice = () => {
+      const now = Date.now()
+      if (now - lastShownAtRef.current < 30_000) return
+      lastShownAtRef.current = now
+      setVisible(true)
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current)
+      timeoutRef.current = window.setTimeout(() => {
+        setVisible(false)
+        timeoutRef.current = null
+      }, 8_000)
     }
 
-    window.addEventListener(SUBSCRIPTION_REQUIRED_EVENT, showToast)
+    window.addEventListener(SUBSCRIPTION_REQUIRED_EVENT, showNotice)
     return () => {
-      window.removeEventListener(SUBSCRIPTION_REQUIRED_EVENT, showToast)
-      if (timeout.current !== null) window.clearTimeout(timeout.current)
+      window.removeEventListener(SUBSCRIPTION_REQUIRED_EVENT, showNotice)
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current)
+        timeoutRef.current = null
+      }
     }
-  }, [])
+  }, [enabled])
 
-  if (!message) return null
+  if (!visible || !enabled) return null
+
+  const dismiss = () => {
+    setVisible(false)
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+  }
 
   return (
     <div
@@ -41,47 +53,45 @@ export default function SubscriptionRequiredToast() {
       aria-live="assertive"
       style={{
         position: "fixed",
-        zIndex: 10000,
-        top: 18,
+        top: 20,
         left: "50%",
         transform: "translateX(-50%)",
-        width: "min(440px, calc(100vw - 32px))",
+        zIndex: 20_000,
         display: "flex",
         alignItems: "flex-start",
         gap: 12,
+        width: "min(440px, calc(100vw - 32px))",
         padding: "14px 16px",
-        border: "1px solid rgba(212, 175, 55, 0.65)",
-        borderLeft: "5px solid #D4AF37",
-        borderRadius: 8,
-        background: "#0D1B3D",
-        color: "#FFFFFF",
-        boxShadow: "0 12px 32px rgba(0, 0, 0, 0.28)",
+        border: "1px solid #F3D28A",
+        borderRadius: 12,
+        background: "#FFF8E7",
+        color: "#5B4314",
+        boxShadow: "0 8px 28px rgba(13, 27, 61, 0.22)",
+        fontFamily: "inherit",
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <strong style={{ display: "block", marginBottom: 4, fontSize: 14 }}>
+      <span aria-hidden="true" style={{ fontSize: 18, lineHeight: 1 }}>
+        ⚠
+      </span>
+      <span style={{ flex: 1, fontSize: 13, lineHeight: 1.45 }}>
+        <strong style={{ display: "block", marginBottom: 2 }}>
           Subscription renewal required
         </strong>
-        <span style={{ fontSize: 13, lineHeight: 1.45 }}>{message}</span>
-      </div>
+        This change was not saved. Renew your subscription to restore write
+        access. Your existing records remain available.
+      </span>
       <button
         type="button"
-        aria-label="Dismiss subscription warning"
-        onClick={() => {
-          visible.current = false
-          setMessage(null)
-          if (timeout.current !== null) window.clearTimeout(timeout.current)
-          timeout.current = null
-        }}
+        onClick={dismiss}
+        aria-label="Dismiss subscription notice"
         style={{
-          flex: "0 0 auto",
           border: 0,
-          padding: "0 2px",
+          padding: 0,
           background: "transparent",
-          color: "#FFFFFF",
-          fontSize: 22,
-          lineHeight: 1,
+          color: "inherit",
           cursor: "pointer",
+          fontSize: 18,
+          lineHeight: 1,
         }}
       >
         ×

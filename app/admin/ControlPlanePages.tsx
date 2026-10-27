@@ -1,8 +1,149 @@
 "use client"
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { chartData, getWorkspaceConfig } from './control-plane-data'
+
+const liveWorkspaces = new Set([
+  'transactions',
+  'sync-health',
+  'devices',
+  'tenant-health',
+  'roles',
+  'audit-logs',
+  'subscriptions',
+  'mpesa',
+  'reconciliation',
+  'payment-events',
+  'backups',
+  'notifications',
+  'revenue',
+  'integrations',
+  'security',
+  'system-settings',
+])
+
+type LiveWorkspaceData = {
+  columns: string[]
+  rows: string[][]
+  total: number
+  page: number
+  pageSize: number
+  metrics: Array<{ label: string; value: string; note: string }>
+  generatedAt: string
+}
+
+function LiveAdminWorkspace({ workspace }: { workspace: string }) {
+  const config = getWorkspaceConfig(workspace)
+  const [page, setPage] = useState(1)
+  const [query, setQuery] = useState('')
+  const [data, setData] = useState<LiveWorkspaceData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [revision, setRevision] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoading(true)
+    setError('')
+    setData(null)
+    void fetch(`/api/admin/workspaces?workspace=${encodeURIComponent(workspace)}&page=${page}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const result = await response.json() as LiveWorkspaceData & { error?: string }
+        if (!response.ok) throw new Error(result.error ?? 'Unable to load admin workspace.')
+        setData(result)
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return
+        setError(reason instanceof Error ? reason.message : 'Unable to load admin workspace.')
+        setData(null)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [workspace, page, revision])
+
+  const filtered = useMemo(
+    () => (data?.rows ?? []).filter((row) => row.join(' ').toLowerCase().includes(query.toLowerCase())),
+    [data, query],
+  )
+  const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / (data?.pageSize ?? 50)))
+
+  const exportRows = () => {
+    if (!data || !filtered.length) return
+    const quote = (value: string) => `"${value.replace(/"/g, '""')}"`
+    const csv = [
+      data.columns.map(quote).join(','),
+      ...filtered.map((row) => row.map(quote).join(',')),
+    ].join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${workspace}-page-${page}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="admin-page-stack">
+      <div className="ops-kpi-grid">
+        {(data?.metrics ?? []).map((metric) => (
+          <article className="ops-kpi" key={metric.label}>
+            <span>{metric.label}</span>
+            <strong>{metric.value}</strong>
+            <div><i className="info"/>{metric.note}</div>
+          </article>
+        ))}
+      </div>
+      <section className="ops-table-panel">
+        <div className="ops-table-toolbar">
+          <div className="ops-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search this page of ${config.title.toLowerCase()}…`}/></div>
+          <button onClick={() => setRevision((value) => value + 1)} disabled={loading}>Refresh live data</button>
+          <button onClick={exportRows} disabled={!filtered.length}>Export this page</button>
+        </div>
+        {error && <div className="admin-empty-state" role="alert">{error}</div>}
+        <div className="admin-table-scroll">
+          <table className="admin-table ops-table">
+            <thead><tr>{(data?.columns ?? []).map((column) => <th key={column}>{column}</th>)}</tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={Math.max(1, data?.columns.length ?? 1)}>Loading current database records…</td></tr>}
+              {!loading && !error && filtered.map((row, rowIndex) => (
+                <tr key={`${row[0]}-${rowIndex}`}>
+                  {row.map((cell, index) => (
+                    <td key={`${index}-${cell}`}>
+                      {index === row.length - 1 || /ACTIVE|COMPLETED|PENDING|FAILED|UNMATCHED|MATCHED|EXPIRED|GRACE|TRIAL|CANCELLED|REVOKED|READ|UNREAD|ENABLED|DISABLED/.test(cell.toUpperCase())
+                        ? <span className={`ops-badge ${statusTone(cell)}`}>{cell}</span>
+                        : <span>{cell}</span>}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {!loading && !error && filtered.length === 0 && (
+                <tr><td colSpan={Math.max(1, data?.columns.length ?? 1)}>No database records found on this page.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="admin-table-footer">
+          <span>
+            Showing {data?.total ? (page - 1) * (data?.pageSize ?? 50) + 1 : 0}–
+            {Math.min(page * (data?.pageSize ?? 50), data?.total ?? 0)} of {data?.total ?? 0}
+            {data && ` · Updated ${new Date(data.generatedAt).toLocaleString()}`}
+          </span>
+          <div>
+            <button disabled={loading || page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button>
+            <span>{page} / {pageCount}</span>
+            <button disabled={loading || page >= pageCount} onClick={() => setPage((value) => value + 1)}>Next</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
 
 
 function statusTone(value: string) {
@@ -16,11 +157,10 @@ function statusTone(value: string) {
 export function AdminWorkspace({ workspace }: { workspace: string }) {
   const config = getWorkspaceConfig(workspace)
   const [period, setPeriod] = useState('Today')
-  const [rows, setRows] = useState(config.rows)
   const [selected, setSelected] = useState<string[] | null>(null)
   const [toast, setToast] = useState('')
   const [query, setQuery] = useState('')
-  const filtered = useMemo(() => rows.filter(row => row.join(' ').toLowerCase().includes(query.toLowerCase())), [query, rows])
+  const filtered = useMemo(() => config.rows.filter(row => row.join(' ').toLowerCase().includes(query.toLowerCase())), [config.rows, query])
   const isMpesa = workspace === 'mpesa' || workspace === 'transactions'
   const isSync = workspace === 'sync-health'
   const isDevice = workspace === 'devices'
@@ -29,8 +169,11 @@ export function AdminWorkspace({ workspace }: { workspace: string }) {
   const isSupport = workspace === 'support'
   const isIncident = workspace === 'incidents'
 
+  if (liveWorkspaces.has(workspace)) {
+    return <LiveAdminWorkspace workspace={workspace} />
+  }
+
   const runAction = () => {
-    const id = `${workspace.toUpperCase().slice(0, 4)}-${Date.now().toString().slice(-6)}`
     if (/export/i.test(config.action)) {
       const csv = [config.columns.join(','), ...filtered.map(row => row.join(','))].join('\n')
       const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -39,15 +182,17 @@ export function AdminWorkspace({ workspace }: { workspace: string }) {
       anchor.download = `${workspace}-ledger.csv`
       anchor.click()
       URL.revokeObjectURL(url)
-    } else if (!/run|open|replay/i.test(config.action)) {
-      const nextRow = config.columns.map((_, index) => index === 0 ? id : index === 1 ? 'Platform · Global' : index === config.columns.length - 1 ? 'ACTIVE' : 'Pending configuration')
-      setRows(current => [nextRow, ...current])
+      setToast('Exported sample data; this is not a live database export.')
+      return
     }
-    setToast(`${config.action} completed · ${id}`)
+    setToast('This control is not connected to the backend. No changes were made.')
   }
 
   return (
     <div className="admin-page-stack">
+      <div className="admin-empty-state" role="note">
+        This workspace currently displays sample data. Its actions are not connected to backend services and do not change database records.
+      </div>
       <div className="ops-attention-strip">
         <div><span className={`ops-status-dot ${config.attention[0]?.tone ?? 'healthy'}`}/><div><strong>{config.attention[0]?.title ?? 'No active alerts'}</strong><span>{config.attention[0]?.detail ?? 'All services are operating normally.'}</span></div></div>
         <button onClick={() => setSelected(config.rows[0])}>Inspect attention item</button>
@@ -60,7 +205,7 @@ export function AdminWorkspace({ workspace }: { workspace: string }) {
       {(isMpesa || workspace === 'revenue' || workspace === 'billing-payments') && (
         <section className="ops-chart-panel">
           <div className="ops-panel-head">
-            <div><span>LIVE TELEMETRY</span><h2>{isMpesa ? 'Transaction volume & authorization performance' : 'Operational trend'}</h2></div>
+            <div><span>SAMPLE TELEMETRY</span><h2>{isMpesa ? 'Transaction volume & authorization performance' : 'Operational trend'}</h2></div>
             <div className="ops-segmented">{['Today', '7 Days', '30 Days', '90 Days'].map(value => <button key={value} className={period === value ? 'active' : ''} onClick={() => setPeriod(value)}>{value}</button>)}</div>
           </div>
           <div className="ops-chart">
@@ -98,19 +243,17 @@ export function AdminWorkspace({ workspace }: { workspace: string }) {
             <thead><tr>{config.columns.map(column => <th key={column}>{column}</th>)}<th>Action</th></tr></thead>
             <tbody>{filtered.map((row, rowIndex) => <tr key={`${row[0]}-${rowIndex}`} onClick={() => setSelected(row)}>{row.map((cell, index) => <td key={`${cell}-${index}`}>{index === row.length - 1 || /SUCCESS|FAILED|PENDING|ONLINE|SYNCING|ATTENTION|MATCHED|PARTIAL|ACTIVE|HEALTHY|REVIEW|TIMEOUT|REVERSED|BLOCKED|RECONCILED|OPERATIONAL/.test(cell) ? <span className={`ops-badge ${statusTone(cell)}`}>{cell}</span> : <span className={/ID|STK|POS-|UID|LIC-|T-\d|RCP-|ws_CO|INC-|SUP-/.test(cell) ? 'ops-mono' : ''}>{cell}</span>}</td>)}<td><button className="admin-row-button" onClick={event => {
               event.stopPropagation()
-              if (workspace === 'feature-flags') {
-                setRows(current => current.map(record => record === row ? record.map((cell, index) => index === record.length - 1 ? (cell === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE') : cell) : record))
-                setToast(`${row[0]} rollout ${row.at(-1) === 'ACTIVE' ? 'disabled' : 'enabled'}`)
-              } else if (workspace === 'jobs' && row.includes('FAILED')) {
-                setRows(current => current.map(record => record === row ? record.map(cell => cell === 'FAILED' ? 'RUNNING' : cell) : record))
-                setToast(`${row[0]} manually retried`)
-              } else setSelected(row)
+              if (workspace === 'feature-flags' || (workspace === 'jobs' && row.includes('FAILED'))) {
+                setToast('This control is not connected to the backend. No changes were made.')
+              } else {
+                setSelected(row)
+              }
             }}>{workspace === 'feature-flags' ? (row.at(-1) === 'ACTIVE' ? 'Disable' : 'Enable') : workspace === 'jobs' && row.includes('FAILED') ? 'Retry' : 'View'}</button></td></tr>)}</tbody>
           </table>
         </div>
       </section>
 
-      {toast && <div className="ops-toast"><span>✓</span><div><strong>Operation completed</strong><small>{toast}</small></div><button onClick={() => setToast('')}>×</button></div>}
+      {toast && <div className="ops-toast"><span>!</span><div><strong>Demo workspace</strong><small>{toast}</small></div><button onClick={() => setToast('')}>×</button></div>}
 
       {selected && (
         <div className="admin-drawer-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setSelected(null) }}>
@@ -129,8 +272,8 @@ export function AdminWorkspace({ workspace }: { workspace: string }) {
             </div>
             <div className="admin-drawer-footer">
               <button className="admin-secondary-button" onClick={() => setSelected(null)}>Close</button>
-              {(isDevice || isSync || isReconciliation) && <button className="admin-secondary-button" onClick={() => setToast(`${isDevice ? 'Force sync' : isSync ? 'Retry' : 'Reconciliation'} queued for ${selected[0]}`)}>{isDevice ? 'Force Sync' : isSync ? 'Retry Operation' : 'Run Reconciliation'}</button>}
-              <button className="admin-primary-button" onClick={() => { setRows(current => current.filter(row => row !== selected)); setSelected(null); setToast(`Record ${selected[0]} resolved`) }}>{isIncident ? 'Resolve Incident' : isSupport ? 'Resolve Ticket' : 'Resolve & close'}</button>
+              {(isDevice || isSync || isReconciliation) && <button className="admin-secondary-button" disabled title="Backend integration is not available">{isDevice ? 'Force Sync' : isSync ? 'Retry Operation' : 'Run Reconciliation'}</button>}
+              <button className="admin-primary-button" disabled title="Backend integration is not available">{isIncident ? 'Resolve Incident' : isSupport ? 'Resolve Ticket' : 'Resolve & close'}</button>
             </div>
           </aside>
         </div>

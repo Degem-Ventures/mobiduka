@@ -1,4 +1,4 @@
-import { AdminOverview } from './AdminPortal'
+import { AdminOverview } from './LiveDataPages'
 
 export default function AdminOverviewPage() {
   return <AdminOverview />

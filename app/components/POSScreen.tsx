@@ -1399,7 +1399,10 @@ function POSScreenContent({
       setMpesaQrDetails(null)
       setView("receipt")
     } catch (reason) {
-      if (reason instanceof ApiResponseError && reason.status === 402) {
+      if (
+        reason instanceof ApiResponseError &&
+        reason.code === "SUBSCRIPTION_WRITE_LOCKED"
+      ) {
         onSubscriptionLock()
       }
       const message =

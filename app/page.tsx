@@ -35,9 +35,9 @@ import PaymentMethodsScreen from "./components/PaymentMethodsScreen"
 import ManageRolesScreen from "./components/ManageRolesScreen"
 import OfflineSyncWorker from "./components/OfflineSyncWorker"
 import AutomaticBackupWorker from "./components/AutomaticBackupWorker"
-import SubscriptionRequiredToast from "./components/SubscriptionRequiredToast"
 import ReceiptSettingsScreen from "./components/ReceiptSettingsScreen"
 import TaxComplianceScreen from "./components/TaxComplianceScreen"
+import SubscriptionRequiredToast from "./components/SubscriptionRequiredToast"
 import {
   ApiResponseError,
   clearClientSession,
@@ -323,7 +323,6 @@ function AppInner() {
               (updatedAt !== null && previousUpdatedAt === updatedAt)),
         )
       } catch (error) {
-        if (error instanceof ApiResponseError && error.status === 402) return
         if (
           !cancelled &&
           error instanceof ApiResponseError &&
@@ -508,9 +507,9 @@ function AppInner() {
 
   return (
     <div className="app-shell">
-      <SubscriptionRequiredToast />
       <OfflineSyncWorker enabled={loggedIn} />
       <AutomaticBackupWorker enabled={loggedIn} />
+      <SubscriptionRequiredToast enabled={loggedIn} />
       {}
       <div className="phone-frame" data-theme={isDark ? "dark" : "light"}>
         {}

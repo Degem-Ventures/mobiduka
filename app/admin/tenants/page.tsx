@@ -1,4 +1,4 @@
-import { AdminTenants } from '../AdminPortal'
+import { AdminTenants } from '../LiveDataPages'
 
 export default function AdminTenantsPage() {
   return <AdminTenants />

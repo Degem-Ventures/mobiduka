@@ -24,9 +24,53 @@ type DashboardData = {
   scanActivity: { counts: Record<string, number>; recent: Array<{ id: string; barcode: string; name: string; status: string; emoji: string | null; createdAt: string }> }
 }
 
+type DashboardBusinessDetails = {
+  metadata: Pick<DashboardData['metadata'], 'name' | 'branch' | 'timezone'>
+  shiftTypes: DashboardData['shiftTypes']
+}
+
 const money = (value: number) => `KSh ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 const lowStockPreviewCount = 10
 const lowStockExpandedCount = 20
+const dashboardBusinessCachePrefix = 'mobiduka_dashboard_business.v1:'
+
+function readDashboardBusinessDetails(businessId: string): DashboardBusinessDetails | null {
+  try {
+    const raw = window.localStorage.getItem(`${dashboardBusinessCachePrefix}${businessId}`)
+    if (!raw) return null
+    const cached: unknown = JSON.parse(raw)
+    if (
+      typeof cached !== 'object' ||
+      cached === null ||
+      !('metadata' in cached) ||
+      typeof cached.metadata !== 'object' ||
+      cached.metadata === null ||
+      !('name' in cached.metadata) ||
+      typeof cached.metadata.name !== 'string' ||
+      !('branch' in cached.metadata) ||
+      !(typeof cached.metadata.branch === 'string' || cached.metadata.branch === null) ||
+      !('timezone' in cached.metadata) ||
+      typeof cached.metadata.timezone !== 'string' ||
+      !('shiftTypes' in cached) ||
+      !Array.isArray(cached.shiftTypes) ||
+      !cached.shiftTypes.every(
+        shift =>
+          typeof shift === 'object' &&
+          shift !== null &&
+          'name' in shift &&
+          typeof shift.name === 'string' &&
+          'scheduledStart' in shift &&
+          typeof shift.scheduledStart === 'string' &&
+          'scheduledEnd' in shift &&
+          typeof shift.scheduledEnd === 'string',
+      )
+    ) return null
+    return cached as DashboardBusinessDetails
+  } catch (reason) {
+    console.error('Unable to read cached dashboard business details.', reason)
+    return null
+  }
+}
 
 const paymentMethodPresentation = (method: string) => {
   const normalized = method.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -134,6 +178,9 @@ export default function Dashboard({ onNavigate }: Props) {
   const session = getClientSession()
   const [scanPulse, setScanPulse] = useState(false)
   const [data, setData] = useState<DashboardData | null>(null)
+  const [businessDetails, setBusinessDetails] = useState<DashboardBusinessDetails | null>(() =>
+    session ? readDashboardBusinessDetails(session.user.businessId) : null,
+  )
   const [error, setError] = useAutoDismissMessage()
   const [isOfflineSnapshot, setIsOfflineSnapshot] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
@@ -168,6 +215,23 @@ export default function Dashboard({ onNavigate }: Props) {
         )
         if (cancelled) return
         setData(snapshot)
+        const freshBusinessDetails: DashboardBusinessDetails = {
+          metadata: {
+            name: snapshot.metadata.name,
+            branch: snapshot.metadata.branch,
+            timezone: snapshot.metadata.timezone,
+          },
+          shiftTypes: snapshot.shiftTypes,
+        }
+        setBusinessDetails(freshBusinessDetails)
+        try {
+          window.localStorage.setItem(
+            `${dashboardBusinessCachePrefix}${session.user.businessId}`,
+            JSON.stringify(freshBusinessDetails),
+          )
+        } catch (reason) {
+          console.error('Unable to cache dashboard business details.', reason)
+        }
         let updatedAt: string | null = null
         try {
           updatedAt = await readOfflineCollectionUpdatedAt(
@@ -294,10 +358,10 @@ export default function Dashboard({ onNavigate }: Props) {
     { label: 'M-Pesa Sales', value: money(data?.paymentBreakdown?.MPESA?.amount ?? 0), sub: `${data?.paymentBreakdown?.MPESA?.transactions ?? 0} transactions`, icon: '📱', bg: 'linear-gradient(135deg, #005F2E 0%, #00A651 100%)' },
   ]
   const topProducts = (data?.topProducts ?? []).map(product => ({ ...product, sold: product.units, revenueLabel: money(product.revenue), change: 'Today' }))
-  const timeZone = data?.metadata.timezone ?? 'Africa/Nairobi'
-  const currentShift = shiftAtTime(data?.shiftTypes, clockNow, timeZone)
-  const businessLocationLine = data
-    ? `${data.metadata.name}${data.metadata.branch ? ` · ${data.metadata.branch}` : ''} · Shift: ${currentShift}`
+  const timeZone = businessDetails?.metadata.timezone ?? 'Africa/Nairobi'
+  const currentShift = shiftAtTime(businessDetails?.shiftTypes, clockNow, timeZone)
+  const businessLocationLine = businessDetails
+    ? `${businessDetails.metadata.name}${businessDetails.metadata.branch ? ` · ${businessDetails.metadata.branch}` : ''} · Shift: ${currentShift}`
     : 'Loading business details…'
   const recentTransactions = [...(data?.recentTransactions ?? [])]
     .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime())

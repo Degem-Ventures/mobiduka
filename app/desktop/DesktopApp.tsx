@@ -378,7 +378,6 @@ function DesktopInner() {
   if (!loggedIn) {
     return (
       <div className="desktop-login" data-theme={isDark ? 'dark' : 'light'} style={desktopVars}>
-        <SubscriptionRequiredToast />
         <section className="desktop-login-story">
           <div className="desktop-login-brand"><span><img src="/icon.svg" alt=""/></span><strong>MobiDuka</strong><small>POS</small></div>
           <div className="desktop-login-copy">
@@ -411,9 +410,9 @@ function DesktopInner() {
 
   return (
     <>
-    <SubscriptionRequiredToast />
     <OfflineSyncWorker enabled={loggedIn} />
     <AutomaticBackupWorker enabled={loggedIn} />
+    <SubscriptionRequiredToast enabled={loggedIn} />
     <div className={`desktop-app ${collapsed ? 'sidebar-collapsed' : ''}`} data-theme={isDark ? 'dark' : 'light'} style={desktopVars}>
       {navOpen && <button className="desktop-nav-scrim" onClick={() => setNavOpen(false)} aria-label="Close navigation"/>}
       <aside className={`desktop-sidebar ${navOpen ? 'mobile-open' : ''}`}>

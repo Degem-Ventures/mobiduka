@@ -1,37 +1,49 @@
 import { NextResponse } from "next/server.js";
-import { authenticatedPlatformAdminId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requirePlatformAdmin } from "@/lib/platform-admin";
 import { planCatalog } from "@/app/plans/plan-catalog";
 import { effectiveSubscriptionStatus, TRIAL_DURATION_DAYS } from "@/lib/subscriptions";
-
-async function requirePlatformAdmin(request: Request) {
-  const adminId = authenticatedPlatformAdminId(request);
-  if (!adminId) return null;
-  return prisma.platformAdmin.findFirst({
-    where: { id: adminId, status: "ACTIVE" },
-    select: { id: true },
-  });
-}
 
 export async function GET(request: Request) {
   const admin = await requirePlatformAdmin(request);
   if (!admin) return NextResponse.json({ error: "SUPER_ADMIN access is required." }, { status: 403 });
 
   try {
-    const subscriptions = await prisma.platformSubscription.findMany({
-      orderBy: { updatedAt: "desc" },
-      include: {
-        business: {
-          select: { id: true, name: true, ownerName: true, email: true, status: true },
+    const [subscriptions, legacyLicenses, legacyLicenseCount] = await Promise.all([
+      prisma.platformSubscription.findMany({
+        orderBy: { updatedAt: "desc" },
+        include: {
+          business: {
+            select: { id: true, name: true, ownerName: true, email: true, status: true },
+          },
         },
-      },
-    });
+      }),
+      prisma.license.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 200,
+        select: {
+          id: true,
+          businessId: true,
+          licenseType: true,
+          deviceLimit: true,
+          expiryDate: true,
+          status: true,
+          createdAt: true,
+          business: {
+            select: { name: true, ownerName: true, email: true },
+          },
+        },
+      }),
+      prisma.license.count(),
+    ]);
     return NextResponse.json({
       subscriptions: subscriptions.map(subscription => ({
         ...subscription,
         status: effectiveSubscriptionStatus(subscription),
       })),
-    });
+      legacyLicenses,
+      legacyLicenseCount,
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Platform subscription list failed:", error);
     return NextResponse.json({ error: "Unable to load subscription records." }, { status: 500 });
