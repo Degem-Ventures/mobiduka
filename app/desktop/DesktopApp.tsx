@@ -37,6 +37,7 @@ import ReceiptSettingsScreen from '../components/ReceiptSettingsScreen'
 import TaxComplianceScreen from '../components/TaxComplianceScreen'
 import OfflineSyncWorker from '../components/OfflineSyncWorker'
 import AutomaticBackupWorker from '../components/AutomaticBackupWorker'
+import SubscriptionRequiredToast from '../components/SubscriptionRequiredToast'
 import './desktop.css'
 
 type Screen =
@@ -377,6 +378,7 @@ function DesktopInner() {
   if (!loggedIn) {
     return (
       <div className="desktop-login" data-theme={isDark ? 'dark' : 'light'} style={desktopVars}>
+        <SubscriptionRequiredToast />
         <section className="desktop-login-story">
           <div className="desktop-login-brand"><span><img src="/icon.svg" alt=""/></span><strong>MobiDuka</strong><small>POS</small></div>
           <div className="desktop-login-copy">
@@ -409,6 +411,7 @@ function DesktopInner() {
 
   return (
     <>
+    <SubscriptionRequiredToast />
     <OfflineSyncWorker enabled={loggedIn} />
     <AutomaticBackupWorker enabled={loggedIn} />
     <div className={`desktop-app ${collapsed ? 'sidebar-collapsed' : ''}`} data-theme={isDark ? 'dark' : 'light'} style={desktopVars}>
