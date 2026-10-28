@@ -27,6 +27,7 @@ vite.config.*.timestamp-*
 .idea/
 android/.gradle/
 android/local.properties
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 ios/Flutter/ephemeral/
 ios/Flutter/Generated.xcconfig
 ios/Flutter/flutter_export_environment.sh

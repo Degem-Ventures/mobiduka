@@ -1,0 +1,47 @@
+# name: Auto-end overdue cash sessions
+#
+# on:
+#   schedule:
+#     - cron: "0 * * * *"
+#   workflow_dispatch:
+#
+# permissions:
+#   contents: read
+#
+# concurrency:
+#   group: auto-end-cash-sessions
+#   cancel-in-progress: false
+#
+# jobs:
+#   auto-end-cash-sessions:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Call production auto-end endpoint
+#         env:
+#           API_ORIGIN: ${{ vars.MOBIDUKA_API_ORIGIN || 'https://mobiduka.vercel.app' }}
+#           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+#         run: |
+#           set -euo pipefail
+#
+#           if [[ -z "$CRON_SECRET" ]]; then
+#             echo "::error::Add CRON_SECRET to the repository or environment Actions secrets."
+#             exit 1
+#           fi
+#
+#           response_file=$(mktemp)
+#           trap 'rm -f "$response_file"' EXIT
+#
+#           status=$(curl --silent --show-error \
+#             --output "$response_file" \
+#             --write-out '%{http_code}' \
+#             --request GET \
+#             --header "Authorization: Bearer $CRON_SECRET" \
+#             "$API_ORIGIN/api/cron/auto-end-cash-sessions")
+#
+#           cat "$response_file"
+#           echo
+#
+#           if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+#             echo "::error::Auto-end endpoint returned HTTP $status."
+#             exit 1
+#           fi
