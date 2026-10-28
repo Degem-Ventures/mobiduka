@@ -13,7 +13,7 @@
     },
     {
       "path": "/api/cron/auto-end-cash-sessions",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
