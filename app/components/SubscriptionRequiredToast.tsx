@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import { SUBSCRIPTION_REQUIRED_EVENT } from "../../lib/client-api"
 
 export default function SubscriptionRequiredToast({
@@ -78,7 +79,10 @@ export default function SubscriptionRequiredToast({
           Subscription renewal required
         </strong>
         This change was not saved. Renew your subscription to restore write
-        access. Your existing records remain available.
+        access. Your existing records remain available.{" "}
+        <Link href="/app/billing" style={{ color: "inherit", fontWeight: 700 }}>
+          Manage billing
+        </Link>
       </span>
       <button
         type="button"

@@ -288,12 +288,12 @@ export default function MoreScreen({ onLogout, onNavigate }: Props) {
           <div key={section.section} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8, marginLeft: 4 }}>{section.section}</div>
             <div className="card" style={{ overflow: 'hidden' }}>
-              {section.items.map((item, i) => (
-                <button key={i} className="btn" onClick={() => onNavigate(item.screen)} style={{
+              {[...section.items, ...(section.section === 'System' && !isNativeOfflineApp() ? [{ label: 'Subscription & billing', icon: '💳', color: '#123A8F', screen: 'billing' }] : [])].map((item, i, items) => (
+                <button key={item.screen} className="btn" onClick={() => item.screen === 'billing' ? window.location.assign('/app/billing') : onNavigate(item.screen)} style={{
                   width: '100%', padding: '14px 16px',
                   display: 'flex', alignItems: 'center', gap: 14,
                   border: 'none', background: 'none',
-                  borderBottom: i < section.items.length - 1 ? c.divider : 'none',
+                  borderBottom: i < items.length - 1 ? c.divider : 'none',
                   cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
                 }}>
                   <div style={{ width: 40, height: 40, borderRadius: 11, background: c.tint(item.color), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{item.icon}</div>

@@ -7,5 +7,8 @@ export const metadata: Metadata = {
 };
 
 export default function Page() {
-  return <SignupPage />;
+  const registrationEnabled =
+    process.env.NODE_ENV !== "production" ||
+    process.env.BUSINESS_REGISTRATION_ENABLED === "true";
+  return <SignupPage registrationEnabled={registrationEnabled} />;
 }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { chartData, getWorkspaceConfig } from './control-plane-data'
+import ContactInbox from './ContactInbox'
 
 const liveWorkspaces = new Set([
   'transactions',
@@ -155,6 +156,7 @@ function statusTone(value: string) {
 }
 
 export function AdminWorkspace({ workspace }: { workspace: string }) {
+  if (workspace === 'support') return <ContactInbox />
   const config = getWorkspaceConfig(workspace)
   const [period, setPeriod] = useState('Today')
   const [selected, setSelected] = useState<string[] | null>(null)
@@ -168,6 +170,8 @@ export function AdminWorkspace({ workspace }: { workspace: string }) {
   const isSecurity = workspace === 'security'
   const isSupport = workspace === 'support'
   const isIncident = workspace === 'incidents'
+
+  if (isSupport) return <ContactInbox />
 
   if (liveWorkspaces.has(workspace)) {
     return <LiveAdminWorkspace workspace={workspace} />

@@ -566,6 +566,11 @@ export default function LoginScreen({ onLogin }: Props) {
             Use PIN Login instead
           </button>
         </div>
+        {!isNativeOfflineApp() && (
+          <div style={{ textAlign: 'center', marginTop: 18, color: '#6B7A99', fontSize: 12 }}>
+            New to MobiDuka? <a href="/signup" style={{ color: '#123A8F', fontWeight: 700, textDecoration: 'none' }}>Start a free trial</a>
+          </div>
+        )}
       </div>
 
       {/* Footer */}

@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useTheme } from "../context/ThemeContext";
 import {
   benefitItems,
@@ -13,11 +13,45 @@ import {
   industryPhotos,
   marketingNavItems,
   onboardingSteps,
-  planCatalog,
   securityItems,
   type MarketingIconName,
 } from "./marketing-data";
-import { formatPublicPlanPrice } from "../plans/plan-catalog";
+
+type PublicPlan = {
+  name: string
+  publicMonthlyPriceKsh: number | null
+  annualPriceKsh: number | null
+  subtitle: string
+  audience: string
+  color: string
+  marketingFeatures: string[]
+  featured: boolean
+  cta: string
+  onlineCheckoutEnabled: boolean
+}
+
+async function readJsonResponse<T extends { error?: string }>(
+  response: Response,
+  failureMessage: string,
+): Promise<T> {
+  const body = await response.text()
+  if (!body.trim()) {
+    throw new Error(response.ok
+      ? `${failureMessage} The server returned an empty response. Check the Support inbox before submitting again.`
+      : `${failureMessage} The server returned HTTP ${response.status} without an error message.`)
+  }
+
+  let result: T
+  try {
+    result = JSON.parse(body) as T
+  } catch {
+    throw new Error(response.ok
+      ? `${failureMessage} The server returned an invalid response. Check the Support inbox before submitting again.`
+      : `${failureMessage} The server returned HTTP ${response.status} with an invalid response.`)
+  }
+  if (!response.ok) throw new Error(result.error ?? `${failureMessage} (HTTP ${response.status}).`)
+  return result
+}
 
 function MarketingIcon({ name, size = 20 }: { name: MarketingIconName; size?: number }) {
   const paths: Record<MarketingIconName, ReactNode> = {
@@ -43,6 +77,12 @@ function MarketingIcon({ name, size = 20 }: { name: MarketingIconName; size?: nu
 const dashboardScreen = "/mobiduka-dashboard.png";
 const shiftsScreen = "/mobiduka-shifts.png";
 const shopkeeperPhoto = "/kenyan-shopkeeper.png";
+const footerRoutes: Record<string, string> = {
+  "Web dashboard": "/app",
+  "Privacy Policy": "/privacy",
+  "Terms of Service": "/terms",
+  "API documentation": "/api-docs",
+};
 
 function PhoneMockup({ src, alt, className = '' }: { src: string; alt: string; className?: string }) {
   return <div className={`mk-phone ${className}`}><img src={src} alt={alt}/></div>
@@ -64,7 +104,11 @@ function WebDashboardMockup() {
   )
 }
 
-export default function MarketingPage() {
+export default function MarketingPage({
+  registrationEnabled = true,
+}: {
+  registrationEnabled?: boolean
+}) {
   const { theme, isDark, setTheme } = useTheme()
   const [mobileMenu, setMobileMenu] = useState(false)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
@@ -72,7 +116,26 @@ export default function MarketingPage() {
   const [annual, setAnnual] = useState(false)
   const [openFaq, setOpenFaq] = useState(0)
   const [contactOpen, setContactOpen] = useState(false)
+  const [contactSubmitting, setContactSubmitting] = useState(false)
+  const [contactError, setContactError] = useState("")
   const [notice, setNotice] = useState('')
+  const [planCatalog, setPlanCatalog] = useState<PublicPlan[]>([])
+  const [planLoadError, setPlanLoadError] = useState("")
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetch("/api/plans", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const result = await response.json() as { plans?: PublicPlan[]; error?: string }
+        if (!response.ok) throw new Error(result.error ?? "Unable to load plans.")
+        setPlanCatalog(result.plans ?? [])
+      })
+      .catch((reason: unknown) => {
+        if (reason instanceof Error && reason.name === "AbortError") return
+        setPlanLoadError(reason instanceof Error ? reason.message : "Unable to load plans.")
+      })
+    return () => controller.abort()
+  }, [])
 
   const scrollTo = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
@@ -81,6 +144,38 @@ export default function MarketingPage() {
   const comingSoon = (message: string) => {
     setNotice(message)
     window.setTimeout(() => setNotice(''), 3200)
+  }
+  const submitContactRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setContactSubmitting(true)
+    setContactError("")
+    const formData = new FormData(event.currentTarget)
+    try {
+      const response = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: formData.get("fullName"),
+          businessName: formData.get("businessName"),
+          email: formData.get("email"),
+          phone: formData.get("phone"),
+          businessType: formData.get("businessType"),
+          message: formData.get("message"),
+        }),
+      })
+      const result = await readJsonResponse<{ error?: string; emailDelivered?: boolean }>(
+        response,
+        "Unable to send your request.",
+      )
+      setContactOpen(false)
+      comingSoon(result.emailDelivered
+        ? "Thanks for reaching out. Your request was sent to the MobiDuka team."
+        : "Your request was saved for the MobiDuka team, but the email alert could not be sent.")
+    } catch (reason) {
+      setContactError(reason instanceof Error ? reason.message : "Unable to send your request.")
+    } finally {
+      setContactSubmitting(false)
+    }
   }
 
   return (
@@ -108,7 +203,7 @@ export default function MarketingPage() {
                 </div>
               )}
             </div>
-            <Link href="/">Log in</Link>
+            <Link href="/login">Log in</Link>
             <Link className="mk-primary small" href="/signup">Get Started</Link>
           </div>
           <button className="mk-mobile-toggle" onClick={() => setMobileMenu(value => !value)} aria-label="Toggle menu"><MarketingIcon name={mobileMenu ? 'close' : 'menu'}/></button>
@@ -119,6 +214,12 @@ export default function MarketingPage() {
         <section className="mk-hero">
           <div className="mk-container mk-hero-grid">
             <div className="mk-hero-copy">
+              {!registrationEnabled && (
+                <p role="status" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  New business registration is paused.{" "}
+                  <Link href="/login">Existing customers can log in.</Link>
+                </p>
+              )}
               <div className="mk-eyebrow"><span/> Retail management, reimagined</div>
               <h1>Your Shop. Your Stock. Your Sales. <em>Under Control.</em></h1>
               <p>Say goodbye to scattered records and guesswork. MobiDuka helps you record sales, track inventory, manage payments and understand your business performance.</p>
@@ -147,7 +248,7 @@ export default function MarketingPage() {
                 <h3>{experience === 'android' ? 'Your complete shop counter, in your hand.' : experience === 'ios' ? 'A focused mobile view for business oversight.' : 'A wider view of performance, stock and profitability.'}</h3>
                 <p>{experience === 'android' ? 'Record sales, search products, scan barcodes, manage shifts and track payment status from one practical Android workflow.' : experience === 'ios' ? 'Review dashboards, checkout activity, inventory and sales analytics with safe-area-aware mobile design.' : 'Monitor revenue, expenses, inventory valuation, low-stock alerts and recent transactions from a responsive browser dashboard.'}</p>
                 <ul>{(experience === 'android' ? ['POS checkout and cart','SmartScan barcode workflows','Inventory and shift management','Compatible receipt printing'] : experience === 'ios' ? ['Business dashboard','Product catalogue','Payment status','Sales analytics'] : ['Revenue and sales trends','Expense summaries','Inventory valuation','Profitability reporting']).map(item => <li key={item}><MarketingIcon name="check" size={14}/>{item}</li>)}</ul>
-                {experience === 'android' ? <button className="mk-primary" onClick={() => comingSoon('Android APK distribution link will appear here when approved.')}>Download Android APK</button> : experience === 'ios' ? <button className="mk-secondary" onClick={() => setContactOpen(true)}>Contact us for availability</button> : <button className="mk-primary" onClick={() => comingSoon('Web dashboard access is enabled during onboarding.')}>Explore Web Access</button>}
+                {experience === 'android' ? <button className="mk-primary" onClick={() => setContactOpen(true)}>Ask about Android access</button> : experience === 'ios' ? <button className="mk-secondary" onClick={() => setContactOpen(true)}>Contact us for availability</button> : <Link className="mk-primary" href="/app">Explore Web Access</Link>}
               </div>
               <div className={`mk-device-stage ${experience}`}>
                 {experience === 'android' && <><PhoneMockup src={dashboardScreen} alt="MobiDuka Android dashboard"/><PhoneMockup src={shiftsScreen} alt="MobiDuka Android shift management" className="secondary-phone"/></>}
@@ -191,7 +292,14 @@ export default function MarketingPage() {
           <div className="mk-container">
             <div className="mk-section-head centered"><span>PACKAGES</span><h2>Simple Packages. Smarter Retail.</h2><p>Choose the tools that fit your business today, with room to grow.</p></div>
             <div className="mk-billing-toggle"><button className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly billing</button><button className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual billing</button></div>
-            <div className="mk-price-grid">{planCatalog.map(plan => <article className={plan.featured ? 'featured' : ''} key={plan.name}>{plan.featured && <div className="mk-recommended">Configurable recommendation</div>}<span>{plan.audience}</span><h3>{plan.name}</h3><div className="mk-price"><strong>{formatPublicPlanPrice(plan, annual)}</strong>{(annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh) !== null && <small>/ {annual ? 'year' : 'month'}</small>}</div><p>Public pricing and package limits will be published after commercial approval.</p><ul>{plan.marketingFeatures.map(feature => <li key={feature}><MarketingIcon name="check" size={13}/>{feature}</li>)}</ul>{plan.name === 'Basic' ? <Link className={plan.featured ? 'mk-primary' : 'mk-secondary'} href="/signup">Start 14-day Basic trial</Link> : <button className={plan.featured ? 'mk-primary' : 'mk-secondary'} onClick={() => setContactOpen(true)}>{plan.cta}</button>}</article>)}</div>
+            {planLoadError && <p role="alert">{planLoadError}</p>}
+            <div className="mk-price-grid">{planCatalog.map(plan => {
+              const publicPrice = annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh
+              const checkoutAvailable = plan.name === "Basic" || (plan.onlineCheckoutEnabled && publicPrice !== null)
+              const signupBilling = plan.name === "Basic" ? "monthly" : annual ? "annual" : "monthly"
+              const signupHref = `/signup?plan=${encodeURIComponent(plan.name)}&billing=${signupBilling}`
+              return <article className={plan.featured ? 'featured' : ''} key={plan.name}>{plan.featured && <div className="mk-recommended">Recommended</div>}<span>{plan.audience}</span><h3>{plan.name}</h3><div className="mk-price"><strong>{publicPrice === null ? "Price on request" : `KSh ${publicPrice.toLocaleString()}`}</strong>{publicPrice !== null && <small>/ {annual ? 'year' : 'month'}</small>}</div><p>{checkoutAvailable ? "Secure your subscription with M-PESA checkout." : "Contact our team for current pricing and availability."}</p><ul>{plan.marketingFeatures.map(feature => <li key={feature}><MarketingIcon name="check" size={13}/>{feature}</li>)}</ul>{checkoutAvailable ? <Link className={plan.featured ? 'mk-primary' : 'mk-secondary'} href={signupHref}>{plan.name === "Basic" ? "Start 14-day Basic trial" : "Choose plan"}</Link> : <button className={plan.featured ? 'mk-primary' : 'mk-secondary'} onClick={() => setContactOpen(true)}>{plan.cta}</button>}</article>
+            })}</div>
             <div className="mk-pricing-note">Package information is shared with the admin license catalog. Public prices and exact entitlements remain unpublished until formally approved.</div>
           </div>
         </section>
@@ -207,9 +315,45 @@ export default function MarketingPage() {
         <section className="mk-final-cta"><div className="mk-container"><div><span>READY WHEN YOU ARE</span><h2>Ready to Run Your Shop Smarter?</h2><p>Bring sales, stock, expenses and business insights together with MobiDuka POS.</p><div><Link className="mk-primary light" href="/signup">Get Started <MarketingIcon name="arrow" size={16}/></Link><button className="mk-ghost" onClick={() => setContactOpen(true)}>Talk to Our Team</button></div></div><PhoneMockup src={dashboardScreen} alt="MobiDuka POS app dashboard"/></div></section>
       </main>
 
-      <footer className="mk-footer"><div className="mk-container"><div className="mk-footer-brand"><button className="mk-brand" onClick={() => scrollTo('top')}><span><img src="/mobiduka_icon.svg" alt=""/></span><div><strong>MobiDuka</strong><small>POS</small></div></button><p>Smart Retail Management for Modern Kenyan Businesses.</p></div>{footerGroups.map(group => <div key={group.title}><strong>{group.title}</strong>{group.links.map(item => <button key={item} onClick={() => item === 'Packages' ? scrollTo('packages') : comingSoon(`${item} link will be connected when published.`)}>{item}</button>)}</div>)}</div><div className="mk-container mk-footer-bottom"><span>© 2026 MobiDuka POS. Product preview.</span><span>Built for Kenyan retail.</span></div></footer>
+      <footer className="mk-footer">
+        <div className="mk-container">
+          <div className="mk-footer-brand">
+            <button className="mk-brand" onClick={() => scrollTo("top")}>
+              <span><img src="/mobiduka_icon.svg" alt="" /></span>
+              <div><strong>MobiDuka</strong><small>POS</small></div>
+            </button>
+            <p>Smart Retail Management for Modern Kenyan Businesses.</p>
+          </div>
+          {footerGroups.map((group) => (
+            <div key={group.title}>
+              <strong>{group.title}</strong>
+              {group.links.map((item) => {
+                if (item === "Packages") {
+                  return (
+                    <button key={item} onClick={() => scrollTo("packages")}>
+                      {item}
+                    </button>
+                  )
+                }
+                const href = footerRoutes[item]
+                return href ? (
+                  <Link key={item} href={href}>{item}</Link>
+                ) : (
+                  <button key={item} onClick={() => setContactOpen(true)}>
+                    {item}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+        <div className="mk-container mk-footer-bottom">
+          <span>© 2026 MobiDuka POS. Product preview.</span>
+          <span>Built for Kenyan retail.</span>
+        </div>
+      </footer>
 
-      {contactOpen && <div className="mk-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setContactOpen(false) }}><form className="mk-contact-modal" onSubmit={event => { event.preventDefault(); setContactOpen(false); comingSoon('Thank you. The MobiDuka team will contact you shortly.') }}><div><span>START WITH MOBIDUKA</span><h2>Tell Us About Your Business.</h2><p>We’ll help you understand package fit, device compatibility and onboarding.</p><button type="button" onClick={() => setContactOpen(false)}><MarketingIcon name="close"/></button></div><label><span>Full name</span><input required placeholder="Your name"/></label><label><span>Business name</span><input required placeholder="e.g. Jirani Mini Mart"/></label><div><label><span>Phone number</span><input required type="tel" placeholder="07XX XXX XXX"/></label><label><span>Business type</span><select defaultValue=""><option value="" disabled>Select business type</option><option>Duka or kiosk</option><option>Mini-market</option><option>Pharmacy</option><option>Agrovet</option><option>Retail chain</option></select></label></div><label><span>What would you like help with?</span><textarea placeholder="Packages, Android availability, M-PESA setup, multi-branch onboarding…"/></label><button className="mk-primary">Request a Conversation <MarketingIcon name="arrow" size={15}/></button></form></div>}
+      {contactOpen && <div className="mk-modal-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setContactOpen(false) }}><form className="mk-contact-modal" onSubmit={submitContactRequest}><div><span>START WITH MOBIDUKA</span><h2 id="mk-contact-title">Tell Us About Your Business.</h2><p>We’ll help you understand package fit, device compatibility and onboarding.</p><button type="button" aria-label="Close contact form" onClick={() => setContactOpen(false)}><MarketingIcon name="close"/></button></div><label><span>Full name</span><input name="fullName" autoComplete="name" required maxLength={120} placeholder="Your name"/></label><label><span>Business name</span><input name="businessName" required maxLength={160} placeholder="e.g. Jirani Mini Mart"/></label><label><span>Email address</span><input name="email" type="email" autoComplete="email" required maxLength={254} placeholder="you@example.com"/></label><div><label><span>Phone number</span><input name="phone" type="tel" autoComplete="tel" required maxLength={40} placeholder="07XX XXX XXX"/></label><label><span>Business type</span><select name="businessType" defaultValue=""><option value="">Select business type</option><option>Duka or kiosk</option><option>Mini-market</option><option>Pharmacy</option><option>Agrovet</option><option>Retail chain</option></select></label></div><label><span>What would you like help with?</span><textarea name="message" required maxLength={3000} placeholder="Packages, Android availability, M-PESA setup, multi-branch onboarding…"/></label>{contactError && <p role="alert" className="mk-contact-error">{contactError}</p>}<button className="mk-primary" disabled={contactSubmitting}>{contactSubmitting ? "Sending…" : "Request a Conversation"} {!contactSubmitting && <MarketingIcon name="arrow" size={15}/>}</button></form></div>}
       {notice && <div className="mk-toast"><MarketingIcon name="check" size={16}/><span>{notice}</span><button onClick={() => setNotice('')}>×</button></div>}
     </div>
   )

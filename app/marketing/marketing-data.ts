@@ -1,7 +1,3 @@
-import { planCatalog } from '../plans/plan-catalog'
-
-export { planCatalog }
-
 export type MarketingIconName = 'arrow' | 'check' | 'menu' | 'close' | 'scan' | 'stock' | 'mpesa' | 'offline' | 'report' | 'team' | 'shield' | 'printer' | 'sun' | 'moon' | 'monitor'
 
 export const industryPhotos = [
@@ -21,7 +17,7 @@ export const faqItems = [
   ['Can I scan barcodes and print receipts?', 'Yes. SmartScan supports compatible barcode workflows, and receipts can be printed using compatible Bluetooth thermal printers.'],
   ['Is there an Android app?', 'An Android APK distribution option is planned. The download button will be connected when an approved distribution URL is available.'],
   ['Is the iOS app available?', 'The iOS experience is in preparation. Contact the MobiDuka team for current availability.'],
-  ['What packages are offered?', 'Basic, Growth and Enterprise packages are planned. Public prices and final entitlements remain editable until commercially approved.'],
+  ['What packages are offered?', 'Basic, Growth and Enterprise packages are available for review. Public prices and final entitlements will be published after commercial approval.'],
 ]
 
 export const marketingNavItems = ['features', 'how-it-works', 'app-screens', 'packages', 'industries', 'faq']

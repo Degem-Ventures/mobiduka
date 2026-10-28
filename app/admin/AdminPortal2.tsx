@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { planCatalog } from "@/app/plans/plan-catalog"
+import PlanCatalogEditor from "@/app/plans/PlanCatalogEditor"
+import PlatformPaymentLedger from "@/app/plans/PlatformPaymentLedger"
 import {
   Area,
   AreaChart,
@@ -601,8 +603,17 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <span>Service telemetry is not connected</span>
           </div>
         </div>
+        <Link href="/app" className="admin-back-link">
+          Open POS app <Icon name="chevron" size={11} />
+        </Link>
+        <Link href="/admin" className="admin-back-link">
+          Switch to classic admin <Icon name="chevron" size={11} />
+        </Link>
         <Link href="/desktop" className="admin-back-link">
-          Open store desktop <Icon name="chevron" size={11} />
+          Open desktop workspace <Icon name="chevron" size={11} />
+        </Link>
+        <Link href="/" className="admin-back-link">
+          Public landing page <Icon name="chevron" size={11} />
         </Link>
         <div className="admin-profile">
           <div className="admin-avatar">PA</div>
@@ -1994,16 +2005,6 @@ export function AdminLicenses() {
   const attentionCount = licenses.filter((license) =>
     ["grace", "expired", "revoked", "suspended"].includes(license.status),
   ).length
-  const plans = planCatalog.map((plan) => ({
-    key: plan.name.toLowerCase(),
-    name: plan.subtitle,
-    price: `KSh ${plan.monthlyPriceKsh.toLocaleString()}${plan.priceSuffix ?? ""}`,
-    tone: plan.color,
-    stores: plan.audience,
-    features: plan.adminFeatures,
-    upgradeRulesEnabled: plan.upgradeRulesEnabled,
-  }))
-
   const openProvisionFlow = async () => {
     setProvisionLoading(true)
     setProvisionError("")
@@ -2098,6 +2099,8 @@ export function AdminLicenses() {
 
   return (
     <div className="admin-page-stack">
+      <PlanCatalogEditor />
+      <PlatformPaymentLedger />
       <section className="admin-license-metrics">
         {[
           [
@@ -2126,60 +2129,6 @@ export function AdminLicenses() {
             <strong>{item[1]}</strong>
             <small>{item[2]}</small>
           </div>
-        ))}
-      </section>
-      <section className="admin-plan-grid">
-        {plans.map((plan) => (
-          <article className={`admin-plan-card ${plan.tone}`} key={plan.key}>
-            <div className="admin-plan-head">
-              <div>
-                <span>{plan.stores}</span>
-                <h2>{plan.name}</h2>
-              </div>
-              <span
-                className={`admin-plan-badge ${
-                  plan.key === "enterprise"
-                    ? "enterprise"
-                    : plan.key === "growth"
-                      ? "growth"
-                      : "basic"
-                }`}
-              >
-                LIVE
-              </span>
-            </div>
-            <div className="admin-plan-price">
-              <strong>{plan.price}</strong>
-              <span>/ month</span>
-            </div>
-            <ul>
-              {plan.features.map((feature) => (
-                <li key={feature}>
-                  <Icon name="check" size={12} />
-                  {feature}
-                </li>
-              ))}
-            </ul>
-            <div className="admin-plan-rule">
-              <div>
-                <strong>Deploy Live Upgrade Rules</strong>
-                <span>
-                  {plan.upgradeRulesEnabled
-                    ? "Enabled in plan configuration"
-                    : "Disabled in plan configuration"}
-                </span>
-              </div>
-              <button
-                className={`admin-toggle ${
-                  plan.upgradeRulesEnabled ? "on" : ""
-                }`}
-                disabled
-                title="Upgrade rules are managed in platform configuration."
-              >
-                <span />
-              </button>
-            </div>
-          </article>
         ))}
       </section>
       <section className="admin-table-panel">

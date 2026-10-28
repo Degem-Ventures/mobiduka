@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server.js";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/platform-admin";
-import { planCatalog } from "@/app/plans/plan-catalog";
 import { effectiveSubscriptionStatus, TRIAL_DURATION_DAYS } from "@/lib/subscriptions";
 
 export async function GET(request: Request) {
@@ -66,7 +65,10 @@ export async function POST(request: Request) {
 
     if (body.action === "PROVISION_TRIAL") {
       const durationDays = body.durationDays ?? TRIAL_DURATION_DAYS;
-      const plan = planCatalog.find(item => item.name.toUpperCase() === body.planType?.toUpperCase());
+      const plan = await prisma.subscriptionPlan.findFirst({
+        where: { name: { equals: body.planType ?? "", mode: "insensitive" }, isActive: true },
+        select: { name: true, monthlyPriceKsh: true },
+      });
       if (!plan || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > TRIAL_DURATION_DAYS) {
         return NextResponse.json({ error: "Select a valid plan and trial duration from 1 to 14 days." }, { status: 400 });
       }
@@ -130,7 +132,10 @@ export async function PATCH(request: Request) {
     }
 
     if (body.action === "ACTIVATE" || body.action === "RENEW") {
-      const plan = planCatalog.find(item => item.name.toUpperCase() === body.planType?.toUpperCase());
+      const plan = await prisma.subscriptionPlan.findFirst({
+        where: { name: { equals: body.planType ?? "", mode: "insensitive" } },
+        select: { name: true, monthlyPriceKsh: true },
+      });
       const durationDays = body.durationDays ?? 30;
       if (!plan || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > 366) {
         return NextResponse.json({ error: "Select a valid plan and billing duration from 1 to 366 days." }, { status: 400 });

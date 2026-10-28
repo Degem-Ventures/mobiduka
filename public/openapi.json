@@ -1103,6 +1103,300 @@
         }
       }
     },
+    "/contact": {
+      "post": {
+        "tags": ["Public"],
+        "summary": "Send a website contact request",
+        "description": "Saves the inquiry in the platform-admin Support inbox and emails it to the configured MobiDuka contact inbox through Resend. Configure RESEND_API_KEY and a verified sender in CONTACT_EMAIL_FROM or BILLING_EMAIL_FROM. The recipient defaults to owner@mobiduka.com and replies are directed to the submitted email address. A saved request is accepted even if the notification email cannot be delivered.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["fullName", "businessName", "email", "phone", "message"],
+                "properties": {
+                  "fullName": { "type": "string", "maxLength": 120 },
+                  "businessName": { "type": "string", "maxLength": 160 },
+                  "email": { "type": "string", "format": "email", "maxLength": 254 },
+                  "phone": { "type": "string", "maxLength": 40 },
+                  "businessType": { "type": "string", "maxLength": 80 },
+                  "message": { "type": "string", "maxLength": 3000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Contact request saved. The response includes whether the notification email was delivered." },
+          "400": { "description": "Request body or contact details are invalid." },
+          "502": { "description": "Email provider could not deliver the contact request." },
+          "500": { "description": "Contact request could not be saved." }
+        }
+      }
+    },
+    "/admin/contact-messages": {
+      "get": {
+        "tags": ["Platform Administration", "Support"],
+        "summary": "List website contact messages",
+        "description": "Requires a platform administrator bearer session. Returns the latest 100 messages and counts by status.",
+        "responses": {
+          "200": { "description": "Website enquiries including contact details, message text, and email delivery status." },
+          "403": { "description": "Platform administrator access is required." },
+          "500": { "description": "Contact inbox could not be loaded." }
+        }
+      },
+      "patch": {
+        "tags": ["Platform Administration", "Support"],
+        "summary": "Update a website contact message status",
+        "description": "Requires a platform administrator bearer session. Messages may be marked READ or RESOLVED.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["id", "status"],
+                "properties": {
+                  "id": { "type": "string", "format": "uuid" },
+                  "status": { "type": "string", "enum": ["READ", "RESOLVED"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Message status updated." },
+          "400": { "description": "Message ID or status is invalid." },
+          "403": { "description": "Platform administrator access is required." },
+          "404": { "description": "Contact message was not found." }
+        }
+      }
+    },
+    "/plans": {
+      "get": {
+        "tags": ["Subscriptions"],
+        "summary": "List active public subscription plans",
+        "description": "Returns marketing-safe plan information. Internal monthly prices and administrative features are not exposed. Online checkout is marked available only when plan pricing and platform M-PESA configuration are enabled.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Active plans ordered by configured display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plans"],
+                  "properties": {
+                    "plans": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "publicMonthlyPriceKsh", "annualPriceKsh", "subtitle", "audience", "color", "marketingFeatures", "featured", "cta", "onlineCheckoutEnabled"],
+                        "properties": {
+                          "name": { "type": "string", "enum": ["Basic", "Growth", "Enterprise"] },
+                          "publicMonthlyPriceKsh": { "type": "integer", "nullable": true, "description": "Approved public price in KSh per month." },
+                          "annualPriceKsh": { "type": "integer", "nullable": true, "description": "Approved public price in KSh per year." },
+                          "subtitle": { "type": "string" },
+                          "audience": { "type": "string" },
+                          "color": { "type": "string" },
+                          "marketingFeatures": { "type": "array", "items": { "type": "string" } },
+                          "featured": { "type": "boolean" },
+                          "cta": { "type": "string" },
+                          "onlineCheckoutEnabled": { "type": "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "description": "The subscription catalog could not be loaded." }
+        }
+      }
+    },
+    "/auth/onboard": {
+      "post": {
+        "tags": ["Authentication", "Subscriptions"],
+        "summary": "Register a business and its owner",
+        "description": "Creates a Basic trial or a pending paid-plan subscription. Paid signup requires a configured public plan price, platform M-PESA checkout, and a Kenyan mobile number. Payment must be verified before paid access is activated.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessName", "ownerName", "ownerEmail", "password"],
+                "properties": {
+                  "businessName": { "type": "string" },
+                  "ownerName": { "type": "string" },
+                  "ownerEmail": { "type": "string", "format": "email" },
+                  "password": { "type": "string", "format": "password", "minLength": 12 },
+                  "initialPin": { "type": "string", "pattern": "^[0-9]{4}$" },
+                  "phone": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$" },
+                  "businessType": { "type": "string" },
+                  "planName": { "type": "string", "enum": ["Basic", "Growth", "Enterprise"], "default": "Basic" },
+                  "billingPeriod": { "type": "string", "enum": ["monthly", "annual"], "default": "monthly" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Business and owner created; paid plans remain pending verification." },
+          "400": { "description": "Invalid signup data or unavailable plan." },
+          "409": { "description": "The owner email is already registered." },
+          "503": { "description": "Business registration or paid checkout is not enabled." }
+        }
+      }
+    },
+    "/subscription/checkout": {
+      "get": {
+        "tags": ["Subscriptions", "Payments"],
+        "summary": "Check a subscription payment status",
+        "description": "Owner-only. Reconciles a pending payment with Daraja before returning its latest status.",
+        "parameters": [
+          { "name": "paymentId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Latest payment status and receipt information." },
+          "403": { "description": "Business owner access is required." },
+          "404": { "description": "Payment attempt was not found." },
+          "502": { "description": "Payment status could not be verified with Safaricom." }
+        }
+      },
+      "post": {
+        "tags": ["Subscriptions", "Payments"],
+        "summary": "Start a platform subscription M-PESA checkout",
+        "description": "Owner-only. The server selects the approved price from the active plan catalog; client-supplied amounts are not accepted. This platform payment uses MobiDuka's Daraja account, not the business's POS credentials. The owner must approve the STK prompt.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["planName", "phoneNumber"],
+                "properties": {
+                  "planName": { "type": "string", "enum": ["Growth", "Enterprise"] },
+                  "billingPeriod": { "type": "string", "enum": ["monthly", "annual"], "default": "monthly" },
+                  "phoneNumber": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "M-PESA checkout started; payment is pending customer approval." },
+          "200": { "description": "An existing pending or review-required payment attempt was returned." },
+          "400": { "description": "Phone, plan, billing period, or approved price is invalid." },
+          "403": { "description": "Business owner access is required." },
+          "503": { "description": "Platform M-PESA checkout is not configured." }
+        }
+      }
+    },
+    "/payments/platform-mpesa-callback": {
+      "post": {
+        "tags": ["Subscriptions", "Payments"],
+        "summary": "Receive platform Daraja STK callback",
+        "description": "Public Safaricom callback endpoint for platform subscription payments. Callback results are reconciled before paid subscriptions are activated.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["Body"],
+                "properties": {
+                  "Body": {
+                    "type": "object",
+                    "required": ["stkCallback"],
+                    "properties": {
+                      "stkCallback": {
+                        "type": "object",
+                        "required": ["CheckoutRequestID", "ResultCode"],
+                        "properties": {
+                          "CheckoutRequestID": { "type": "string" },
+                          "ResultCode": { "type": "integer" },
+                          "ResultDesc": { "type": "string" },
+                          "CallbackMetadata": { "type": "object", "description": "Daraja payment amount and M-PESA receipt metadata." }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Callback accepted or acknowledged as already processed." },
+          "503": { "description": "Payment record is not available for reconciliation yet." }
+        }
+      }
+    },
+    "/admin/plans": {
+      "get": {
+        "tags": ["Platform Administration", "Subscriptions"],
+        "summary": "List subscription plans for platform administration",
+        "description": "Requires a platform administrator bearer token. Includes private plan prices and administrative configuration; do not expose this response publicly.",
+        "responses": {
+          "200": { "description": "Plan catalog including private configuration." },
+          "403": { "description": "Platform administrator access is required." }
+        }
+      },
+      "patch": {
+        "tags": ["Platform Administration", "Subscriptions"],
+        "summary": "Update a subscription plan",
+        "description": "Requires a platform administrator bearer token. Set approved public prices explicitly before enabling online checkout.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "monthlyPriceKsh", "publicMonthlyPriceKsh", "annualPriceKsh", "subtitle", "audience", "color", "adminFeatures", "marketingFeatures", "featured", "onlineCheckoutEnabled", "isActive", "cta"],
+                "properties": {
+                  "name": { "type": "string", "enum": ["Basic", "Growth", "Enterprise"] },
+                  "monthlyPriceKsh": { "type": "integer", "minimum": 1, "description": "Internal monthly price in KSh." },
+                  "publicMonthlyPriceKsh": { "type": "integer", "minimum": 1, "nullable": true },
+                  "annualPriceKsh": { "type": "integer", "minimum": 1, "nullable": true },
+                  "subtitle": { "type": "string", "maxLength": 100 },
+                  "audience": { "type": "string", "maxLength": 120 },
+                  "color": { "type": "string", "enum": ["blue", "green", "gold"] },
+                  "adminFeatures": { "type": "array", "items": { "type": "string" } },
+                  "marketingFeatures": { "type": "array", "items": { "type": "string" } },
+                  "featured": { "type": "boolean" },
+                  "onlineCheckoutEnabled": { "type": "boolean" },
+                  "isActive": { "type": "boolean" },
+                  "cta": { "type": "string", "maxLength": 60 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Plan updated." },
+          "400": { "description": "Plan data is invalid or checkout lacks a public price." },
+          "403": { "description": "Platform administrator access is required." },
+          "404": { "description": "Plan not found." }
+        }
+      }
+    },
+    "/admin/platform-payments": {
+      "get": {
+        "tags": ["Platform Administration", "Subscriptions", "Payments"],
+        "summary": "List recent platform subscription payments",
+        "description": "Requires a platform administrator bearer token. Returns at most the latest 100 attempts with phone numbers masked.",
+        "responses": {
+          "200": { "description": "Recent payment attempts with masked phone numbers." },
+          "403": { "description": "Platform administrator access is required." }
+        }
+      }
+    },
     "/auth/register": {
       "post": {
         "tags": ["Authentication", "Employees"],

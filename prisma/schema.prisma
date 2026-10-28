@@ -118,6 +118,7 @@ model Business {
   roles                     Role[]
   settings                  BusinessSettings?
   platformSubscription      PlatformSubscription?
+  platformPayments          PlatformPayment[]
 }
 
 model PlatformAdmin {
@@ -149,6 +150,71 @@ model PlatformSubscription {
 
   @@index([status, trialEndsAt])
   @@index([status, currentPeriodEndsAt])
+}
+
+model SubscriptionPlan {
+  id                    String   @id
+  name                  String   @unique
+  monthlyPriceKsh       Int
+  publicMonthlyPriceKsh Int?
+  annualPriceKsh        Int?
+  priceSuffix           String?
+  subtitle              String
+  audience              String
+  tenants               Int      @default(0)
+  color                 String
+  adminFeatures         Json
+  marketingFeatures     Json
+  featured              Boolean  @default(false)
+  cta                   String
+  upgradeRulesEnabled   Boolean  @default(true)
+  onlineCheckoutEnabled Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  sortOrder             Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+model PlatformPayment {
+  id                String   @id @default(uuid())
+  businessId        String
+  planName          String
+  amountKsh         Int
+  billingDays       Int      @default(30)
+  phoneNumber       String
+  merchantRequestId String?
+  checkoutRequestId String?  @unique
+  status            String   @default("PENDING")
+  resultCode        Int?
+  resultDescription String?
+  reportedAmountKsh Int?
+  receiptNumber     String?  @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@index([status, createdAt])
+}
+
+model WebsiteContactMessage {
+  id           String    @id @default(uuid())
+  fullName     String
+  businessName String
+  email        String
+  phone        String
+  businessType String?
+  message      String    @db.Text
+  status       String    @default("NEW")
+  emailSentAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdAt])
 }
 
 model BusinessSettings {

@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
+import ContactInbox from "./ContactInbox"
 
 type Tone = "healthy" | "info" | "warning" | "critical"
 
@@ -2546,5 +2547,6 @@ function WorkspacePrototype({ workspace = "" }: { workspace?: string }) {
 
 export function AdminWorkspace({ workspace = "" }: { workspace?: string }) {
   if (workspace === "tenant-health") return <AdminTenantHealth />
+  if (workspace === "support") return <ContactInbox />
   return <WorkspacePrototype workspace={workspace} />
 }

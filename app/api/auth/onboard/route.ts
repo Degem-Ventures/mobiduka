@@ -3,7 +3,10 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { SYSTEM_ROLES } from "@/lib/roles";
 import { TRIAL_DURATION_DAYS } from "@/lib/subscriptions";
-import { planCatalog } from "@/app/plans/plan-catalog";
+import {
+  normalizePlatformPhone,
+  platformMpesaCheckoutAvailable,
+} from "@/lib/platform-mpesa";
 
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === "production" && process.env.BUSINESS_REGISTRATION_ENABLED !== "true") {
@@ -18,6 +21,8 @@ export async function POST(request: Request) {
       initialPin?: string;
       phone?: string;
       businessType?: string;
+      planName?: string;
+      billingPeriod?: string;
     };
     const businessName = body.businessName?.trim() ?? "";
     const ownerName = body.ownerName?.trim() ?? "";
@@ -40,6 +45,15 @@ export async function POST(request: Request) {
     if (initialPin && !/^\d{4}$/.test(initialPin)) {
       return NextResponse.json({ error: "Initial PIN must contain exactly 4 digits." }, { status: 400 });
     }
+    if (
+      body.billingPeriod !== undefined &&
+      body.billingPeriod !== "monthly" &&
+      body.billingPeriod !== "annual"
+    ) {
+      return NextResponse.json({ error: "billingPeriod must be monthly or annual." }, { status: 400 });
+    }
+    const planName = body.planName?.trim() || "Basic";
+    const billingPeriod = body.billingPeriod === "annual" ? "annual" : "monthly";
 
     const existingOwner = await prisma.user.findUnique({
       where: { email: ownerEmail },
@@ -51,8 +65,31 @@ export async function POST(request: Request) {
 
     const ownerRoleDefinition = SYSTEM_ROLES.find(role => role.name === "Admin");
     if (!ownerRoleDefinition) throw new Error("The default business owner role is unavailable.");
-    const basicPlan = planCatalog.find(plan => plan.name === "Basic");
-    if (!basicPlan) throw new Error("The default Basic plan is unavailable.");
+    const plan = await prisma.subscriptionPlan.findFirst({
+      where: { name: planName, isActive: true },
+      select: {
+        name: true,
+        monthlyPriceKsh: true,
+        publicMonthlyPriceKsh: true,
+        annualPriceKsh: true,
+        onlineCheckoutEnabled: true,
+      },
+    });
+    if (!plan) {
+      return NextResponse.json({ error: "The selected plan is unavailable." }, { status: 400 });
+    }
+    const requiresPayment = plan.name !== "Basic";
+    const publicPrice = billingPeriod === "annual" ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh;
+    if (requiresPayment && (!plan.onlineCheckoutEnabled || !publicPrice)) {
+      return NextResponse.json({ error: "This plan is not currently configured for online checkout." }, { status: 400 });
+    }
+    const paymentPhone = requiresPayment ? normalizePlatformPhone(body.phone) : null;
+    if (requiresPayment && !paymentPhone) {
+      return NextResponse.json({ error: "A valid Kenyan mobile number is required for subscription checkout." }, { status: 400 });
+    }
+    if (requiresPayment && !platformMpesaCheckoutAvailable()) {
+      return NextResponse.json({ error: "Online subscription checkout is not configured yet." }, { status: 503 });
+    }
     const now = new Date();
     const trialEndsAt = new Date(now.getTime() + TRIAL_DURATION_DAYS * 24 * 60 * 60 * 1000);
     const [passwordHash, pinHash] = await Promise.all([
@@ -66,7 +103,7 @@ export async function POST(request: Request) {
           name: businessName,
           ownerName,
           email: ownerEmail,
-          phone: body.phone?.trim() || null,
+          phone: paymentPhone ?? (body.phone?.trim() || null),
           businessType: body.businessType?.trim() || null,
           currency: "KES",
           timezone: "Africa/Nairobi",
@@ -92,7 +129,7 @@ export async function POST(request: Request) {
           roleId: role.id,
           fullName: ownerName,
           email: ownerEmail,
-          phone: body.phone?.trim() || null,
+          phone: paymentPhone ?? (body.phone?.trim() || null),
           passwordHash,
           pinHash,
           status: "ACTIVE",
@@ -105,10 +142,10 @@ export async function POST(request: Request) {
       await transaction.platformSubscription.create({
         data: {
           businessId: business.id,
-          planType: basicPlan.name.toUpperCase(),
-          status: "TRIAL",
-          trialEndsAt,
-          licenseCost: basicPlan.monthlyPriceKsh,
+          planType: plan.name.toUpperCase(),
+          status: requiresPayment ? "PENDING" : "TRIAL",
+          trialEndsAt: requiresPayment ? null : trialEndsAt,
+          licenseCost: plan.monthlyPriceKsh,
           isTrialClaimed: true,
         },
       });
@@ -119,10 +156,12 @@ export async function POST(request: Request) {
       success: true,
       businessId: result.businessId,
       owner: result.owner,
+      requiresPayment,
+      planName: plan.name,
       subscription: {
-        planType: basicPlan.name.toUpperCase(),
-        status: "TRIAL",
-        trialEndsAt: trialEndsAt.toISOString(),
+        planType: plan.name.toUpperCase(),
+        status: requiresPayment ? "PENDING" : "TRIAL",
+        trialEndsAt: requiresPayment ? null : trialEndsAt.toISOString(),
       },
     }, { status: 201 });
   } catch (error) {

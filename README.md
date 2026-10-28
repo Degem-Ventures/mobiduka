@@ -202,6 +202,31 @@ The payment integration is designed for resilient checkout confirmation:
 - Set `MPESA_CREDENTIALS_ENCRYPTION_KEY` to a base64-encoded 32-byte key generated with `openssl rand -base64 32`, then retain it for the lifetime of the encrypted records.
 - Set `MPESA_CALLBACK_URL` to the public callback endpoint. Tenant Daraja credentials are entered in Payment Methods, encrypted at rest, and never returned by the API.
 
+### Subscription checkout
+
+Platform subscription collections use a separate M-PESA merchant account and payment ledger; tenant POS credentials are never used. After applying the runtime plan catalog migration, platform administrators can edit plan descriptions, internal prices, approved public prices, publication, and checkout availability in either Admin or Admin2. Marketing and signup read the same database catalog. Internal prices are never returned by the public plan API.
+
+Paid signup creates a pending, write-locked subscription. The platform sends an M-PESA STK Push, verifies successful callbacks with Daraja's STK query API, and activates the subscription only when the callback amount and receipt match the saved payment. Automatic M-PESA charging is not enabled; customers approve each STK prompt. Basic retains its 14-day trial.
+
+Configure these server-only deployment variables with a MobiDuka-owned Daraja app before enabling online checkout:
+
+| Variable | Purpose |
+| --- | --- |
+| `PLATFORM_MPESA_CONSUMER_KEY` / `PLATFORM_MPESA_CONSUMER_SECRET` | Platform Daraja app credentials. |
+| `PLATFORM_MPESA_SHORTCODE` / `PLATFORM_MPESA_PASSKEY` | Platform merchant shortcode and STK passkey. |
+| `PLATFORM_MPESA_ACCOUNT_TYPE` | `TILL` or `PAYBILL`, matching the platform merchant. |
+| `PLATFORM_MPESA_PARTY_B` | Optional recipient shortcode; defaults to `PLATFORM_MPESA_SHORTCODE`. |
+| `PLATFORM_MPESA_ENVIRONMENT` | `sandbox` or `production`, matching the credentials. |
+| `PLATFORM_MPESA_CALLBACK_URL` | Public HTTPS URL ending in `/api/payments/platform-mpesa-callback`. |
+
+Set public plan prices only after commercial approval. An enabled price is visible on the public landing page and can be charged by checkout. Plan feature text is descriptive; it does not itself enforce product entitlements.
+
+### Website contact form
+
+The public marketing page's contact form sends submissions through Resend to `CONTACT_EMAIL_TO` (defaults to `owner@mobiduka.com`). Configure `RESEND_API_KEY` and a verified `BILLING_EMAIL_FROM` sender; optionally set `CONTACT_EMAIL_FROM` to a separate verified sender address. Replies go to the email address submitted in the form. These are server-only variables; do not expose them in client-side configuration.
+
+Contact submissions are also stored in the database and available to authorized platform administrators under **Support** in either admin console. The inbox supports marking messages read or resolved and shows whether the Resend notification was delivered. Apply the `add_website_contact_messages` Prisma migration before using the form or inbox.
+
 ## Flutter app
 
 The Flutter app in `flutter_app/` is maintained as a separate implementation for mobile-focused UI validation, APK builds, and iOS build pipelines. It is intentionally kept alongside the Next.js app rather than merged into the web app, so both codebases can evolve independently while preserving the same design references.
@@ -249,6 +274,11 @@ Required GitHub Actions secrets and Vercel environment variables include:
 | `BACKUP_ENCRYPTION_KEY` | Separate base64-encoded 32-byte key used to encrypt uploaded cloud backup chunks. |
 | `MPESA_ENVIRONMENT` | Server-only Daraja target: `sandbox` or `production`. |
 | `MPESA_CALLBACK_URL` | Public HTTPS M-Pesa callback endpoint. |
+| `PLATFORM_MPESA_CONSUMER_KEY` / `PLATFORM_MPESA_CONSUMER_SECRET` | Separate platform Daraja credentials for subscription checkout. |
+| `PLATFORM_MPESA_SHORTCODE` / `PLATFORM_MPESA_PASSKEY` | Platform merchant STK configuration. |
+| `PLATFORM_MPESA_ACCOUNT_TYPE` / `PLATFORM_MPESA_PARTY_B` | Platform till/paybill type and optional recipient shortcode. |
+| `PLATFORM_MPESA_ENVIRONMENT` | Platform Daraja environment: `sandbox` or `production`. |
+| `PLATFORM_MPESA_CALLBACK_URL` | Public HTTPS platform subscription callback URL. |
 
 The workflow currently uses Node 24 and the pnpm version declared in `package.json`. Keep these versions aligned when changing CI configuration.
 

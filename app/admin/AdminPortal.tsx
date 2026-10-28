@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTheme } from '../context/ThemeContext'
-import { formatPlanPrice, planCatalog } from '../plans/plan-catalog'
+import PlanCatalogEditor from '../plans/PlanCatalogEditor'
+import PlatformPaymentLedger from '../plans/PlatformPaymentLedger'
 import { AdminDataProvider, useAdminData } from './AdminDataProvider'
 import {
   adminPageMeta,
@@ -259,9 +260,13 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
             <span>Live status unavailable</span>
           </div>
         </div>
-        <a className="admin-back-link" href="/">
+        <a className="admin-back-link" href="/app">
           <AdminIcon name="external" size={15} />
-          Open POS prototype
+          Open POS app
+        </a>
+        <a className="admin-back-link" href="/admin2">
+          <AdminIcon name="layout" size={15} />
+          Switch to Admin2
         </a>
         <div className="admin-profile">
           <div className="admin-avatar">PA</div>
@@ -929,24 +934,13 @@ export function AdminLicenses() {
 
   return (
     <div className="admin-page-stack">
+      <PlanCatalogEditor />
+      <PlatformPaymentLedger />
       <section className="admin-license-metrics">
         <div><span>Businesses with subscriptions</span><strong>{subscriptions.length}</strong><small>Current platform records</small></div>
         <div><span>Active subscriptions</span><strong>{activeCount}</strong><small>Paid period in effect</small></div>
         <div><span>14-day trials</span><strong>{trialCount}</strong><small>Trial access running</small></div>
         <div><span>Requires attention</span><strong>{attentionCount}</strong><small>Grace, expired, or revoked</small></div>
-      </section>
-
-      <section className="admin-plan-grid">
-        {planCatalog.map(plan => (
-          <article className={`admin-plan-card ${plan.color}`} key={plan.name}>
-            <div className="admin-plan-head"><div><span>{plan.subtitle}</span><h2>{plan.name}</h2></div><span className={`admin-plan-badge ${plan.name.toLowerCase()}`}>{subscriptions.filter(subscription => subscription.planType === plan.name.toUpperCase()).length} tenants</span></div>
-            <div className="admin-plan-price"><strong>KSh {formatPlanPrice(plan)}</strong><span>/ month</span></div>
-            <ul>{plan.adminFeatures.map(feature => <li key={feature}><AdminIcon name="check" size={13}/>{feature}</li>)}</ul>
-            <div className="admin-plan-rule">
-              <div><strong>Trial entitlement</strong><span>New businesses receive a 14-day Basic trial.</span></div>
-            </div>
-          </article>
-        ))}
       </section>
 
       <div className="admin-table-panel">

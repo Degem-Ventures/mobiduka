@@ -71,6 +71,5 @@ export function formatPlanPrice(plan: PlanCatalogEntry) {
 export function formatPublicPlanPrice(plan: PlanCatalogEntry, annual: boolean) {
   const price = annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh
   if (price === null) return 'Price on request'
-  const amount = annual ? `${price.toLocaleString()}` : formatPlanPrice(plan)
-  return `KSh ${amount}`
+  return `KSh ${price.toLocaleString()}${annual ? '' : plan.priceSuffix ?? ''}`
 }
