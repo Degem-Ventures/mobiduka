@@ -1,0 +1,583 @@
+import { useEffect, useState } from 'react'
+import { apiFetch, getPinLoginContext, saveClientSession, savePinLoginContext, type ClientSession } from '../../lib/client-api'
+import {
+  authenticateOfflinePin,
+  isNativeOfflineApp,
+  refreshOfflinePinRoster,
+} from '../../lib/offline-store'
+import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
+
+interface Props {
+  onLogin: () => void
+}
+
+export default function LoginScreen({ onLogin }: Props) {
+  const [step, setStep] = useState<'splash' | 'login' | 'pin' | 'fp-email' | 'fp-otp' | 'fp-reset' | 'fp-done'>('splash')
+  const [pin, setPin] = useState('')
+  const [email, setEmail] = useState('owner@mobiduka.com')
+  const [password, setPassword] = useState('OwnerPass123')
+  const [pinIdentifier, setPinIdentifier] = useState(() => getPinLoginContext()?.identifier ?? 'cashier1')
+  const [showPassword, setShowPassword] = useState(false)
+  const [loginError, setLoginError] = useAutoDismissMessage()
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const taglines = [
+    'Smart retail management for modern businesses',
+    'Track every sale, every shilling, every shift',
+    'Real-time stock alerts — never run out again',
+    'M-Pesa, Cash & Credit in one place',
+    'Built for dukas, supermarkets & kiosks',
+  ]
+  const [tagIdx, setTagIdx] = useState(0)
+  const [tagFade, setTagFade] = useState(true)
+
+  const selectTagline = (index: number) => {
+    setTagFade(false)
+    window.setTimeout(() => { setTagIdx(index); setTagFade(true) }, 180)
+  }
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTagFade(false)
+      window.setTimeout(() => {
+        setTagIdx(current => (current + 1) % taglines.length)
+        setTagFade(true)
+      }, 220)
+    }, 3200)
+    return () => window.clearInterval(intervalId)
+  }, [taglines.length])
+
+  // Forgot-password flow state
+  const [fpEmail, setFpEmail] = useState('')
+  const [fpRole, setFpRole] = useState('Admin')
+  const [fpOtp, setFpOtp] = useState('')
+  const [fpNew, setFpNew] = useState('')
+  const [fpConfirm, setFpConfirm] = useState('')
+  const [fpError, setFpError] = useAutoDismissMessage()
+
+  const handlePinPress = (digit: string) => {
+    if (pin.length < 4) {
+      const next = pin + digit
+      setPin(next)
+      if (next.length === 4) {
+        setTimeout(() => submitLogin(next), 400)
+      }
+    }
+  }
+
+  const handlePinDelete = () => setPin(p => p.slice(0, -1))
+
+  const submitLogin = async (loginPin?: string) => {
+    setIsSubmitting(true)
+    setLoginError('')
+    try {
+      const pinContext = getPinLoginContext()
+      const normalizedPinIdentifier = pinIdentifier.trim()
+      const payload = await apiFetch<ClientSession & {
+        user: ClientSession["user"] & {
+          username?: string
+          email?: string
+        }
+      }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(loginPin ? {} : { identifier: email }),
+          ...(loginPin ? {
+            pin: loginPin,
+            ...(pinContext?.identifier === normalizedPinIdentifier ? { businessId: pinContext.businessId } : {}),
+          } : { password }),
+        }),
+      })
+      saveClientSession(payload)
+      if (payload.user?.businessId) {
+        savePinLoginContext({
+          identifier: payload.user.username || payload.user.email || email,
+          businessId: payload.user.businessId,
+          displayName: payload.user.name || email,
+        })
+        if (isNativeOfflineApp()) {
+          try {
+            await refreshOfflinePinRoster(payload.user.businessId)
+          } catch (error) {
+            console.error('Unable to refresh the offline business PIN roster.', error)
+          }
+        }
+      }
+      onLogin()
+    } catch (error) {
+      setPin('')
+      const pinContext = getPinLoginContext()
+      if (
+        loginPin &&
+        pinContext?.businessId &&
+        isNativeOfflineApp() &&
+        error instanceof TypeError
+      ) {
+        try {
+          const result = await authenticateOfflinePin(pinContext.businessId, loginPin)
+          if (result.success) {
+            const offlineSession: ClientSession = {
+              token: '',
+              user: { ...result.user, offline: true },
+            }
+            saveClientSession(offlineSession)
+            onLogin()
+            return
+          }
+          setLoginError(result.message)
+        } catch (offlineError) {
+          console.error('Offline PIN authentication failed unexpectedly.', offlineError)
+          setLoginError('Unable to verify the offline PIN on this device.')
+        }
+        return
+      }
+      setLoginError(error instanceof Error ? error.message : 'Unable to sign in.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  // ── Forgot Password: Done ─────────────────────────────────────────────
+  if (step === 'fp-done') {
+    return (
+      <div className="screen" style={{ background: '#F5F7FA' }}>
+        <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button className="btn" onClick={() => setStep('login')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+            </button>
+            <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Password Reset</div>
+          </div>
+        </div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px' }}>
+          <div style={{ fontSize: 64, marginBottom: 20 }}>🔓</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: '#0D1B3D', marginBottom: 8 }}>Password Updated!</div>
+          <div style={{ fontSize: 14, color: '#6B7A99', textAlign: 'center', lineHeight: 1.6, marginBottom: 32 }}>
+            Your new password has been saved.<br />You can now sign in.
+          </div>
+          <button className="btn" onClick={() => { setStep('login'); setFpEmail(''); setFpOtp(''); setFpNew(''); setFpConfirm('') }} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit' }}>
+            Back to Sign In
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Forgot Password: Reset ────────────────────────────────────────────
+  if (step === 'fp-reset') {
+    const handleReset = () => {
+      if (!fpNew) { setFpError('Please enter a new password'); return }
+      if (fpNew.length < 6) { setFpError('Password must be at least 6 characters'); return }
+      if (fpNew !== fpConfirm) { setFpError('Passwords do not match'); return }
+      setFpError('')
+      setStep('fp-done')
+    }
+    return (
+      <div className="screen" style={{ background: '#F5F7FA' }}>
+        <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button className="btn" onClick={() => setStep('fp-otp')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+            </button>
+            <div>
+              <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Set New Password</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>Step 3 of 3</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ padding: '28px 24px', flex: 1 }}>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>New Password</label>
+            <input className="input" type="password" placeholder="Min. 6 characters" value={fpNew} onChange={e => { setFpNew(e.target.value); setFpError('') }} />
+          </div>
+          <div style={{ marginBottom: fpError ? 12 : 24 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Confirm New Password</label>
+            <input className="input" type="password" placeholder="Repeat password" value={fpConfirm} onChange={e => { setFpConfirm(e.target.value); setFpError('') }} />
+          </div>
+          {fpError && (
+            <div style={{ background: '#FFEBEE', border: '1px solid #FFCDD2', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>
+              ⚠️ {fpError}
+            </div>
+          )}
+          <button className="btn" onClick={handleReset} style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, #123A8F, #1A4FBF)', border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700, color: 'white', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 20px rgba(18,58,143,0.35)' }}>
+            Save New Password
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Forgot Password: OTP ──────────────────────────────────────────────
+  if (step === 'fp-otp') {
+    return (
+      <div className="screen" style={{ background: '#F5F7FA' }}>
+        <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button className="btn" onClick={() => setStep('fp-email')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+            </button>
+            <div>
+              <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Enter OTP</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>Step 2 of 3</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ padding: '28px 24px', flex: 1 }}>
+          <div style={{ textAlign: 'center', marginBottom: 28 }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>📲</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#0D1B3D', marginBottom: 6 }}>Check your phone</div>
+            <div style={{ fontSize: 13, color: '#6B7A99', lineHeight: 1.6 }}>
+              A 6-digit code was sent to the number linked to <span style={{ fontWeight: 700, color: '#123A8F' }}>{fpEmail}</span>
+            </div>
+          </div>
+          <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>6-Digit Code</label>
+          <input
+            className="input" type="text" inputMode="numeric" maxLength={6}
+            placeholder="• • • • • •"
+            value={fpOtp}
+            onChange={e => setFpOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            style={{ textAlign: 'center', fontSize: 28, letterSpacing: 12, fontWeight: 800, marginBottom: 24 }}
+          />
+          <button className="btn" onClick={() => { if (fpOtp.length === 6) setStep('fp-reset') }} style={{
+            width: '100%', padding: '16px',
+            background: fpOtp.length === 6 ? 'linear-gradient(135deg, #123A8F, #1A4FBF)' : '#E3EAF8',
+            border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700,
+            color: fpOtp.length === 6 ? 'white' : '#B0BAD3', cursor: fpOtp.length === 6 ? 'pointer' : 'not-allowed',
+            fontFamily: 'inherit',
+          }}>
+            Verify Code →
+          </button>
+          <div style={{ textAlign: 'center', marginTop: 16 }}>
+            <button className="btn" style={{ background: 'none', border: 'none', color: '#123A8F', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Resend code
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Forgot Password: Email ────────────────────────────────────────────
+  if (step === 'fp-email') {
+    const roles = ['Admin', 'Manager', 'Cashier', 'Supervisor']
+    return (
+      <div className="screen" style={{ background: '#F5F7FA' }}>
+        <div style={{ background: 'linear-gradient(135deg, #0D1B3D, #123A8F)', padding: '52px 20px 24px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <button className="btn" onClick={() => setStep('login')} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+            </button>
+            <div>
+              <div style={{ color: 'white', fontSize: 18, fontWeight: 700 }}>Forgot Password</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 }}>Step 1 of 3</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ padding: '28px 24px', flex: 1 }}>
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#0D1B3D', marginBottom: 6 }}>Reset your password</div>
+            <div style={{ fontSize: 13, color: '#6B7A99', lineHeight: 1.6 }}>Enter your registered email. A one-time code will be sent to your linked phone number.</div>
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Email Address</label>
+            <input className="input" type="email" placeholder="your@email.com" value={fpEmail} onChange={e => setFpEmail(e.target.value)} />
+          </div>
+          <div style={{ marginBottom: 24 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 8 }}>Account Role</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {roles.map(r => (
+                <button key={r} className="btn" onClick={() => setFpRole(r)} style={{
+                  padding: '8px 16px', borderRadius: 100, cursor: 'pointer', fontFamily: 'inherit',
+                  border: fpRole === r ? '2px solid #123A8F' : '1.5px solid #E0E7F0',
+                  background: fpRole === r ? 'rgba(18,58,143,0.08)' : 'white',
+                  color: fpRole === r ? '#123A8F' : '#6B7A99',
+                  fontSize: 13, fontWeight: 600,
+                }}>
+                  {r}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button className="btn" onClick={() => { if (fpEmail) setStep('fp-otp') }} style={{
+            width: '100%', padding: '16px',
+            background: fpEmail ? 'linear-gradient(135deg, #123A8F, #1A4FBF)' : '#E3EAF8',
+            border: 'none', borderRadius: 16, fontSize: 15, fontWeight: 700,
+            color: fpEmail ? 'white' : '#B0BAD3',
+            cursor: fpEmail ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
+            boxShadow: fpEmail ? '0 4px 20px rgba(18,58,143,0.35)' : 'none',
+          }}>
+            Send Reset Code →
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 'splash') {
+    return (
+      <div className="screen" style={{ background: 'linear-gradient(160deg, #0D1B3D 0%, #123A8F 60%, #1A4FBF 100%)' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 32px' }}>
+          {/* Logo */}
+          <div style={{ marginBottom: 32, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{
+              width: 100, height: 100, borderRadius: 28,
+              background: 'linear-gradient(135deg, #D4AF37 0%, #F0D060 50%, #C9A227 100%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 8px 32px rgba(212,175,55,0.4)',
+              marginBottom: 20
+            }}>
+              <img
+                src="/mobiduka_icon.svg"
+                alt="MobiDuka"
+                style={{ width: '98%', height: '98%', display: 'block', objectFit: 'contain' }}
+              />
+            </div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: 'white', letterSpacing: -0.5 }}>MobiDuka</div>
+            <div style={{ fontSize: 14, color: 'rgba(212,175,55,0.9)', fontWeight: 500, letterSpacing: 3, textTransform: 'uppercase', marginTop: 4 }}>Point of Sale</div>
+          </div>
+
+          <div aria-live="polite" style={{ minHeight: 46, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 26 }}>
+            <div style={{ maxWidth: 270, color: 'rgba(255,255,255,0.68)', fontSize: 14, textAlign: 'center', lineHeight: 1.6, opacity: tagFade ? 1 : 0, transform: tagFade ? 'translateY(0)' : 'translateY(4px)', transition: 'opacity 0.22s ease, transform 0.22s ease' }}>{taglines[tagIdx]}</div>
+          </div>
+
+          <div role="tablist" aria-label="MobiDuka highlights" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 18 }}>
+            {taglines.map((tagline, index) => <button key={tagline} type="button" className="btn" role="tab" aria-selected={index === tagIdx} aria-label={`Show: ${tagline}`} onClick={() => selectTagline(index)} style={{ width: index === tagIdx ? 22 : 7, height: 7, padding: 0, border: 'none', borderRadius: 99, background: index === tagIdx ? '#D4AF37' : 'rgba(255,255,255,0.28)', cursor: 'pointer', transition: 'width 0.25s ease, background 0.25s ease' }} />)}
+          </div>
+        </div>
+
+        <div style={{ paddingBottom: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+          <button className="btn" onClick={() => setStep('login')} style={{
+            width: '80%', padding: '16px',
+            background: 'linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)',
+            border: 'none', borderRadius: 16,
+            fontSize: 16, fontWeight: 700, color: '#0D1B3D',
+            fontFamily: 'inherit',
+            boxShadow: '0 4px 20px rgba(212,175,55,0.4)'
+          }}>
+            Get Started
+          </button>
+          <button className="btn" onClick={() => setStep('pin')} style={{
+            width: '80%', padding: '14px',
+            background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 16, fontSize: 15, fontWeight: 600, color: 'white', fontFamily: 'inherit'
+          }}>
+            Quick PIN Login
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 'pin') {
+    const pinContext = getPinLoginContext()
+    return (
+      <div className="screen" style={{ background: 'linear-gradient(160deg, #0D1B3D 0%, #123A8F 100%)' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 32px' }}>
+          {/* Avatar */}
+          <div style={{
+            width: 72, height: 72, borderRadius: '50%',
+            background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            marginBottom: 16, fontSize: 28, fontWeight: 700, color: '#0D1B3D'
+          }}>A</div>
+          <div style={{ color: 'white', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{pinContext?.displayName ?? 'Quick PIN Login'}</div>
+          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 48 }}>{pinContext ? 'Enter an active employee PIN for this business' : 'Sign in online once to enable business PIN login'}</div>
+
+          {!pinContext && (
+            <input
+              className="input"
+              value={pinIdentifier}
+              onChange={event => { setPinIdentifier(event.target.value); setPin(''); setLoginError('') }}
+              placeholder="Username or email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              style={{ width: '100%', maxWidth: 280, marginBottom: 24, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: 'white' }}
+            />
+          )}
+
+          {loginError && <div style={{ width: '100%', maxWidth: 280, color: '#FFCDD2', fontSize: 12, textAlign: 'center', marginBottom: 16 }}>{loginError}</div>}
+
+          {/* PIN dots */}
+          <div style={{ display: 'flex', gap: 20, marginBottom: 48 }}>
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} style={{
+                width: 16, height: 16, borderRadius: '50%',
+                background: i < pin.length ? '#D4AF37' : 'rgba(255,255,255,0.2)',
+                border: '2px solid',
+                borderColor: i < pin.length ? '#D4AF37' : 'rgba(255,255,255,0.3)',
+                transition: 'all 0.2s'
+              }} />
+            ))}
+          </div>
+
+          {/* Numpad */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, width: '100%', maxWidth: 280, opacity: pinContext ? 1 : 0.5, pointerEvents: pinContext ? 'auto' : 'none' }}>
+            {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((key, i) => (
+              <button key={i} className="btn" onClick={() => key === '⌫' ? handlePinDelete() : key && handlePinPress(key)}
+                style={{
+                  height: 64, borderRadius: 16,
+                  background: key === '' ? 'transparent' : 'rgba(255,255,255,0.1)',
+                  border: key === '' ? 'none' : '1px solid rgba(255,255,255,0.15)',
+                  color: 'white', fontSize: key === '⌫' ? 20 : 24, fontWeight: 500,
+                  fontFamily: 'inherit', cursor: key === '' ? 'default' : 'pointer'
+                }}>
+                {key}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ padding: '0 32px 40px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+          {!pinContext && <button className="btn" onClick={() => setStep('login')} style={{
+            background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',
+            fontSize: 14, cursor: 'pointer', fontFamily: 'inherit'
+          }}>
+            Sign in online to set up business PIN login
+          </button>}
+          {pinContext && <button className="btn" onClick={() => setStep('login')} style={{
+            background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)',
+            fontSize: 14, cursor: 'pointer', fontFamily: 'inherit'
+          }}>
+            Use email & password instead
+          </button>}
+          <button className="btn" onClick={() => { setFpEmail(''); setStep('fp-email') }} style={{
+            background: 'none', border: 'none', color: 'rgba(212,175,55,0.85)',
+            fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600
+          }}>
+            Forgot PIN?
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Login form
+  return (
+    <div className="screen" style={{ background: '#F5F7FA' }}>
+      {/* Header */}
+      <div style={{
+        background: 'linear-gradient(135deg, #0D1B3D 0%, #123A8F 100%)',
+        padding: '60px 28px 40px',
+        borderRadius: '0 0 32px 32px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 12,
+            background: 'linear-gradient(135deg, #D4AF37, #F0D060)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}>
+            <img
+              src="/mobiduka_icon.svg"
+              alt="MobiDuka"
+              style={{ width: '98%', height: '98%', display: 'block', objectFit: 'contain' }}
+            />
+          </div>
+          <div>
+            <div style={{ color: 'white', fontSize: 20, fontWeight: 800 }}>MobiDuka POS</div>
+            <div style={{ color: 'rgba(212,175,55,0.8)', fontSize: 12, fontWeight: 500 }}>Business Management</div>
+          </div>
+        </div>
+        <div style={{ color: 'white', fontSize: 24, fontWeight: 700 }}>Welcome back</div>
+        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, marginTop: 4 }}>Sign in to your account</div>
+      </div>
+
+      {/* Form */}
+      <div style={{ padding: '32px 24px', flex: 1 }}>
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Email Address</label>
+            <input className="input" value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="owner@mobiduka.com" />
+        </div>
+        <div style={{ marginBottom: 24 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7A99', display: 'block', marginBottom: 6 }}>Password</label>
+          <div style={{ position: 'relative' }}>
+            <input
+              className="input"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              type={showPassword ? 'text' : 'password'}
+              placeholder="OwnerPass123"
+              style={{ paddingRight: 48 }}
+            />
+            <button
+              className="btn"
+              type="button"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              title={showPassword ? 'Hide password' : 'Show password'}
+              onClick={() => setShowPassword(previous => !previous)}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                right: 8,
+                transform: 'translateY(-50%)',
+                width: 36,
+                height: 36,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: 'none',
+                color: '#6B7A99',
+                cursor: 'pointer',
+              }}
+            >
+              {showPassword ? (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 3l18 18" />
+                  <path d="M10.58 10.58a2 2 0 0 0 2.83 2.83" />
+                  <path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 8.5 4 9.5 8a11.67 11.67 0 0 1-2.05 3.83" />
+                  <path d="M6.61 6.61C4.62 7.86 3.29 9.82 2.5 12c1 4 4.5 8 9.5 8a10.9 10.9 0 0 0 3.36-.53" />
+                </svg>
+              ) : (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z" />
+                  <circle cx="12" cy="12" r="2.5" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ textAlign: 'right', marginBottom: 28 }}>
+          <button className="btn" onClick={() => { setFpEmail(email); setStep('fp-email') }} style={{ background: 'none', border: 'none', color: '#123A8F', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Forgot Password?
+          </button>
+        </div>
+
+        {loginError && (
+          <div style={{ background: '#FFEBEE', border: '1px solid #FFCDD2', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#D32F2F', marginBottom: 16 }}>
+            {loginError}
+          </div>
+        )}
+
+        <button className="btn" onClick={() => submitLogin()} disabled={isSubmitting} style={{
+          width: '100%', padding: '16px',
+          background: 'linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)',
+          border: 'none', borderRadius: 16,
+          fontSize: 16, fontWeight: 700, color: 'white', fontFamily: 'inherit',
+          boxShadow: '0 4px 20px rgba(18,58,143,0.35)', opacity: isSubmitting ? 0.7 : 1,
+        }}>
+          {isSubmitting ? 'Signing In…' : 'Sign In'}
+        </button>
+
+        <div style={{ textAlign: 'center', marginTop: 20 }}>
+          <button className="btn" onClick={() => setStep('pin')} style={{
+            background: 'rgba(18,58,143,0.08)', border: 'none',
+            borderRadius: 12, padding: '12px 24px',
+            fontSize: 14, fontWeight: 600, color: '#123A8F', fontFamily: 'inherit', cursor: 'pointer'
+          }}>
+            Use PIN Login instead
+          </button>
+        </div>
+        {!isNativeOfflineApp() && (
+          <div style={{ textAlign: 'center', marginTop: 18, color: '#6B7A99', fontSize: 12 }}>
+            New to MobiDuka? <a href="/signup" style={{ color: '#123A8F', fontWeight: 700, textDecoration: 'none' }}>Start a free trial</a>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ padding: '0 24px 32px', textAlign: 'center' }}>
+        <div style={{ fontSize: 12, color: '#6B7A99' }}>MobiDuka POS v1.1 · SmartScan™ Integrated</div>
+        <div style={{ fontSize: 11, color: '#B0BAD3', marginTop: 4 }}>Powered by Degem Ventures</div>
+      </div>
+    </div>
+  )
+}

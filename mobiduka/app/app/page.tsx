@@ -1,0 +1,843 @@
+"use client" /* Phone frame */ /* Notch */ /* Centre SCAN FAB — absolute so it doesn't shrink adjacent slots */ /* <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    position: "relative",
+                    marginTop: -22,
+                  }}
+                > */
+
+import { JSX, useEffect, useRef, useState } from "react"
+import { ThemeProvider, useTheme } from "../context/ThemeContext"
+import LoginScreen from "../components/LoginScreen"
+import Dashboard from "../components/Dashboard"
+import POSScreen from "../components/POSScreen"
+import InventoryScreen from "../components/InventoryScreen"
+import ReportsScreen from "../components/ReportsScreen"
+import CustomersScreen from "../components/CustomersScreen"
+import MoreScreen from "../components/MoreScreen"
+import SettingsScreen from "../components/SettingsScreen"
+import PurchaseOrdersScreen from "../components/PurchaseOrdersScreen"
+import SuppliersScreen from "../components/SuppliersScreen"
+import CreditBookScreen from "../components/CreditBookScreen"
+import ExpensesScreen from "../components/ExpensesScreen"
+import EmployeesScreen from "../components/EmployeesScreen"
+import NotificationsScreen from "../components/NotificationsScreen"
+import BackupScreen from "../components/BackupScreen"
+import UserProfileScreen from "../components/UserProfileScreen"
+import SmartScanScreen from "../components/SmartScanScreen"
+import ActiveSessionsScreen from "../components/ActiveSessionsScreen"
+import TwoFactorScreen from "../components/TwoFactorScreen"
+import AdminRegisterScreen from "../components/AdminRegisterScreen"
+import ShiftsScreen from "../components/ShiftsScreen"
+import PaymentMethodsScreen from "../components/PaymentMethodsScreen"
+import ManageRolesScreen from "../components/ManageRolesScreen"
+import OfflineSyncWorker from "../components/OfflineSyncWorker"
+import AutomaticBackupWorker from "../components/AutomaticBackupWorker"
+import ReceiptSettingsScreen from "../components/ReceiptSettingsScreen"
+import TaxComplianceScreen from "../components/TaxComplianceScreen"
+import SubscriptionRequiredToast from "../components/SubscriptionRequiredToast"
+import {
+  ApiResponseError,
+  clearClientSession,
+  clearLastScreen,
+  getClientSession,
+  getLastScreen,
+  saveLastScreen,
+} from "../../lib/client-api"
+import {
+  fetchCachedCollection,
+  isNativeOfflineApp,
+  readOfflineCollectionUpdatedAt,
+} from "../../lib/offline-store"
+
+type Screen = "login" | "dashboard" | "pos" | "inventory" | "reports" | "customers" | "more" | "settings" | "purchases" | "suppliers" | "credit" | "expenses" | "employees" | "notifications" | "backup" | "profile" | "scan" | "sessions" | "twofa" | "register" | "shifts" | "payments" | "roles" | "receiptsettings" | "taxcompliance"
+
+type SideNavItem = {
+  key: Screen
+  label: string
+  icon: (active: boolean) => JSX.Element
+}
+
+const leftNavItems: SideNavItem[] = [
+  {
+    key: "dashboard",
+    label: "Home",
+    icon: () => (
+      <svg
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="1.5" />
+      </svg>
+    ),
+  },
+  {
+    key: "pos",
+    label: "POS",
+    icon: () => (
+      <svg
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M5 8h14l-1 12H6L5 8Z" />
+        <path d="M9 9V6a3 3 0 0 1 6 0v3" />
+      </svg>
+    ),
+  },
+]
+
+const rightNavItems: SideNavItem[] = [
+  {
+    key: "inventory",
+    label: "Stock",
+    icon: () => (
+      <svg
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="m4 7 8-4 8 4-8 4-8-4Z" />
+        <path d="M4 7v10l8 4 8-4V7" />
+        <path d="M12 11v10" />
+      </svg>
+    ),
+  },
+  {
+    key: "more",
+    label: "More",
+    icon: () => (
+      <svg
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <line x1="3" y1="6" x2="21" y2="6" />
+        <line x1="3" y1="12" x2="21" y2="12" />
+        <line x1="3" y1="18" x2="21" y2="18" />
+      </svg>
+    ),
+  },
+]
+
+const showNavFor: Screen[] = [
+  "dashboard",
+  "pos",
+  "inventory",
+  "customers",
+  "more",
+  "scan",
+]
+
+const shiftOvertimeThresholdMs = 8 * 60 * 60 * 1000
+
+function AppInner() {
+  const { isDark } = useTheme()
+  const [screen, setScreen] = useState<Screen>("login")
+  const [loggedIn, setLoggedIn] = useState(false)
+  const [isHydratingSession, setIsHydratingSession] = useState(true)
+  const [activeShiftCount, setActiveShiftCount] = useState(0)
+  const [activeShiftNames, setActiveShiftNames] = useState<string[]>([])
+  const [oldestActiveShiftOpenedAt, setOldestActiveShiftOpenedAt] =
+    useState<string | null>(null)
+  const [shiftClockNow, setShiftClockNow] = useState(() => Date.now())
+  const [activeShiftsAreSnapshot, setActiveShiftsAreSnapshot] = useState(false)
+  const [activeShiftsUpdatedAt, setActiveShiftsUpdatedAt] =
+    useState<string | null>(null)
+  const [openActiveShift, setOpenActiveShift] = useState(false)
+  const [openStartShift, setOpenStartShift] = useState(false)
+  const [shiftBannerPosition, setShiftBannerPosition] = useState({ y: 0 })
+  const shiftBannerDrag = useRef<{ x: number; y: number } | null>(null)
+  const shiftBannerWasDragged = useRef(false)
+  const [inventoryBarcode, setInventoryBarcode] = useState<string | undefined>()
+  const [inventoryProductId, setInventoryProductId] =
+    useState<string | undefined>()
+  const [posCartItem, setPosCartItem] = useState<{
+    id: string
+    name: string
+    price: number
+    emoji: string
+  } | undefined>()
+
+  useEffect(() => {
+    const session = getClientSession()
+    const tokenParts = session?.token.split(".")
+    let sessionIsValid = Boolean(session)
+    if (session?.user.offline) {
+      sessionIsValid = isNativeOfflineApp() && !navigator.onLine
+    } else if (session && tokenParts?.[1]) {
+      try {
+        const claims = JSON.parse(
+          atob(tokenParts[1].replace(/-/g, "+").replace(/_/g, "/")),
+        ) as { exp?: number }
+        sessionIsValid =
+          typeof claims.exp !== "number" || claims.exp > Date.now() / 1000
+      } catch {
+        sessionIsValid = false
+      }
+    }
+    if (sessionIsValid) {
+      const savedScreen = getLastScreen() as Screen | null
+      const restoredScreen = session?.user.offline
+        ? "pos"
+        : savedScreen && savedScreen !== "login"
+          ? savedScreen
+          : "dashboard"
+      setLoggedIn(true)
+      setScreen(restoredScreen)
+    } else {
+      clearClientSession()
+      clearLastScreen()
+    }
+    setIsHydratingSession(false)
+  }, [])
+
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setLoggedIn(false)
+      setScreen("login")
+    }
+    window.addEventListener("mobiduka-auth-expired", handleAuthExpired)
+    return () =>
+      window.removeEventListener("mobiduka-auth-expired", handleAuthExpired)
+  }, [])
+
+  useEffect(() => {
+    const handleOnline = () => {
+      if (!getClientSession()?.user.offline) return
+      clearClientSession()
+      clearLastScreen()
+      setLoggedIn(false)
+      setScreen("login")
+    }
+    window.addEventListener("online", handleOnline)
+    return () => window.removeEventListener("online", handleOnline)
+  }, [])
+
+  useEffect(() => {
+    if (!loggedIn) {
+      setActiveShiftCount(0)
+      setActiveShiftNames([])
+      setOldestActiveShiftOpenedAt(null)
+      return
+    }
+
+    let cancelled = false
+    const cacheKey = "shifts.active-summary.v1"
+    const loadActiveShifts = async () => {
+      const clientSession = getClientSession()
+      if (!clientSession) return
+      let previousUpdatedAt: string | null = null
+      try {
+        previousUpdatedAt = await readOfflineCollectionUpdatedAt(
+          clientSession.user.businessId,
+          cacheKey,
+        )
+      } catch (error) {
+        console.error(
+          "Unable to read the active-shift snapshot timestamp.",
+          error,
+        )
+      }
+      try {
+        const response = await fetchCachedCollection<{
+          sessions: Array<{
+            openedAt: string
+            closedAt: string | null
+            cashier: {
+              fullName: string
+              role: { name: string } | null
+            } | null
+          }>
+        }>(
+          clientSession.user.businessId,
+          cacheKey,
+          `/api/cash/session?businessId=${encodeURIComponent(clientSession.user.businessId)}`,
+        )
+        if (cancelled) return
+        const active = response.sessions.filter(
+          (session) =>
+            !session.closedAt &&
+            ["CASHIER", "SUPERVISOR"].includes(
+              session.cashier?.role?.name?.toUpperCase() ?? "",
+            ),
+        )
+        setActiveShiftCount(active.length)
+        setActiveShiftNames(
+          active.map((session) => session.cashier?.fullName ?? "Unassigned"),
+        )
+        const oldestActiveShift = active.reduce<string | null>(
+          (oldest, session) => {
+            const openedAt = Date.parse(session.openedAt)
+            if (!Number.isFinite(openedAt)) return oldest
+            return oldest === null || openedAt < Date.parse(oldest)
+              ? session.openedAt
+              : oldest
+          },
+          null,
+        )
+        setOldestActiveShiftOpenedAt(oldestActiveShift)
+        setShiftClockNow(Date.now())
+        let updatedAt: string | null = null
+        try {
+          updatedAt = await readOfflineCollectionUpdatedAt(
+            clientSession.user.businessId,
+            cacheKey,
+          )
+        } catch (error) {
+          console.error(
+            "Unable to read the active-shift snapshot timestamp.",
+            error,
+          )
+        }
+        if (cancelled) return
+        setActiveShiftsUpdatedAt(updatedAt)
+        setActiveShiftsAreSnapshot(
+          isNativeOfflineApp() &&
+            (!navigator.onLine ||
+              (updatedAt !== null && previousUpdatedAt === updatedAt)),
+        )
+      } catch (error) {
+        if (
+          !cancelled &&
+          error instanceof ApiResponseError &&
+          [401, 403].includes(error.status)
+        ) {
+          setActiveShiftCount(0)
+          setActiveShiftNames([])
+          setOldestActiveShiftOpenedAt(null)
+          setActiveShiftsAreSnapshot(false)
+          setActiveShiftsUpdatedAt(null)
+        } else if (!cancelled) {
+          console.error("Unable to load active shifts.", error)
+        }
+      }
+    }
+
+    void loadActiveShifts()
+    const refreshTimer = window.setInterval(
+      () => void loadActiveShifts(),
+      30000,
+    )
+    window.addEventListener("mobiduka:shift-changed", loadActiveShifts)
+    const handleOnline = () => void loadActiveShifts()
+    const handleOffline = () => {
+      if (isNativeOfflineApp()) setActiveShiftsAreSnapshot(true)
+    }
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+    return () => {
+      cancelled = true
+      window.clearInterval(refreshTimer)
+      window.removeEventListener("mobiduka:shift-changed", loadActiveShifts)
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
+  }, [loggedIn, screen])
+
+  useEffect(() => {
+    if (!oldestActiveShiftOpenedAt) return
+    const clockTimer = window.setInterval(
+      () => setShiftClockNow(Date.now()),
+      15_000,
+    )
+    return () => window.clearInterval(clockTimer)
+  }, [oldestActiveShiftOpenedAt])
+
+  const oldestActiveShiftDuration = oldestActiveShiftOpenedAt
+    ? shiftClockNow - Date.parse(oldestActiveShiftOpenedAt)
+    : 0
+  const activeShiftOvertime =
+    activeShiftCount > 0 && oldestActiveShiftDuration > shiftOvertimeThresholdMs
+
+  const handleLogin = () => {
+    setLoggedIn(true)
+    const startScreen = getClientSession()?.user.offline ? "pos" : "dashboard"
+    setScreen(startScreen)
+    saveLastScreen(startScreen)
+  }
+
+  const handleLogout = () => {
+    clearClientSession()
+    clearLastScreen()
+    setLoggedIn(false)
+    setScreen("login")
+  }
+
+  const handleNavigate = (
+    s: string,
+    options?: {
+      barcode?: string
+      productId?: string
+      startNewShift?: boolean
+      cartItem?: {
+        id: string
+        name: string
+        price: number
+        emoji: string
+      }
+    },
+  ) => {
+    const nextScreen = s as Screen
+    if (
+      getClientSession()?.user.offline &&
+      nextScreen !== "pos" &&
+      nextScreen !== "scan"
+    )
+      return
+    if (options?.startNewShift) {
+      setOpenActiveShift(false)
+      setOpenStartShift(true)
+    } else if (nextScreen !== "shifts") {
+      setOpenActiveShift(false)
+      setOpenStartShift(false)
+    }
+    setInventoryBarcode(
+      nextScreen === "inventory" ? options?.barcode : undefined,
+    )
+    setInventoryProductId(
+      nextScreen === "inventory" ? options?.productId : undefined,
+    )
+    setPosCartItem(nextScreen === "pos" ? options?.cartItem : undefined)
+    setScreen(nextScreen)
+    if (nextScreen !== "login") saveLastScreen(nextScreen)
+  }
+
+  const showNav = showNavFor.includes(screen)
+  const offlineSession = getClientSession()?.user.offline === true
+  const visibleLeftNavItems = offlineSession
+    ? leftNavItems.filter((item) => item.key === "pos")
+    : leftNavItems
+  const visibleRightNavItems = offlineSession ? [] : rightNavItems
+  const navActiveColor = isDark ? "#8FB3FF" : "#123A8F"
+  const navInactiveColor = isDark ? "#A8B8D8" : "#6B7A99"
+
+  const renderScreen = () => {
+    switch (screen) {
+      case "dashboard":
+        return <Dashboard onNavigate={handleNavigate} />
+      case "pos":
+        return (
+          <POSScreen
+            onNavigate={handleNavigate}
+            initialCartItem={posCartItem}
+          />
+        )
+      case "inventory":
+        return (
+          <InventoryScreen
+            onNavigate={handleNavigate}
+            initialBarcode={inventoryBarcode}
+            initialProductId={inventoryProductId}
+          />
+        )
+      case "reports":
+        return <ReportsScreen onNavigate={handleNavigate} />
+      case "customers":
+        return <CustomersScreen onNavigate={handleNavigate} />
+      case "more":
+        return (
+          <MoreScreen onLogout={handleLogout} onNavigate={handleNavigate} />
+        )
+      case "settings":
+        return <SettingsScreen onNavigate={handleNavigate} />
+      case "purchases":
+        return <PurchaseOrdersScreen onNavigate={handleNavigate} />
+      case "suppliers":
+        return <SuppliersScreen onNavigate={handleNavigate} />
+      case "credit":
+        return <CreditBookScreen onNavigate={handleNavigate} />
+      case "expenses":
+        return <ExpensesScreen onNavigate={handleNavigate} />
+      case "employees":
+        return <EmployeesScreen onNavigate={handleNavigate} />
+      case "notifications":
+        return <NotificationsScreen onNavigate={handleNavigate} />
+      case "backup":
+        return <BackupScreen onNavigate={handleNavigate} />
+      case "profile":
+        return <UserProfileScreen onNavigate={handleNavigate} />
+      case "scan":
+        return <SmartScanScreen onNavigate={handleNavigate} />
+      case "sessions":
+        return <ActiveSessionsScreen onNavigate={handleNavigate} />
+      case "twofa":
+        return <TwoFactorScreen onNavigate={handleNavigate} />
+      case "register":
+        return <AdminRegisterScreen onNavigate={handleNavigate} />
+      case "shifts":
+        return (
+          <ShiftsScreen
+            onNavigate={handleNavigate}
+            openActiveShift={openActiveShift}
+            openStartShift={openStartShift}
+          />
+        )
+      case "payments":
+        return <PaymentMethodsScreen onNavigate={handleNavigate} />
+      case "roles":
+        return <ManageRolesScreen onNavigate={handleNavigate} />
+      case "receiptsettings":
+        return <ReceiptSettingsScreen onNavigate={handleNavigate} />
+      case "taxcompliance":
+        return <TaxComplianceScreen onNavigate={handleNavigate} />
+      default:
+        return null
+    }
+  }
+
+  if (isHydratingSession) return null
+
+  return (
+    <div className="app-shell">
+      <OfflineSyncWorker enabled={loggedIn} />
+      <AutomaticBackupWorker enabled={loggedIn} />
+      <SubscriptionRequiredToast enabled={loggedIn} />
+      {}
+      <div className="phone-frame" data-theme={isDark ? "dark" : "light"}>
+        {}
+        <div
+          className="phone-notch"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 120,
+            height: 34,
+            background: "#0a0a0a",
+            borderRadius: "0 0 20px 20px",
+            zIndex: 200,
+          }}
+        />
+
+        {screen === "login" && <LoginScreen onLogin={handleLogin} />}
+
+        {loggedIn && screen !== "login" && (
+          <div
+            style={{ height: "100%", display: "flex", flexDirection: "column" }}
+          >
+            {getClientSession()?.user.offline && (
+              <div
+                role="status"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "8px 14px",
+                  background: "#FFF8E1",
+                  color: "#795548",
+                  fontSize: 11,
+                }}
+              >
+                <span>
+                  Offline PIN session · POS only. Staff access may be out of
+                  date; sign in online to sync.
+                </span>
+                <button
+                  className="btn"
+                  onClick={handleLogout}
+                  style={{
+                    border: 0,
+                    background: "transparent",
+                    color: "#795548",
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Sign in online
+                </button>
+              </div>
+            )}
+            <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+              {renderScreen()}
+            </div>
+
+            {showNav && (
+              <div
+                className="bottom-nav"
+                style={{ position: "relative", overflow: "visible" }}
+              >
+                {visibleLeftNavItems.map((item) => {
+                  const isActive = screen === item.key
+                  return (
+                    <button
+                      key={item.key}
+                      className={`bottom-nav-item btn ${
+                        isActive ? "active" : ""
+                      }`}
+                      onClick={() => handleNavigate(item.key)}
+                      style={{
+                        position: "relative",
+                        color: isActive ? navActiveColor : navInactiveColor,
+                      }}
+                    >
+                      {item.icon(isActive)}
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: isActive ? 700 : 500,
+                          color: "inherit",
+                        }}
+                      >
+                        {item.label}
+                      </span>
+                      {isActive && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            bottom: -4,
+                            width: 20,
+                            height: 3,
+                            borderRadius: "2px 2px 0 0",
+                            background: navActiveColor,
+                          }}
+                        />
+                      )}
+                    </button>
+                  )
+                })}
+
+                {}
+                {}
+                <div
+                  style={{
+                    position: "relative",
+                    width: 64,
+                    flexShrink: 0,
+                    alignSelf: "stretch",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                      bottom: 4,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      zIndex: 10,
+                    }}
+                  >
+                    <button
+                      className="btn"
+                      aria-label="Scan barcode or QR code"
+                      onClick={() => handleNavigate("scan")}
+                      style={{
+                        width: 58,
+                        height: 58,
+                        borderRadius: "50%",
+                        background:
+                          screen === "scan"
+                            ? "linear-gradient(135deg, #D4AF37 0%, #F0D060 100%)"
+                            : "linear-gradient(135deg, #123A8F 0%, #1A4FBF 100%)",
+                        border: `3px solid ${isDark ? "#0F2040" : "white"}`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        boxShadow: "0 4px 20px rgba(18,58,143,0.45)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <img
+                        src="/qr-code-scanner.svg"
+                        width="24"
+                        height="24"
+                        alt=""
+                        aria-hidden="true"
+                        style={{ filter: "brightness(0) invert(1)" }}
+                      />
+                    </button>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: screen === "scan" ? 700 : 600,
+                        color: screen === "scan" ? "#F0D060" : navActiveColor,
+                        marginTop: 3,
+                      }}
+                    >
+                      SCAN
+                    </span>
+                  </div>
+                </div>
+
+                {visibleRightNavItems.map((item) => {
+                  const isActive = screen === item.key
+                  return (
+                    <button
+                      key={item.key}
+                      className={`bottom-nav-item btn ${
+                        isActive ? "active" : ""
+                      }`}
+                      onClick={() => handleNavigate(item.key)}
+                      style={{
+                        position: "relative",
+                        color: isActive ? navActiveColor : navInactiveColor,
+                      }}
+                    >
+                      {item.icon(isActive)}
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: isActive ? 700 : 500,
+                          color: "inherit",
+                        }}
+                      >
+                        {item.label}
+                      </span>
+                      {isActive && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            bottom: -4,
+                            width: 20,
+                            height: 3,
+                            borderRadius: "2px 2px 0 0",
+                            background: navActiveColor,
+                          }}
+                        />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {loggedIn &&
+          screen !== "login" &&
+          !offlineSession &&
+          activeShiftCount > 0 && (
+            <button
+              className={
+                activeShiftOvertime ? "btn shift-banner-overtime" : "btn"
+              }
+              aria-label={
+                activeShiftOvertime
+                  ? "An active shift has exceeded 8 hours"
+                  : undefined
+              }
+              onPointerDown={(event) => {
+                if (activeShiftsAreSnapshot) return
+                shiftBannerDrag.current = { x: event.clientX, y: event.clientY }
+                shiftBannerWasDragged.current = false
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={(event) => {
+                if (activeShiftsAreSnapshot) return
+                const start = shiftBannerDrag.current
+                if (!start) return
+                const deltaY = event.clientY - start.y
+                if (Math.abs(deltaY) > 3) shiftBannerWasDragged.current = true
+                setShiftBannerPosition((position) => ({
+                  y: Math.max(0, Math.min(720, position.y + deltaY)),
+                }))
+                shiftBannerDrag.current = { x: event.clientX, y: event.clientY }
+              }}
+              onPointerUp={() => {
+                shiftBannerDrag.current = null
+              }}
+              onPointerCancel={() => {
+                shiftBannerDrag.current = null
+              }}
+              onClick={() => {
+                if (activeShiftsAreSnapshot) return
+                if (shiftBannerWasDragged.current) {
+                  shiftBannerWasDragged.current = false
+                  return
+                }
+                setOpenActiveShift(true)
+                handleNavigate("shifts")
+              }}
+              style={{
+                position: "absolute",
+                top: shiftBannerPosition.y,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 1000,
+                width: "calc(100% - 32px)",
+                maxWidth: 349,
+                border: activeShiftOvertime ? "2px solid #D32F2F" : "none",
+                borderRadius: 10,
+                background: "#0F6634",
+                color: "white",
+                padding: "11px 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                textAlign: "left",
+                cursor: activeShiftsAreSnapshot ? "default" : "grab",
+                touchAction: activeShiftsAreSnapshot ? "auto" : "none",
+                userSelect: "none",
+                fontFamily: "inherit",
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: "0 4px 10px rgba(0,0,0,0.2)",
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{ fontSize: 16, lineHeight: 1, color: "#A5D6A7" }}
+              >
+                ◷
+              </span>
+              <span style={{ flex: 1 }}>
+                {activeShiftsAreSnapshot
+                  ? `Saved shift status${
+                      activeShiftsUpdatedAt
+                        ? ` · ${new Date(activeShiftsUpdatedAt).toLocaleString()}`
+                        : ""
+                    }`
+                  : `${activeShiftCount} shift${
+                      activeShiftCount === 1 ? "" : "s"
+                    } in progress`}
+                {activeShiftNames.length > 0
+                  ? ` · ${activeShiftNames.join(", ")}`
+                  : ""}
+              </span>
+              {!activeShiftsAreSnapshot && (
+                <span style={{ color: "#A5D6A7" }}>Manage ›</span>
+              )}
+            </button>
+          )}
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
+  )
+}

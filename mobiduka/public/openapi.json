@@ -1,0 +1,1484 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "MobiDuka Retail POS API Blueprint",
+    "description": "Multi-tenant, offline-first production backend engine supporting Flutter mobile clients and Kenyan retail ecosystems (Cash tracking, M-Pesa records, local synchronization syncing).",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "Current app origin API router"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT issued by /auth/login. Use the token as Authorization: Bearer <token>."
+      }
+    }
+  },
+  "security": [
+    { "bearerAuth": [] }
+  ],
+  "tags": [
+    { "name": "Authentication", "description": "Owner and cashier login" },
+    { "name": "Business", "description": "Tenant operations, cash, procurement, expenses, and reports" },
+    { "name": "Employees", "description": "Staff directory and employee accounts" },
+    { "name": "Customers", "description": "Customer profiles and credit ledger" },
+    { "name": "Sales", "description": "Point-of-sale transactions" },
+    { "name": "Inventory", "description": "Offline synchronization and stock changes" },
+    { "name": "Payments", "description": "M-Pesa payment flows" }
+  ],
+  "paths": {
+    "/business": {
+      "get": { "tags": ["Business"], "summary": "Get authenticated business profile", "responses": { "200": { "description": "Business profile" }, "401": { "description": "Authentication required" } } },
+      "patch": { "tags": ["Business"], "summary": "Update authenticated business profile", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "businessId": { "type": "string" }, "name": { "type": "string" }, "branch": { "type": "string", "nullable": true }, "country": { "type": "string", "nullable": true }, "phone": { "type": "string", "nullable": true }, "email": { "type": "string", "format": "email", "nullable": true }, "taxPin": { "type": "string", "nullable": true }, "currency": { "type": "string", "enum": ["KES", "UGX", "TZS", "USD", "GBP", "EUR"] } } } } } }, "responses": { "200": { "description": "Updated business profile" } } }
+    },
+    "/business/backup": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Get cloud device backup history",
+        "description": "Requires the authenticated user's business settings permission. Returns the latest completed backup and up to 20 completed or failed attempts, including manual/automatic source, byte size, retry count, and device-cache counts.",
+        "responses": {
+          "200": { "description": "Latest completed backup in backup plus recent attempts in backups; backup contents remain encrypted." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." }
+        }
+      },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Initialize an encrypted cloud backup",
+        "description": "Creates a tenant-scoped device snapshot upload. triggerType marks manual or automatic runs; collection and queue counts are persisted for backup history. Configure BACKUP_ENCRYPTION_KEY on the server.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["backupId", "checksum", "chunkCount", "compressedBytes", "originalBytes"],
+                "properties": {
+                  "backupId": { "type": "string", "format": "uuid" },
+                  "checksum": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$", "description": "SHA-256 of the uncompressed JSON snapshot." },
+                  "chunkCount": { "type": "integer", "minimum": 1, "maximum": 256 },
+                  "compressedBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+                  "originalBytes": { "type": "integer", "minimum": 1, "maximum": 268435456 },
+                  "collectionCount": { "type": "integer", "minimum": 0 },
+                  "queuedRecordCount": { "type": "integer", "minimum": 0 },
+                  "triggerType": { "type": "string", "enum": ["MANUAL", "AUTO"], "default": "MANUAL" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Backup upload initialized." },
+          "200": { "description": "Idempotent retry for an existing backup." },
+          "400": { "description": "Invalid backup metadata." },
+          "403": { "description": "Business settings permission required." },
+          "503": { "description": "Server backup encryption is not configured." }
+        }
+      }
+    },
+    "/business/backup/{backupId}/chunks/{index}": {
+      "put": {
+        "tags": ["Business"],
+        "summary": "Upload one encrypted backup chunk",
+        "description": "Accepts one gzip archive chunk of at most 256 KiB. Re-uploading an identical chunk is idempotent; a different payload at the same index is rejected.",
+        "parameters": [
+          { "name": "backupId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "index", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": { "type": "string", "format": "binary" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Chunk stored or an identical retry was already present." },
+          "400": { "description": "Invalid index or chunk size." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Backup was not found in this business." },
+          "409": { "description": "Chunk index already contains different data." },
+          "413": { "description": "Chunk exceeds 256 KiB." }
+        }
+      }
+    },
+    "/business/backup/{backupId}/complete": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Verify and complete a cloud backup",
+        "description": "Authenticates/decrypts each chunk, checks the gzip archive and SHA-256 checksum, verifies tenant and snapshot format, then marks the backup complete.",
+        "parameters": [
+          { "name": "backupId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "retryCount": { "type": "integer", "minimum": 0, "maximum": 512 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Backup completed or an identical completion retry was already recorded." },
+          "400": { "description": "Backup integrity, checksum, or snapshot validation failed." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Backup was not found in this business." },
+          "409": { "description": "Backup is missing one or more chunks." },
+          "503": { "description": "Server backup encryption is not configured." }
+        }
+      }
+    },
+    "/business/backup/{backupId}/fail": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Persist a failed device backup attempt",
+        "parameters": [
+          { "name": "backupId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["failureReason"],
+                "properties": {
+                  "failureReason": { "type": "string", "maxLength": 500 },
+                  "retryCount": { "type": "integer", "minimum": 0, "maximum": 512 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Failed attempt recorded." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Pending device backup was not found." }
+        }
+      }
+    },
+    "/business/restore": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Restore a completed encrypted cloud backup",
+        "description": "Requires the authenticated user's business settings permission. Selects the latest completed backup when backupId is omitted, decrypts and verifies its AES-256-GCM chunks server-side, and returns the tenant-matched offline snapshot. The client should confirm before replacing local collections and queued sync records.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "backupId": { "type": "string", "format": "uuid", "description": "Optional completed backup ID; omitted to restore the latest completed backup." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified offline cache snapshot for the authenticated business.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success", "backupId", "checksum", "completedAt", "payload"],
+                  "properties": {
+                    "success": { "type": "boolean", "enum": [true] },
+                    "backupId": { "type": "string", "format": "uuid" },
+                    "checksum": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+                    "completedAt": { "type": "string", "format": "date-time", "nullable": true },
+                    "payload": {
+                      "type": "object",
+                      "required": ["formatVersion", "businessId", "createdAt", "collections", "queuedRecords"],
+                      "properties": {
+                        "formatVersion": { "type": "integer", "enum": [1] },
+                        "businessId": { "type": "string" },
+                        "createdAt": { "type": "string", "format": "date-time" },
+                        "collections": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["cacheKey", "updatedAt", "payload"],
+                            "properties": {
+                              "cacheKey": { "type": "string" },
+                              "updatedAt": { "type": "string", "format": "date-time" },
+                              "payload": {}
+                            }
+                          }
+                        },
+                        "queuedRecords": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["id", "entityName", "operation", "externalId", "payload", "payloadHash", "status", "attemptCount", "nextRetryAt", "createdAt"],
+                            "properties": {
+                              "id": { "type": "string" },
+                              "entityName": { "type": "string" },
+                              "operation": { "type": "string" },
+                              "externalId": { "type": "string" },
+                              "payload": {},
+                              "payloadHash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+                              "status": { "type": "string", "enum": ["PENDING", "FAILED"] },
+                              "attemptCount": { "type": "integer", "minimum": 0 },
+                              "nextRetryAt": { "type": "string", "format": "date-time", "nullable": true },
+                              "createdAt": { "type": "string", "format": "date-time" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid restore request or backup ID." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "No completed backup was found for this business." },
+          "422": { "description": "Backup chunks, checksum, archive, or snapshot failed integrity validation." },
+          "503": { "description": "Server backup encryption is not configured." },
+          "500": { "description": "Unexpected server-side restoration failure." }
+        }
+      }
+    },
+    "/business/backup/server-data": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Get full server business backup history",
+        "description": "Requires authenticated business settings permission. Returns completed metadata and failed attempts, including automatic/manual source, record count, retry count and failure reason; snapshots remain encrypted at rest.",
+        "responses": {
+          "200": { "description": "Latest completed server backup in backup plus recent completed or failed attempts in backups." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." }
+        }
+      },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Create a full tenant-scoped PostgreSQL business backup",
+        "description": "Reads business-owned records in a repeatable-read transaction, serializes and compresses the snapshot, encrypts each chunk with AES-256-GCM, and stores up to 10 completed server backups in the same PostgreSQL database. Includes credential hashes and encrypted payment credential records; shared payment-method definitions and backup archives are excluded. Only authorized server-side restore can access plaintext. This is not protection from loss of that database; maintain an independent off-site backup. Requires BACKUP_ENCRYPTION_KEY.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "triggerType": { "type": "string", "enum": ["MANUAL", "AUTO"], "default": "MANUAL" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Encrypted server business backup created." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." },
+          "409": { "description": "Server data has inconsistent tenant relationships; no backup was stored." },
+          "413": { "description": "Snapshot exceeds the supported size." },
+          "503": { "description": "Server backup encryption is not configured." },
+          "500": { "description": "Server backup could not be created." }
+        }
+      }
+    },
+    "/cron/automatic-backups": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Run the daily automatic full-business backup job",
+        "description": "Scheduled daily at 06:00 UTC by Vercel Cron. Requires CRON_SECRET in production. Creates a full-business backup for each business with automatic backups enabled and records failed attempts.",
+        "responses": {
+          "200": { "description": "Automatic backup run totals." },
+          "401": { "description": "Unauthorized cron execution." }
+        }
+      }
+    },
+    "/business/restore/server-data": {
+      "post": {
+        "tags": ["Business"],
+        "summary": "Restore a full server business snapshot without deleting current-only rows",
+        "description": "Requires authenticated business settings permission. Decrypts and verifies a completed snapshot, then transactionally upserts tenant rows. Snapshot values win for matching primary IDs; current rows absent from the snapshot are retained. Business and credential records are included. Unique-key or foreign-key conflicts roll back the entire restore.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["backupId"],
+                "properties": {
+                  "backupId": { "type": "string", "format": "uuid" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Server snapshot restored; rows absent from the snapshot were retained." },
+          "400": { "description": "Invalid restore request." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business settings permission required." },
+          "404": { "description": "Completed server backup not found for this business." },
+          "422": { "description": "Backup integrity or tenant validation failed." },
+          "503": { "description": "Server backup encryption is not configured." },
+          "500": { "description": "Restore transaction failed; no rows were committed." }
+        }
+      }
+    },
+    "/settings": {
+      "get": { "tags": ["Business"], "summary": "Get authenticated business settings", "parameters": [{ "name": "includeTaxConfig", "in": "query", "schema": { "type": "boolean" }, "description": "Include the Tax & Compliance preferences." }], "responses": { "200": { "description": "Business settings, including automatic backup and Wi-Fi-only preferences" }, "401": { "description": "Authentication required" } } },
+      "patch": { "tags": ["Business"], "summary": "Update business and tax settings", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "description": "Accepts businessId, taxPin, taxConfig, autoBackup, autoBackupFrequency (DAILY, WEEKLY, or MONTHLY), and autoBackupWifiOnly." } } } }, "responses": { "200": { "description": "Updated settings" }, "400": { "description": "Invalid settings" } } }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Multi-Factor Authentication Entry Gateway",
+        "description": "Handles standard credential authorization maps for owners and fast PIN code verification sequences for shift cashiers.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Use the owner password example or the cashier PIN example. Do not send password and pin together.",
+                "properties": {
+                  "identifier": { "type": "string" },
+                  "password": { "type": "string" },
+                  "pin": { "type": "string" }
+                }
+              },
+              "examples": {
+                "ownerPassword": {
+                  "summary": "Seeded owner password login",
+                  "value": { "identifier": "owner@mobiduka.com", "password": "OwnerPass123" }
+                },
+                "cashierPin": {
+                  "summary": "Seeded cashier PIN login",
+                  "value": { "identifier": "cashier1", "pin": "2540" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Authentication successful, returns active JWT token parameters." },
+          "401": { "description": "Invalid user credentials or mismatched secret keys." }
+        }
+      }
+    },
+    "/sync": {
+      "post": {
+        "tags": ["Inventory"],
+        "summary": "Atomic Queue Transaction Sync Synchronization Endpoint",
+        "description": "Processes a collection array of chronological state logs generated offline on the local device.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "deviceId", "userId", "records"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
+                  "deviceId": { "type": "string", "example": "f9fe7e90-cff9-4e99-8335-d33eea68a8ec", "description": "Seeded device ID for Main Counter Tablet." },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID. For another deployment, use the authenticated user id from login." },
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "sync-product-001" },
+                        "entityName": { "type": "string", "example": "Product" },
+                        "operation": { "type": "string", "example": "UPDATE" },
+                        "payload": {
+                          "type": "object",
+                          "example": {
+                            "id": "c8d8215e-3868-4378-9a72-b6fa28f80c3a",
+                            "name": "Safaricom Airtime 100 KES",
+                            "sku": "SAF-100",
+                            "barcode": "6191000000158",
+                            "sellingPrice": 100
+                          }
+                        },
+                        "createdAt": { "type": "string", "format": "date-time", "example": "2026-09-12T17:46:03.643Z" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Batch synced, returns processing counts and archived item arrays." },
+          "500": { "description": "Atomic transaction database failure exception thrown." }
+        }
+      }
+    },
+    "/sales": {
+      "get": {
+        "tags": ["Sales"],
+        "summary": "List completed receipts with cursor pagination",
+        "description": "Returns the most recent completed sales first. The requested page size defaults to 10 and is capped at 20.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 20, "default": 10 } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Sale ID returned as nextCursor on the preceding page." }
+        ],
+        "responses": {
+          "200": { "description": "Receipt page returned.", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "type": "boolean" }, "business": { "type": "object", "properties": { "name": { "type": "string" }, "branch": { "type": "string", "nullable": true } } }, "nextCursor": { "type": "string", "nullable": true }, "receipts": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "saleNumber": { "type": "string" }, "createdAt": { "type": "string", "format": "date-time" }, "businessName": { "type": "string" }, "businessBranch": { "type": "string", "nullable": true }, "subtotal": { "type": "number" }, "discountAmount": { "type": "number" }, "total": { "type": "number" }, "cashier": { "type": "string" }, "customer": { "type": "string", "nullable": true }, "paymentMethod": { "type": "string" }, "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "price": { "type": "number" }, "quantity": { "type": "number" }, "total": { "type": "number" }, "emoji": { "type": "string" } } } } } } } } } } } },
+          "400": { "description": "Receipt history cursor is invalid." },
+          "401": { "description": "Authenticated business context is required." },
+          "404": { "description": "Business not found." }
+        }
+      },
+      "post": {
+        "tags": ["Sales"],
+        "summary": "Process Sales Order Records",
+        "description": "Locks an atomic order invoice ledger transaction string, records item histories, and automatically decreases shelf metrics.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID. For another deployment, use the authenticated user id from login." },
+                  "cashSessionId": { "type": "string", "format": "uuid", "description": "Open cash shift currently assigned to the POS device. When supplied, the sale is linked directly to that shift." },
+                  "invoiceNo": { "type": "string", "example": "INV-1001" },
+                  "subtotal": { "type": "number", "description": "Pre-discount item subtotal. Defaults to the sum of item line prices." },
+                  "discountAmount": { "type": "number", "minimum": 0, "description": "Sale-level discount amount." },
+                  "totalAmount": { "type": "number", "example": 100.0 },
+                  "paymentMode": { "type": "string", "example": "CASH" },
+                  "mpesaRef": { "type": "string", "example": "QX728HJ92K" },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "example": {
+                        "productId": "c8d8215e-3868-4378-9a72-b6fa28f80c3a",
+                        "quantity": 1,
+                        "unitPrice": 100,
+                        "total": 100
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Sale created and stock adjustments complete." }
+        }
+      }
+    },
+    "/cash/session/device": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Get the registered POS device's current cash shift",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "deviceUuid", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Returns the device's persisted currentShiftId, or null if no shift is assigned." },
+          "403": { "description": "POS permission is required." },
+          "409": { "description": "The device is inactive or registered to another business." }
+        }
+      },
+      "put": {
+        "tags": ["Business"],
+        "summary": "Assign or clear the registered POS device's current cash shift",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "deviceUuid", "cashSessionId"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "deviceUuid": { "type": "string", "format": "uuid" },
+                  "cashSessionId": { "type": "string", "format": "uuid", "nullable": true, "description": "Set to null to clear the current shift." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Device current shift assignment was saved." },
+          "400": { "description": "The selected shift is invalid, closed, or inactive." },
+          "403": { "description": "POS permission is required." },
+          "409": { "description": "The device is inactive or registered to another business." }
+        }
+      }
+    },
+    "/cash/session": {
+      "get": {
+        "tags": ["Business"], "summary": "List cash sessions and shift performance",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
+        "responses": { "200": { "description": "Sessions ordered from earliest start to latest, including cashier, shift type, sales count, and revenue. Open sessions have closedAt set to null." }, "401": { "description": "Authenticated business context is required." } }
+      },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Cashier Shift Drawer Reconciliation System",
+        "description": "Triggers daily shift ignition sequences or processes shift totals with dynamic computed cash variances.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId", "userId"],
+                "properties": {
+                  "action": { "type": "string", "example": "OPEN" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID. For another deployment, use the authenticated user id from login." },
+                  "sessionId": { "type": "string", "description": "For CLOSE, use the sessionId returned by the OPEN action." },
+                  "openingCash": { "type": "number", "example": 5000.0 },
+                  "closingCash": { "type": "number", "example": 14200.0 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Session closed out cleanly, returns computed float variances." },
+          "201": { "description": "New open shift session generated." }
+        }
+      }
+    },
+    "/purchase-orders": {
+      "get": { "tags": ["Business"], "summary": "List purchase orders for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Purchase orders with suppliers and items returned." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Supply Chain & Restock Procurement System",
+        "description": "Logs new wholesale distributor order sheets or automatically closes them out to increment store stock items.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId"],
+                "properties": {
+                  "action": { "type": "string", "example": "CREATE" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
+                  "orderId": { "type": "string", "description": "For RECEIVE, use the orderId returned by CREATE." },
+                  "supplierId": { "type": "string", "format": "uuid", "example": "5a2e3b96-12e0-4921-a851-56117c975d96", "description": "Seeded deployed supplier ID for MobiDuka Distribution Hub." },
+                  "orderNo": { "type": "string", "example": "PO-9002" },
+                  "dueDate": { "type": "string", "format": "date", "example": "2026-07-10" },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "example": {
+                        "productId": "c8d8215e-3868-4378-9a72-b6fa28f80c3a",
+                        "quantity": 12,
+                        "costPrice": 92
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Order batch received and inventory stock level metrics updated." },
+          "201": { "description": "Purchase order successfully created in REQUESTED state." }
+        }
+      }
+    },
+    "/customers/credit": {
+      "post": {
+        "tags": ["Customers"],
+        "summary": "Customer Credit Ledger & Debt Book Tracking",
+        "description": "Records credit charges generated during point-of-sale checkout or applies repayments to a customer's outstanding balance.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "businessId", "customerId", "amount"],
+                "properties": {
+                  "action": { "type": "string", "enum": ["CHARGE_CREDIT", "RECORD_PAYMENT"], "example": "RECORD_PAYMENT" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
+                  "customerId": { "type": "string", "description": "Create a customer first, then use the returned customerId; the seed does not create customers." },
+                  "amount": { "type": "number", "minimum": 0.01, "example": 1250.00 },
+                  "dueDate": { "type": "string", "format": "date-time" },
+                  "creditBookId": { "type": "string", "description": "Optional for CHARGE_CREDIT; the API generates this ID when omitted." },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4", "description": "Seeded deployed owner ID; use the authenticated user id for repayments." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Payment applied successfully and the outstanding balance returned." },
+          "201": { "description": "New pending store credit debt logged under the customer account." },
+          "400": { "description": "Invalid amount, unsupported action, or repayment exceeds the outstanding balance." },
+          "404": { "description": "Customer was not found in the requested business." }
+        }
+      }
+    },
+    "/payments/stk-push": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Initiate Safaricom M-Pesa STK Push",
+        "description": "Requests a customer PIN prompt through the server-selected Daraja environment and stores the pending checkout correlation record against the authenticated tenant integration. Use the tenant ID returned by login; the seed generates business UUIDs at runtime.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "phoneNumber", "amount"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e", "description": "Seeded deployed business ID. For another deployment, use businessId from the login response." },
+                  "phoneNumber": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$", "example": "254700000001", "description": "Seeded business phone in Kenyan format; replace with the customer's handset number for a real checkout." },
+                  "amount": { "type": "number", "minimum": 1, "example": 1250 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "STK request accepted by Safaricom." },
+          "400": { "description": "Invalid business, phone number, or amount." },
+          "404": { "description": "The supplied businessId does not belong to a known business tenant." },
+          "502": { "description": "Safaricom rejected the STK request." }
+        }
+      }
+    },
+    "/payments/mpesa-callback": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Receive Safaricom M-Pesa Callback",
+        "description": "Processes the asynchronous Daraja callback and records the transaction result and receipt number.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["Body"],
+                "properties": {
+                  "Body": { "type": "object", "description": "Safaricom stkCallback envelope." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Callback acknowledged and transaction status recorded." }
+        }
+      }
+    },
+    "/payments/mpesa-integration": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "Get Tenant M-Pesa Setup Status",
+        "description": "Requires the payments permission. Returns configuration status and public account fields only; credential values are never returned.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Public M-Pesa integration status returned." },
+          "403": { "description": "Payment configuration permission is required." }
+        }
+      },
+      "put": {
+        "tags": ["Payments"],
+        "summary": "Configure Tenant M-Pesa Credentials",
+        "description": "Requires the payments permission. The server encrypts credential fields before storage and returns only public setup metadata.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "accountType", "shortcode", "accountReference"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid" },
+                  "accountType": { "type": "string", "enum": ["TILL", "PAYBILL"] },
+                  "shortcode": { "type": "string", "pattern": "^[0-9]{5,8}$" },
+                  "accountReference": { "type": "string", "maxLength": 12 },
+                  "consumerKey": { "type": "string", "writeOnly": true },
+                  "consumerSecret": { "type": "string", "writeOnly": true },
+                  "passkey": { "type": "string", "writeOnly": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Encrypted M-Pesa integration saved." },
+          "400": { "description": "Invalid account details or missing first-time credentials." },
+          "403": { "description": "Payment configuration permission is required." }
+        }
+      }
+    },
+    "/payments/stk-query": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Query M-Pesa STK Transaction Status",
+        "description": "Checks the webhook cache first, then queries Safaricom for a pending STK transaction until it completes or fails.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "checkoutRequestId"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "description": "Authenticated tenant ID returned by login." },
+                  "checkoutRequestId": { "type": "string", "description": "Use checkoutRequestId returned by /payments/stk-push or persisted by the M-Pesa callback." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns SUCCESS, PENDING, CANCELLED, or FAILED." },
+          "404": { "description": "Transaction correlation record was not found." }
+        }
+      }
+    },
+    "/customers": {
+      "get": {
+        "tags": ["Customers"],
+        "summary": "Query or Search Registered Customer Profiles",
+        "description": "Returns customers for a tenant, optionally filtered by name or phone number. The query filter is case-insensitive.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Seeded deployed business ID." },
+          { "name": "query", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Case-insensitive name or phone search." }
+        ],
+        "responses": {
+          "200": { "description": "Customer profiles returned successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "tags": ["Customers"],
+        "summary": "Register or Update Customer Profile",
+        "description": "Creates or updates a customer and ensures an associated CreditAccount exists.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "name"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                  "name": { "type": "string", "example": "Wanjiku Njoroge" },
+                  "phone": { "type": "string", "example": "0722000111" },
+                  "initialCreditLimit": { "type": "number", "minimum": 0, "example": 5000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Customer profile registered successfully." },
+          "400": { "description": "Invalid profile data or duplicate phone number." }
+        }
+      }
+    },
+    "/dashboard/summary": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Aggregate dashboard summary for a tenant",
+        "description": "Returns the dashboard metrics used by the web app and Flutter dashboards, including revenue, cash, low stock, recent sales, and scan activity for the seeded tenant.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Seeded deployed business ID from the demo tenant." },
+          { "name": "days", "in": "query", "required": false, "schema": { "type": "integer", "default": 30, "example": 30 }, "description": "Backward look window in days. Defaults to 30." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dashboard summary assembled from real sales, expenses, cash sessions, inventory, and scan events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "businessId": { "type": "string", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                        "name": { "type": "string", "example": "MobiDuka Wholesale Eldoret" },
+                        "branch": { "type": "string", "nullable": true },
+                        "country": { "type": "string", "example": "Kenya" },
+                        "currency": { "type": "string", "example": "KES" },
+                        "timezone": { "type": "string", "example": "Africa/Nairobi" },
+                        "date": { "type": "string", "example": "2026-09-18" }
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "todayRevenue": { "type": "number", "example": 84250 },
+                        "yesterdayRevenue": { "type": "number" },
+                        "todayProfit": { "type": "number", "example": 61210 },
+                        "todayExpenseTotal": { "type": "number" },
+                        "todayTransactionCount": { "type": "integer", "example": 18 },
+                        "periodRevenue": { "type": "number", "example": 524850 },
+                        "periodProfit": { "type": "number", "example": 318172 },
+                        "profitMarginPercentage": { "type": "number", "example": 60.6 },
+                        "periodProfitMarginPercentage": { "type": "number" },
+                        "cashInTill": { "type": "number", "example": 28200 },
+                        "creditOut": { "type": "number", "example": 15250 },
+                        "creditCustomerCount": { "type": "integer", "example": 6 },
+                        "inventoryValue": { "type": "number", "example": 64250 },
+                        "activeSkuCount": { "type": "integer", "example": 15 },
+                        "lowStockCount": { "type": "integer", "example": 3 }
+                      }
+                    },
+                    "lastCashCountAt": { "type": "string", "format": "date-time", "nullable": true },
+                    "shiftTypes": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" } } } },
+                    "paymentBreakdown": {
+                      "type": "object",
+                      "additionalProperties": { "type": "object", "properties": { "amount": { "type": "number" }, "transactions": { "type": "integer" } } }
+                    },
+                    "topProducts": { "type": "array", "items": { "type": "object" } },
+                    "recentTransactions": { "type": "array", "items": { "type": "object" } },
+                    "lowStockItems": { "type": "array", "items": { "type": "object" } },
+                    "cashSessions": { "type": "array", "items": { "type": "object" } },
+                    "scanActivity": { "type": "object", "properties": { "counts": { "type": "object" }, "recent": { "type": "array" } } }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Authenticated business context is required." },
+          "404": { "description": "Business not found." },
+          "500": { "description": "Failed to assemble dashboard data." }
+        }
+      }
+    },
+    "/scans": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "Look up a product by barcode and record scan activity",
+        "description": "Returns product details for a scanned barcode and logs the event for the authenticated tenant. The seeded demo catalog includes printer-friendly barcodes such as 6191000000158 for Safaricom Airtime 100 KES.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Authenticated business tenant ID." },
+          { "name": "barcode", "in": "query", "required": true, "schema": { "type": "string", "example": "6191000000158" }, "description": "Barcode to lookup in the store catalog." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lookup completed and scan logged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "found": { "type": "boolean", "example": true },
+                    "status": { "type": "string", "example": "FOUND" },
+                    "product": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "c8d8215e-3868-4378-9a72-b6fa28f80c3a" },
+                        "name": { "type": "string", "example": "Safaricom Airtime 100 KES" },
+                        "barcode": { "type": "string", "example": "6191000000158" },
+                        "category": { "type": "string", "example": "Fast Moving Consumer Goods" },
+                        "price": { "type": "number", "example": 100 },
+                        "stock": { "type": "integer", "example": 250 },
+                        "minimumStock": { "type": "integer", "example": 20 },
+                        "stockStatus": { "type": "string", "example": "GOOD" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Authenticated business and barcode are required." },
+          "500": { "description": "Failed to look up scanned product." }
+        }
+      },
+      "post": {
+        "tags": ["Inventory"],
+        "summary": "Process scan actions for lookup, add-to-cart, and restock",
+        "description": "Allows clients to look up a product, add it to a cart, or add inventory through a barcode-driven restock action. The demo tenant includes owner and cashier accounts like owner@mobiduka.com / OwnerPass123 and cashier1 / 2540.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "barcode"],
+                "properties": {
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                  "barcode": { "type": "string", "example": "6191000000158" },
+                  "statusOverride": { "type": "string", "enum": ["AUTO", "MANUAL"], "example": "AUTO" },
+                  "action": { "type": "string", "enum": ["LOOKUP", "ADD_TO_CART", "RESTOCK"], "example": "RESTOCK" },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4" },
+                  "quantity": { "type": "integer", "minimum": 1, "example": 12 },
+                  "reason": { "type": "string", "example": "Scan restock from POS" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restock completed successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "action": { "type": "string", "example": "RESTOCK" },
+                    "scanId": { "type": "string", "example": "cmg9a0g7q0000l6txk4j7f4r8" },
+                    "product": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "c8d8215e-3868-4378-9a72-b6fa28f80c3a" },
+                        "name": { "type": "string", "example": "Safaricom Airtime 100 KES" },
+                        "barcode": { "type": "string", "example": "6191000000158" },
+                        "stock": { "type": "integer", "example": 262 },
+                        "reservedStock": { "type": "integer", "example": 0 },
+                        "minimumStock": { "type": "integer", "example": 20 },
+                        "stockStatus": { "type": "string", "example": "GOOD" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Lookup or add-to-cart action completed and the scan event was persisted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "action": { "type": "string", "example": "ADD_TO_CART" },
+                    "scanId": { "type": "string" },
+                    "status": { "type": "string", "example": "FOUND" },
+                    "product": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "barcode": { "type": "string" }, "price": { "type": "number" }, "stock": { "type": "integer" }, "stockStatus": { "type": "string" } } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Malformed payload or invalid action/status combination." },
+          "403": { "description": "User does not belong to the authenticated business." },
+          "404": { "description": "Unknown barcode for a restock request." },
+          "500": { "description": "Failed to persist scan event." }
+        }
+      }
+    },
+    "/reports/summary": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Tenant Analytical Sales and Profit Summary",
+        "description": "Returns tenant-scoped revenue, cost, expense, profit, inventory valuation, low-stock, open-shift, and daily trend metrics.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "description": "Seeded deployed business ID." },
+          { "name": "days", "in": "query", "required": false, "schema": { "type": "integer", "enum": [7, 30, 90], "default": 7 }, "description": "Trend window in days." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analytical summary and chronological daily trend frames returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "totalRevenue": { "type": "number" },
+                        "totalCostOfGoods": { "type": "number" },
+                        "totalExpenses": { "type": "number" },
+                        "netProfit": { "type": "number" },
+                        "profitMarginPercentage": { "type": "string" },
+                        "lowStockAlertsCount": { "type": "integer" },
+                        "inventoryValuation": { "type": "number" },
+                        "inventoryUnits": { "type": "integer" },
+                        "activeOpenShiftsCount": { "type": "integer" },
+                        "openingCashTotal": { "type": "number"                         }
+                      }
+                    },
+                    "trends": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "businessId is missing." },
+          "500": { "description": "Analytical aggregation failed." }
+        }
+      }
+    },
+    "/reports/export-csv": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Export the authenticated business sales ledger as CSV",
+        "description": "Requires the authenticated user's Export Data permission. Business scope is derived from the bearer token; client-supplied business IDs and roles are not accepted. Streams paginated sales rows with item and payment details. Optional UTC date filters are inclusive.",
+        "parameters": [
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string", "format": "date" }, "description": "Include transactions on or after this UTC date." },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string", "format": "date" }, "description": "Include transactions through this UTC date." }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV attachment containing the transaction ledger.",
+            "headers": {
+              "Content-Disposition": { "schema": { "type": "string" }, "description": "Attachment filename." },
+              "Cache-Control": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "text/csv": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "400": { "description": "Invalid date filter or reversed date range." },
+          "401": { "description": "Authentication required." },
+          "403": { "description": "Business Export Data permission required." },
+          "404": { "description": "No transactions were found for this business and date range." },
+          "500": { "description": "Unable to generate the sales ledger." }
+        }
+      }
+    },
+    "/employees": {
+      "get": {
+        "tags": ["Employees"],
+        "summary": "Retrieve Multi-Tenant Staff Directory Roster",
+        "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }],
+        "responses": {
+          "200": { "description": "Roster array generated successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "tags": ["Employees"],
+        "summary": "Provision or Update a Staff Employee Account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "name", "role"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                  "name": { "type": "string", "example": "Kamau Mwangi" },
+                  "email": { "type": "string", "format": "email" },
+                  "phone": { "type": "string" },
+                  "role": { "type": "string", "enum": ["OWNER", "MANAGER", "CASHIER"] },
+                  "pin": { "type": "string", "example": "2541" },
+                  "isActive": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Staff employee profile saved." },
+          "400": { "description": "Invalid role, tenant, or employee configuration." }
+        }
+      }
+    },
+    "/contact": {
+      "post": {
+        "tags": ["Public"],
+        "summary": "Send a website contact request",
+        "description": "Saves the inquiry in the platform-admin Support inbox and emails it to the configured MobiDuka contact inbox through Resend. Configure RESEND_API_KEY and a verified sender in CONTACT_EMAIL_FROM or BILLING_EMAIL_FROM. The recipient defaults to owner@mobiduka.com and replies are directed to the submitted email address. A saved request is accepted even if the notification email cannot be delivered.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["fullName", "businessName", "email", "phone", "message"],
+                "properties": {
+                  "fullName": { "type": "string", "maxLength": 120 },
+                  "businessName": { "type": "string", "maxLength": 160 },
+                  "email": { "type": "string", "format": "email", "maxLength": 254 },
+                  "phone": { "type": "string", "maxLength": 40 },
+                  "businessType": { "type": "string", "maxLength": 80 },
+                  "message": { "type": "string", "maxLength": 3000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Contact request saved. The response includes whether the notification email was delivered." },
+          "400": { "description": "Request body or contact details are invalid." },
+          "502": { "description": "Email provider could not deliver the contact request." },
+          "500": { "description": "Contact request could not be saved." }
+        }
+      }
+    },
+    "/admin/contact-messages": {
+      "get": {
+        "tags": ["Platform Administration", "Support"],
+        "summary": "List website contact messages",
+        "description": "Requires a platform administrator bearer session. Returns the latest 100 messages and counts by status.",
+        "responses": {
+          "200": { "description": "Website enquiries including contact details, message text, and email delivery status." },
+          "403": { "description": "Platform administrator access is required." },
+          "500": { "description": "Contact inbox could not be loaded." }
+        }
+      },
+      "patch": {
+        "tags": ["Platform Administration", "Support"],
+        "summary": "Update a website contact message status",
+        "description": "Requires a platform administrator bearer session. Messages may be marked READ or RESOLVED.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["id", "status"],
+                "properties": {
+                  "id": { "type": "string", "format": "uuid" },
+                  "status": { "type": "string", "enum": ["READ", "RESOLVED"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Message status updated." },
+          "400": { "description": "Message ID or status is invalid." },
+          "403": { "description": "Platform administrator access is required." },
+          "404": { "description": "Contact message was not found." }
+        }
+      }
+    },
+    "/plans": {
+      "get": {
+        "tags": ["Subscriptions"],
+        "summary": "List active public subscription plans",
+        "description": "Returns marketing-safe plan information. Internal monthly prices and administrative features are not exposed. Online checkout is marked available only when plan pricing and platform M-PESA configuration are enabled.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Active plans ordered by configured display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plans"],
+                  "properties": {
+                    "plans": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "publicMonthlyPriceKsh", "annualPriceKsh", "subtitle", "audience", "color", "marketingFeatures", "featured", "cta", "onlineCheckoutEnabled"],
+                        "properties": {
+                          "name": { "type": "string", "enum": ["Basic", "Growth", "Enterprise"] },
+                          "publicMonthlyPriceKsh": { "type": "integer", "nullable": true, "description": "Approved public price in KSh per month." },
+                          "annualPriceKsh": { "type": "integer", "nullable": true, "description": "Approved public price in KSh per year." },
+                          "subtitle": { "type": "string" },
+                          "audience": { "type": "string" },
+                          "color": { "type": "string" },
+                          "marketingFeatures": { "type": "array", "items": { "type": "string" } },
+                          "featured": { "type": "boolean" },
+                          "cta": { "type": "string" },
+                          "onlineCheckoutEnabled": { "type": "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "description": "The subscription catalog could not be loaded." }
+        }
+      }
+    },
+    "/auth/onboard": {
+      "post": {
+        "tags": ["Authentication", "Subscriptions"],
+        "summary": "Register a business and its owner",
+        "description": "Creates a Basic trial or a pending paid-plan subscription. Paid signup requires a configured public plan price, platform M-PESA checkout, and a Kenyan mobile number. Payment must be verified before paid access is activated.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessName", "ownerName", "ownerEmail", "password"],
+                "properties": {
+                  "businessName": { "type": "string" },
+                  "ownerName": { "type": "string" },
+                  "ownerEmail": { "type": "string", "format": "email" },
+                  "password": { "type": "string", "format": "password", "minLength": 12 },
+                  "initialPin": { "type": "string", "pattern": "^[0-9]{4}$" },
+                  "phone": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$" },
+                  "businessType": { "type": "string" },
+                  "planName": { "type": "string", "enum": ["Basic", "Growth", "Enterprise"], "default": "Basic" },
+                  "billingPeriod": { "type": "string", "enum": ["monthly", "annual"], "default": "monthly" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Business and owner created; paid plans remain pending verification." },
+          "400": { "description": "Invalid signup data or unavailable plan." },
+          "409": { "description": "The owner email is already registered." },
+          "503": { "description": "Business registration or paid checkout is not enabled." }
+        }
+      }
+    },
+    "/subscription/checkout": {
+      "get": {
+        "tags": ["Subscriptions", "Payments"],
+        "summary": "Check a subscription payment status",
+        "description": "Owner-only. Reconciles a pending payment with Daraja before returning its latest status.",
+        "parameters": [
+          { "name": "paymentId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Latest payment status and receipt information." },
+          "403": { "description": "Business owner access is required." },
+          "404": { "description": "Payment attempt was not found." },
+          "502": { "description": "Payment status could not be verified with Safaricom." }
+        }
+      },
+      "post": {
+        "tags": ["Subscriptions", "Payments"],
+        "summary": "Start a platform subscription M-PESA checkout",
+        "description": "Owner-only. The server selects the approved price from the active plan catalog; client-supplied amounts are not accepted. This platform payment uses MobiDuka's Daraja account, not the business's POS credentials. The owner must approve the STK prompt.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["planName", "phoneNumber"],
+                "properties": {
+                  "planName": { "type": "string", "enum": ["Growth", "Enterprise"] },
+                  "billingPeriod": { "type": "string", "enum": ["monthly", "annual"], "default": "monthly" },
+                  "phoneNumber": { "type": "string", "pattern": "^(\\+?254|0)(1|7)[0-9]{8}$" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "M-PESA checkout started; payment is pending customer approval." },
+          "200": { "description": "An existing pending or review-required payment attempt was returned." },
+          "400": { "description": "Phone, plan, billing period, or approved price is invalid." },
+          "403": { "description": "Business owner access is required." },
+          "503": { "description": "Platform M-PESA checkout is not configured." }
+        }
+      }
+    },
+    "/payments/platform-mpesa-callback": {
+      "post": {
+        "tags": ["Subscriptions", "Payments"],
+        "summary": "Receive platform Daraja STK callback",
+        "description": "Public Safaricom callback endpoint for platform subscription payments. Callback results are reconciled before paid subscriptions are activated.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["Body"],
+                "properties": {
+                  "Body": {
+                    "type": "object",
+                    "required": ["stkCallback"],
+                    "properties": {
+                      "stkCallback": {
+                        "type": "object",
+                        "required": ["CheckoutRequestID", "ResultCode"],
+                        "properties": {
+                          "CheckoutRequestID": { "type": "string" },
+                          "ResultCode": { "type": "integer" },
+                          "ResultDesc": { "type": "string" },
+                          "CallbackMetadata": { "type": "object", "description": "Daraja payment amount and M-PESA receipt metadata." }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Callback accepted or acknowledged as already processed." },
+          "503": { "description": "Payment record is not available for reconciliation yet." }
+        }
+      }
+    },
+    "/admin/plans": {
+      "get": {
+        "tags": ["Platform Administration", "Subscriptions"],
+        "summary": "List subscription plans for platform administration",
+        "description": "Requires a platform administrator bearer token. Includes private plan prices and administrative configuration; do not expose this response publicly.",
+        "responses": {
+          "200": { "description": "Plan catalog including private configuration." },
+          "403": { "description": "Platform administrator access is required." }
+        }
+      },
+      "patch": {
+        "tags": ["Platform Administration", "Subscriptions"],
+        "summary": "Update a subscription plan",
+        "description": "Requires a platform administrator bearer token. Set approved public prices explicitly before enabling online checkout.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "monthlyPriceKsh", "publicMonthlyPriceKsh", "annualPriceKsh", "subtitle", "audience", "color", "adminFeatures", "marketingFeatures", "featured", "onlineCheckoutEnabled", "isActive", "cta"],
+                "properties": {
+                  "name": { "type": "string", "enum": ["Basic", "Growth", "Enterprise"] },
+                  "monthlyPriceKsh": { "type": "integer", "minimum": 1, "description": "Internal monthly price in KSh." },
+                  "publicMonthlyPriceKsh": { "type": "integer", "minimum": 1, "nullable": true },
+                  "annualPriceKsh": { "type": "integer", "minimum": 1, "nullable": true },
+                  "subtitle": { "type": "string", "maxLength": 100 },
+                  "audience": { "type": "string", "maxLength": 120 },
+                  "color": { "type": "string", "enum": ["blue", "green", "gold"] },
+                  "adminFeatures": { "type": "array", "items": { "type": "string" } },
+                  "marketingFeatures": { "type": "array", "items": { "type": "string" } },
+                  "featured": { "type": "boolean" },
+                  "onlineCheckoutEnabled": { "type": "boolean" },
+                  "isActive": { "type": "boolean" },
+                  "cta": { "type": "string", "maxLength": 60 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Plan updated." },
+          "400": { "description": "Plan data is invalid or checkout lacks a public price." },
+          "403": { "description": "Platform administrator access is required." },
+          "404": { "description": "Plan not found." }
+        }
+      }
+    },
+    "/admin/platform-payments": {
+      "get": {
+        "tags": ["Platform Administration", "Subscriptions", "Payments"],
+        "summary": "List recent platform subscription payments",
+        "description": "Requires a platform administrator bearer token. Returns at most the latest 100 attempts with phone numbers masked.",
+        "responses": {
+          "200": { "description": "Recent payment attempts with masked phone numbers." },
+          "403": { "description": "Platform administrator access is required." }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": ["Authentication", "Employees"],
+        "summary": "Register a user inside the authenticated business",
+        "description": "Creates an active business user. The business is derived from the bearer token.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "role"], "properties": { "name": { "type": "string" }, "email": { "type": "string", "format": "email" }, "username": { "type": "string" }, "phone": { "type": "string" }, "role": { "type": "string", "enum": ["ADMIN", "OWNER", "SUPERVISOR", "CASHIER", "ACCOUNTANT"] }, "pin": { "type": "string", "pattern": "^[0-9]{4}$" }, "password": { "type": "string", "format": "password" } } } } } },
+        "responses": { "201": { "description": "User registered successfully." }, "400": { "description": "Invalid registration data." }, "401": { "description": "Authenticated business context is required." }, "409": { "description": "Email or username already exists." } }
+      }
+    },
+    "/notifications": {
+      "get": { "tags": ["Business"], "summary": "List active notifications", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active notifications ordered newest first, with unread count and seeded examples." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Business"], "summary": "Create a notification", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "title", "message"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string", "enum": ["critical", "warning", "success", "info"] }, "isRead": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Notification created." } } },
+      "patch": { "tags": ["Business"], "summary": "Mark or update notifications", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "markAllRead": { "type": "boolean" }, "title": { "type": "string" }, "message": { "type": "string" }, "type": { "type": "string" }, "isRead": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Notification read state or fields updated." }, "404": { "description": "Notification not found." } } },
+      "delete": { "tags": ["Business"], "summary": "Soft-delete a read notification", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" } } } } } }, "responses": { "200": { "description": "Read notification soft-deleted." }, "409": { "description": "Only an existing read notification can be deleted." } } }
+    },
+    "/shift-types": {
+      "get": { "tags": ["Business"], "summary": "List active business shift types", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Active shift types ordered by scheduled start time. Seeded schedules include Morning 06:00-14:00, Afternoon 14:00-22:00, and Night 22:00-06:00." } } },
+      "post": { "tags": ["Business"], "summary": "Create or update a business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "code", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "scheduledStart": { "type": "string" }, "scheduledEnd": { "type": "string" }, "icon": { "type": "string", "nullable": true }, "color": { "type": "string", "nullable": true }, "active": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "201": { "description": "Shift type created." } } },
+      "patch": { "tags": ["Business"], "summary": "Edit an active business shift type", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id", "name", "scheduledStart", "scheduledEnd"], "properties": { "businessId": { "type": "string", "format": "uuid" }, "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "icon": { "type": "string", "description": "Shift icon selected from the shift icon picker." }, "scheduledStart": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, "scheduledEnd": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } } } } }, "responses": { "200": { "description": "Shift type updated." }, "400": { "description": "Invalid shift type data." }, "404": { "description": "Shift type not found." } } },
+      "delete": { "tags": ["Business"], "summary": "Remove an active shift type from available shifts", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Shift type soft-deleted; historical shift sessions are preserved." }, "404": { "description": "Shift type not found." } } }
+    },
+    "/suppliers": {
+      "get": { "tags": ["Business"], "summary": "List suppliers for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Suppliers returned with product and purchase-order counts." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Business"], "summary": "Create a supplier", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "category": { "type": "string" }, "contactPerson": { "type": "string" }, "phone": { "type": "string" }, "email": { "type": "string" }, "location": { "type": "string" }, "notes": { "type": "string" } } } } } }, "responses": { "201": { "description": "Supplier created." }, "400": { "description": "Invalid supplier data." }, "409": { "description": "Supplier already exists." } } },
+      "patch": { "tags": ["Business"], "summary": "Update a supplier", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["businessId", "id"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "category": { "type": "string" }, "contactPerson": { "type": "string" }, "phone": { "type": "string" }, "email": { "type": "string" }, "location": { "type": "string" }, "notes": { "type": "string" } } } } } }, "responses": { "200": { "description": "Supplier updated." }, "404": { "description": "Supplier not found." }, "409": { "description": "Supplier name already exists." } } },
+      "delete": { "tags": ["Business"], "summary": "Delete an unused supplier", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Supplier deleted." }, "404": { "description": "Supplier not found." }, "409": { "description": "Supplier is referenced by products or purchase orders." } } }
+    },
+    "/categories": {
+      "get": { "tags": ["Inventory"], "summary": "List product categories for a business", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }], "responses": { "200": { "description": "Categories returned with emojis and product counts." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Inventory"], "summary": "Create a product category", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "emoji": { "type": "string" }, "parentCategoryId": { "type": "string", "format": "uuid" } } } } } }, "responses": { "201": { "description": "Category created." }, "400": { "description": "Invalid category data." }, "401": { "description": "Authenticated business context is required." }, "409": { "description": "Category already exists." } } },
+      "patch": { "tags": ["Inventory"], "summary": "Update a product category", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "emoji": { "type": "string" }, "parentCategoryId": { "type": "string", "format": "uuid" } } } } } }, "responses": { "200": { "description": "Category updated." }, "400": { "description": "Invalid category data." }, "404": { "description": "Category not found." }, "409": { "description": "Category name already exists." } } },
+      "delete": { "tags": ["Inventory"], "summary": "Soft-delete or permanently delete a category", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "hard", "in": "query", "required": false, "schema": { "type": "boolean", "default": false, "description": "Set true to permanently delete a previously soft-deleted category. Active products and child categories block deletion; archived products are retained and detached from the category." } }], "responses": { "200": { "description": "Category soft-deleted, or permanently deleted when hard=true; archived products are retained without a category." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Category not found or is not in the deleted list for a permanent delete." }, "409": { "description": "Category still has active products or child categories." } } }
+    },
+    "/products": {
+      "get": { "tags": ["Inventory"], "summary": "List products and inventory", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "includeDeleted", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "description": "When true, return only soft-deleted products." }], "responses": { "200": { "description": "Product catalog returned with recent 30-day units sold." }, "401": { "description": "Authenticated business context is required." } } },
+      "post": { "tags": ["Inventory"], "summary": "Create a product", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string", "description": "Product type/name. Combined with brand and packSize for the stored display name." }, "brand": { "type": "string", "nullable": true }, "productType": { "type": "string", "description": "Structured product type; defaults to name." }, "packSize": { "type": "string", "nullable": true }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Product created." }, "401": { "description": "Authenticated business context is required." }, "400": { "description": "Product creation failed." } } },
+      "patch": { "tags": ["Inventory"], "summary": "Update a product and optionally set stock", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "businessId"], "properties": { "id": { "type": "string", "format": "uuid" }, "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" }, "name": { "type": "string" }, "brand": { "type": "string", "nullable": true }, "productType": { "type": "string" }, "packSize": { "type": "string", "nullable": true }, "sellingPrice": { "type": "number" }, "costPrice": { "type": "number" }, "minimumStock": { "type": "integer", "minimum": 0 }, "stock": { "type": "integer", "minimum": 0 }, "sku": { "type": "string" }, "barcode": { "type": "string" }, "categoryId": { "type": "string", "format": "uuid" }, "emoji": { "type": "string" }, "trackStock": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Product updated." }, "400": { "description": "Invalid product data." }, "404": { "description": "Product not found." } } },
+      "delete": { "tags": ["Inventory"], "summary": "Soft-delete or permanently delete an unreferenced product", "parameters": [{ "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }, { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "hard", "in": "query", "required": false, "schema": { "type": "boolean", "default": false, "description": "Set true to permanently delete a previously soft-deleted product. Products linked to sales, purchases, stock movements, or scan history are protected." } }], "responses": { "200": { "description": "Product soft-deleted, or permanently deleted when hard=true." }, "400": { "description": "Required identifiers are missing." }, "404": { "description": "Product not found or is not in the deleted list for a permanent delete." }, "409": { "description": "Product has historical records and cannot be permanently deleted." } } }
+    },
+    "/expenses": {
+      "get": {
+        "tags": ["Business"],
+        "summary": "Fetch Store Expense Ledger History",
+        "description": "Returns tenant-scoped operational outflows ordered from newest to oldest.",
+        "parameters": [
+          { "name": "businessId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" } }
+        ],
+        "responses": {
+          "200": { "description": "Expense records fetched successfully." },
+          "400": { "description": "businessId is missing." }
+        }
+      },
+      "post": {
+        "tags": ["Business"],
+        "summary": "Log a New Cash or M-Pesa Store Outflow",
+        "description": "Creates an expense record and an associated audit entry for the tenant user.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["businessId", "userId", "category", "amount", "description"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "businessId": { "type": "string", "format": "uuid", "example": "0e722844-15f4-4807-8a69-9614e448f21e" },
+                  "userId": { "type": "string", "format": "uuid", "example": "33d0457d-ecb4-4e60-a05a-223bae2541a4" },
+                  "category": { "type": "string", "example": "RENT" },
+                  "amount": { "type": "number", "minimum": 0.01, "example": 15000 },
+                  "description": { "type": "string", "example": "September shop rent payment" },
+                  "paidTo": { "type": "string", "example": "Landlord" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Expense logged successfully." },
+          "400": { "description": "Invalid expense data." },
+          "404": { "description": "User was not found in the requested business." }
+        }
+      }
+    }
+  }
+}

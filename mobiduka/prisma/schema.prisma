@@ -1,0 +1,760 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SyncReceiptStatus {
+  RECEIVED
+  APPLIED
+  REJECTED
+}
+
+model SyncReceipt {
+  id             String            @id @default(uuid())
+  businessId     String
+  entityName     String
+  externalId     String
+  payloadHash    String
+  status         SyncReceiptStatus @default(RECEIVED)
+  sourceDeviceId String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id])
+
+  @@unique([businessId, entityName, externalId])
+  @@index([businessId, payloadHash])
+}
+
+model CloudBackup {
+  id                     String    @id @default(uuid())
+  businessId             String
+  backupType             String    @default("DEVICE")
+  checksum               String
+  chunkCount             Int
+  compressedBytes        Int
+  originalBytes          Int
+  recordCount            Int?
+  collectionCount        Int?
+  queuedRecordCount      Int?
+  triggerType            String    @default("MANUAL")
+  retryCount             Int       @default(0)
+  failureReason          String?
+  progressPercent        Int       @default(0)
+  progressMessage        String?
+  restoreProgressPercent Int?
+  restoreProgressMessage String?
+  restoreStartedAt       DateTime?
+  status                 String    @default("PENDING")
+  createdAt              DateTime  @default(now())
+  completedAt            DateTime?
+
+  business Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  chunks   CloudBackupChunk[]
+
+  @@index([businessId, backupType, status, createdAt])
+}
+
+model CloudBackupChunk {
+  id                String   @id @default(uuid())
+  backupId          String
+  chunkIndex        Int
+  plaintextChecksum String
+  nonce             String
+  authTag           String
+  ciphertext        String   @db.Text
+  createdAt         DateTime @default(now())
+
+  backup CloudBackup @relation(fields: [backupId], references: [id], onDelete: Cascade)
+
+  @@unique([backupId, chunkIndex])
+}
+
+model Business {
+  id               String   @id @default(uuid())
+  name             String
+  branch           String?
+  businessType     String?
+  ownerName        String?
+  phone            String?
+  email            String?
+  kraPin           String?
+  country          String?
+  currency         String?  @default("KES")
+  timezone         String?  @default("Africa/Nairobi")
+  subscriptionPlan String?  @default("starter")
+  status           String   @default("ACTIVE")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  users                     User[]
+  licenses                  License[]
+  devices                   Device[]
+  categories                Category[]
+  suppliers                 Supplier[]
+  products                  Product[]
+  inventory                 Inventory[]
+  customers                 Customer[]
+  sales                     Sale[]
+  expenses                  Expense[]
+  cashSessions              CashSession[]
+  purchaseOrders            PurchaseOrder[]
+  creditEntries             CreditLedgerEntry[]
+  mpesaIntegrations         MpesaIntegration[]
+  mpesaTransactions         MpesaTransaction[]
+  mpesaSmsReceipts          MpesaSmsReceipt[]
+  auditLogs                 AuditLog[]
+  syncQueues                SyncQueue[]
+  syncReceipts              SyncReceipt[]
+  notifications             Notification[]
+  notificationSubscriptions NotificationSubscription[]
+  scanEvents                ScanEvent[]
+  cloudBackups              CloudBackup[]
+  shiftTypes                ShiftType[]
+  roles                     Role[]
+  settings                  BusinessSettings?
+  platformSubscription      PlatformSubscription?
+  platformPayments          PlatformPayment[]
+}
+
+model PlatformAdmin {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  passwordHash        String
+  status              String    @default("ACTIVE")
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model PlatformSubscription {
+  id                  String    @id @default(uuid())
+  businessId          String    @unique
+  planType            String    @default("BASIC")
+  status              String    @default("TRIAL")
+  trialEndsAt         DateTime?
+  currentPeriodEndsAt DateTime?
+  graceEndsAt         DateTime?
+  licenseCost         Int       @default(2500)
+  autoRenewActive     Boolean   @default(true)
+  isTrialClaimed      Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([status, trialEndsAt])
+  @@index([status, currentPeriodEndsAt])
+}
+
+model SubscriptionPlan {
+  id                    String   @id
+  name                  String   @unique
+  monthlyPriceKsh       Int
+  publicMonthlyPriceKsh Int?
+  annualPriceKsh        Int?
+  priceSuffix           String?
+  subtitle              String
+  audience              String
+  tenants               Int      @default(0)
+  color                 String
+  adminFeatures         Json
+  marketingFeatures     Json
+  featured              Boolean  @default(false)
+  cta                   String
+  upgradeRulesEnabled   Boolean  @default(true)
+  onlineCheckoutEnabled Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  sortOrder             Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+model PlatformPayment {
+  id                String   @id @default(uuid())
+  businessId        String
+  planName          String
+  amountKsh         Int
+  billingDays       Int      @default(30)
+  phoneNumber       String
+  merchantRequestId String?
+  checkoutRequestId String?  @unique
+  status            String   @default("PENDING")
+  resultCode        Int?
+  resultDescription String?
+  reportedAmountKsh Int?
+  receiptNumber     String?  @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@index([status, createdAt])
+}
+
+model WebsiteContactMessage {
+  id           String    @id @default(uuid())
+  fullName     String
+  businessName String
+  email        String
+  phone        String
+  businessType String?
+  message      String    @db.Text
+  status       String    @default("NEW")
+  emailSentAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model BusinessSettings {
+  id                  String   @id @default(uuid())
+  businessId          String   @unique
+  receiptPrint        Boolean  @default(true)
+  lowStockAlerts      Boolean  @default(true)
+  salesNotifications  Boolean  @default(true)
+  dailyReport         Boolean  @default(false)
+  autoBackup          Boolean  @default(true)
+  autoBackupFrequency String   @default("DAILY")
+  autoBackupWifiOnly  Boolean  @default(true)
+  mpesaEnabled        Boolean  @default(true)
+  themeMode           String   @default("auto")
+  paymentConfig       Json?
+  receiptConfig       Json?
+  taxConfig           Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+model License {
+  id          String   @id @default(uuid())
+  businessId  String
+  licenseKey  String
+  licenseType String
+  deviceLimit Int
+  expiryDate  DateTime
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  businessId  String
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  icon        String   @default("🔧")
+  color       String   @default("#6B7A99")
+  createdAt   DateTime @default(now())
+
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  users       User[]
+  permissions RolePermission[]
+
+  @@unique([businessId, name])
+  @@index([businessId])
+}
+
+model RolePermission {
+  roleId        String
+  permissionKey String
+  createdAt     DateTime @default(now())
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+  @@index([permissionKey])
+}
+
+model User {
+  id           String    @id @default(uuid())
+  businessId   String
+  roleId       String?
+  fullName     String
+  email        String?   @unique
+  phone        String?
+  username     String?   @unique
+  passwordHash String?
+  pinHash      String?
+  status       String    @default("ACTIVE")
+  shift        String    @default("Morning")
+  salary       Float     @default(0)
+  startDate    DateTime  @default(now())
+  lastLogin    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business                  Business                   @relation(fields: [businessId], references: [id])
+  role                      Role?                      @relation(fields: [roleId], references: [id])
+  devices                   Device[]
+  stockMoves                StockMovement[]
+  sales                     Sale[]                     @relation("CashierSales")
+  cashSessions              CashSession[]
+  auditLogs                 AuditLog[]
+  notifications             Notification[]
+  notificationSubscriptions NotificationSubscription[]
+}
+
+model ShiftType {
+  id             String   @id @default(uuid())
+  businessId     String
+  code           String
+  name           String
+  scheduledStart String
+  scheduledEnd   String
+  icon           String?
+  color          String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sessions CashSession[]
+
+  @@unique([businessId, code])
+}
+
+model Device {
+  id          String    @id @default(uuid())
+  businessId  String
+  userId      String?
+  deviceName  String?
+  deviceModel String?
+  deviceUuid  String?   @unique
+  platform    String?
+  lastSeen    DateTime?
+  status      String    @default("ACTIVE")
+  createdAt   DateTime  @default(now())
+
+  business             Business     @relation(fields: [businessId], references: [id])
+  user                 User?        @relation(fields: [userId], references: [id])
+  syncQueues           SyncQueue[]
+  currentCashSessionId String?
+  currentCashSession   CashSession? @relation("DeviceCurrentCashSession", fields: [currentCashSessionId], references: [id], onDelete: SetNull)
+
+  @@index([currentCashSessionId])
+}
+
+model Category {
+  id               String    @id @default(uuid())
+  businessId       String
+  name             String
+  reportGroup      String    @default("Care & Wellness")
+  icon             String?
+  emoji            String?
+  parentCategoryId String?
+  status           String    @default("ACTIVE")
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  business        Business   @relation(fields: [businessId], references: [id])
+  parentCategory  Category?  @relation("CategoryTree", fields: [parentCategoryId], references: [id])
+  childCategories Category[] @relation("CategoryTree")
+  products        Product[]
+}
+
+model Supplier {
+  id                 String   @id @default(uuid())
+  businessId         String
+  name               String
+  category           String?
+  phone              String?
+  email              String?
+  location           String?
+  contactPerson      String?
+  notes              String?
+  paymentTerms       String   @default("Net 30")
+  rating             Int      @default(5)
+  outstandingBalance Float    @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business       Business        @relation(fields: [businessId], references: [id])
+  products       Product[]
+  purchaseOrders PurchaseOrder[]
+}
+
+model Product {
+  id           String    @id @default(uuid())
+  businessId   String
+  categoryId   String?
+  supplierId   String?
+  barcode      String?   @unique
+  sku          String?   @unique
+  name         String
+  brand        String?
+  productType  String?
+  packSize     String?
+  description  String?
+  unit         String?
+  emoji        String?
+  costPrice    Float?
+  sellingPrice Float?
+  minimumStock Int?
+  vatRate      Float?
+  trackStock   Boolean   @default(true)
+  status       String    @default("ACTIVE")
+  deletedAt    DateTime?
+  syncStatus   String    @default("SYNCED")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business      Business        @relation(fields: [businessId], references: [id])
+  category      Category?       @relation(fields: [categoryId], references: [id])
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  inventory     Inventory?
+  stockMoves    StockMovement[]
+  saleItems     SaleItem[]
+  purchaseItems PurchaseItem[]
+  scanEvents    ScanEvent[]
+}
+
+model ScanEvent {
+  id         String   @id @default(uuid())
+  businessId String
+  productId  String?
+  barcode    String
+  name       String
+  status     String
+  emoji      String?
+  createdAt  DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+  product  Product? @relation(fields: [productId], references: [id])
+
+  @@index([businessId, createdAt])
+  @@index([businessId, status, createdAt])
+}
+
+model PurchaseOrder {
+  id         String    @id @default(uuid())
+  businessId String
+  supplierId String?
+  orderNo    String?
+  status     String    @default("REQUESTED")
+  totalCost  Float     @default(0)
+  dueDate    DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  business Business       @relation(fields: [businessId], references: [id])
+  supplier Supplier?      @relation(fields: [supplierId], references: [id])
+  items    PurchaseItem[]
+}
+
+model PurchaseItem {
+  id              String   @id @default(uuid())
+  purchaseOrderId String
+  productId       String
+  quantity        Int      @default(0)
+  costPrice       Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  product       Product       @relation(fields: [productId], references: [id])
+}
+
+model Inventory {
+  id               String    @id @default(uuid())
+  businessId       String
+  productId        String    @unique
+  quantity         Int       @default(0)
+  reservedQuantity Int       @default(0)
+  lastStockTake    DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+}
+
+model StockMovement {
+  id           String   @id @default(uuid())
+  productId    String
+  userId       String?
+  movementType String
+  quantity     Int
+  reference    String?
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+  user    User?   @relation(fields: [userId], references: [id])
+}
+
+model Customer {
+  id          String   @id @default(uuid())
+  businessId  String
+  name        String
+  phone       String?
+  email       String?
+  location    String?
+  creditLimit Float?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business      Business            @relation(fields: [businessId], references: [id])
+  creditAccount CreditAccount?
+  creditEntries CreditLedgerEntry[]
+  sales         Sale[]
+}
+
+model CreditAccount {
+  id          String    @id @default(uuid())
+  customerId  String    @unique
+  balance     Float     @default(0)
+  lastPayment DateTime?
+  status      String    @default("ACTIVE")
+  updatedAt   DateTime  @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+}
+
+model CreditLedgerEntry {
+  id            String    @id @default(uuid())
+  businessId    String
+  customerId    String
+  type          String
+  amount        Float
+  paymentMethod String?
+  dueDate       DateTime?
+  status        String    @default("PENDING")
+  createdAt     DateTime  @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+}
+
+model MpesaIntegration {
+  id                   String   @id @default(uuid())
+  businessId           String
+  environment          String   @default("sandbox")
+  accountType          String
+  shortcode            String
+  partyB               String?
+  accountReference     String?
+  credentialCiphertext String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  business     Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  transactions MpesaTransaction[]
+
+  @@unique([businessId, environment])
+}
+
+model MpesaTransaction {
+  id                 String   @id @default(uuid())
+  businessId         String
+  mpesaIntegrationId String?
+  phoneNumber        String
+  amount             Float
+  accountReference   String
+  merchantRequestId  String?
+  checkoutRequestId  String   @unique
+  status             String   @default("INITIATED")
+  resultCode         Int?
+  resultDescription  String?
+  receiptNumber      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business         Business          @relation(fields: [businessId], references: [id])
+  mpesaIntegration MpesaIntegration? @relation(fields: [mpesaIntegrationId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([mpesaIntegrationId])
+}
+
+model MpesaSmsReceipt {
+  id           String   @id @default(uuid())
+  businessId   String
+  receiptCode  String
+  senderPhone  String?
+  customerName String?
+  amount       Float
+  customerId   String?
+  isMatched    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+
+  @@unique([businessId, receiptCode])
+  @@index([businessId, createdAt])
+}
+
+model Sale {
+  id            String   @id @default(uuid())
+  businessId    String
+  cashierId     String?
+  cashSessionId String?
+  customerId    String?
+  saleNumber    String?  @unique
+  subtotal      Float    @default(0)
+  discount      Float    @default(0)
+  tax           Float    @default(0)
+  total         Float    @default(0)
+  paymentStatus String   @default("PENDING")
+  saleStatus    String   @default("OPEN")
+  createdAt     DateTime @default(now())
+
+  business    Business     @relation(fields: [businessId], references: [id])
+  cashier     User?        @relation("CashierSales", fields: [cashierId], references: [id])
+  cashSession CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  customer    Customer?    @relation(fields: [customerId], references: [id])
+  items       SaleItem[]
+  payments    Payment[]
+
+  @@index([cashSessionId])
+}
+
+model SaleItem {
+  id        String @id @default(uuid())
+  saleId    String
+  productId String
+  quantity  Int
+  unitPrice Float
+  discount  Float  @default(0)
+  tax       Float  @default(0)
+  total     Float
+
+  sale    Sale    @relation(fields: [saleId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model PaymentMethod {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  payments Payment[]
+}
+
+model Payment {
+  id              String   @id @default(uuid())
+  saleId          String
+  paymentMethodId String
+  amount          Float
+  reference       String?
+  receivedAt      DateTime @default(now())
+
+  sale          Sale          @relation(fields: [saleId], references: [id])
+  paymentMethod PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+}
+
+model Expense {
+  id            String   @id @default(uuid())
+  businessId    String
+  category      String?
+  description   String
+  amount        Float
+  paymentMethod String?
+  icon          String?
+  recurring     Boolean  @default(false)
+  paidTo        String?
+  recordedBy    String?
+  createdAt     DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+}
+
+model CashSession {
+  id              String    @id @default(uuid())
+  businessId      String
+  cashierId       String?
+  shiftTypeId     String?
+  shiftType       String    @default("morning")
+  salesCount      Int       @default(0)
+  salesAmount     Float     @default(0)
+  openingBalance  Float     @default(0)
+  closingBalance  Float?
+  expectedBalance Float?
+  variance        Float?
+  openedAt        DateTime  @default(now())
+  closedAt        DateTime?
+  autoEndedAt     DateTime?
+
+  business        Business   @relation(fields: [businessId], references: [id])
+  cashier         User?      @relation(fields: [cashierId], references: [id])
+  shift           ShiftType? @relation(fields: [shiftTypeId], references: [id])
+  sales           Sale[]
+  assignedDevices Device[]   @relation("DeviceCurrentCashSession")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  businessId String
+  userId     String?
+  action     String
+  tableName  String?
+  recordId   String?
+  deviceId   String?
+  timestamp  DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id])
+  user     User?    @relation(fields: [userId], references: [id])
+}
+
+model SyncQueue {
+  id         String    @id @default(uuid())
+  businessId String
+  deviceId   String?
+  tableName  String
+  recordId   String?
+  operation  String
+  status     String    @default("PENDING")
+  createdAt  DateTime  @default(now())
+  syncedAt   DateTime?
+
+  business Business @relation(fields: [businessId], references: [id])
+  device   Device?  @relation(fields: [deviceId], references: [id])
+}
+
+model Notification {
+  id         String    @id @default(uuid())
+  businessId String
+  userId     String?
+  title      String
+  message    String
+  type       String?
+  isRead     Boolean   @default(false)
+  eventKey   String?
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  business Business @relation(fields: [businessId], references: [id])
+  user     User?    @relation(fields: [userId], references: [id])
+
+  @@unique([businessId, eventKey])
+  @@index([businessId, isRead, createdAt(sort: Desc)])
+}
+
+model NotificationSubscription {
+  id         String   @id @default(uuid())
+  businessId String
+  userId     String?
+  token      String   @unique
+  platform   String   @default("web")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, platform])
+}
