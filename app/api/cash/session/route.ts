@@ -90,6 +90,7 @@ export async function GET(request: Request) {
         shift: session.shift,
         openedAt: session.openedAt,
         closedAt: session.closedAt,
+        autoEndedAt: session.autoEndedAt,
         sales: sales?.count ?? 0,
         amount: sales?.amount ?? 0,
         openingBalance: session.openingBalance,

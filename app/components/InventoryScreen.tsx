@@ -1365,7 +1365,7 @@ export default function InventoryScreen({ onNavigate, initialBarcode, initialPro
               <div style={{ display: 'flex', gap: 8 }}>
                 <input className="input" inputMode="numeric" placeholder="Scan or enter barcode" value={productForm.barcode} onChange={e => setProductForm(f => ({ ...f, barcode: e.target.value }))} style={{ flex: 1 }} />
                 <button type="button" className="btn" onClick={startBarcodeCamera} aria-label="Scan barcode with camera" style={{ width: 44, borderRadius: 12, border: 'none', background: c.iconBg, color: '#123A8F', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
-                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+                  <img src="/qr-code-scanner.svg" width="19" height="19" alt="" aria-hidden="true" />
                 </button>
               </div>
               {showBarcodeCamera && <div style={{ marginTop: 10, position: 'relative', borderRadius: 12, overflow: 'hidden', background: '#0D1B3D', minHeight: 190 }}>

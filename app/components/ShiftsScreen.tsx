@@ -18,6 +18,7 @@ type CashSessionRow = {
   shift: ShiftType | null
   openedAt: string
   closedAt: string | null
+  autoEndedAt: string | null
   sales: number
   amount: number
   cashier: { id: string; fullName: string; role: { name: string } | null } | null
@@ -37,9 +38,22 @@ const SHIFT_TYPE_ICONS: ShiftIcon[] = [
 ]
 
 interface ShiftRecord {
-  id: string; cashierId: string | null; cashier: string; initials: string
-  type: string; label: string; icon: string; color: string
-  start: string; end: string | null; openedAt: string; closedAt: string | null; sales: number; amount: number; date: string
+  id: string
+  cashierId: string | null
+  cashier: string
+  initials: string
+  type: string
+  label: string
+  icon: string
+  color: string
+  start: string
+  end: string | null
+  openedAt: string
+  closedAt: string | null
+  autoEndedAt: string | null
+  sales: number
+  amount: number
+  date: string
 }
 
 interface Props {
@@ -358,6 +372,7 @@ export default function ShiftsScreen({
           endDate: endDate ? formatDateLabel(endDate) : null,
           openedAt: item.openedAt,
           closedAt: item.closedAt,
+          autoEndedAt: item.autoEndedAt,
           sales: item.sales,
           amount: Number(item.amount),
           date: new Date(item.openedAt).toLocaleDateString(),
@@ -912,7 +927,22 @@ export default function ShiftsScreen({
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>KSh {s.amount.toLocaleString()}</div>
-                    <span className={s.end ? 'badge badge-success' : 'badge live-shift-badge'} style={{ fontSize: 10, marginTop: 4, color: s.end ? undefined : '#2E7D32', background: s.end ? undefined : '#E8F5E9' }}>{s.end ? 'Closed' : '● In Progress'}</span>
+                    <span
+                      className={s.end ? 'badge badge-success' : 'badge live-shift-badge'}
+                      title={s.autoEndedAt ? `Automatically ended at ${new Date(s.autoEndedAt).toLocaleString()}` : undefined}
+                      style={{
+                        fontSize: 10,
+                        marginTop: 4,
+                        color: s.autoEndedAt
+                          ? (c.isDark ? '#FFD54F' : '#8D6E00')
+                          : s.end ? undefined : '#2E7D32',
+                        background: s.autoEndedAt
+                          ? (c.isDark ? 'rgba(249,168,37,0.18)' : '#FFF8E1')
+                          : s.end ? undefined : '#E8F5E9',
+                      }}
+                    >
+                      {s.autoEndedAt ? 'Auto-ended' : s.end ? 'Closed' : '● In Progress'}
+                    </span>
                   </div>
                 </div>
               </div>

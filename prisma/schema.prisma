@@ -621,6 +621,7 @@ model CashSession {
   variance        Float?
   openedAt        DateTime  @default(now())
   closedAt        DateTime?
+  autoEndedAt     DateTime?
 
   business        Business   @relation(fields: [businessId], references: [id])
   cashier         User?      @relation(fields: [cashierId], references: [id])

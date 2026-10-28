@@ -378,6 +378,8 @@ function POSScreenContent({
   const [isAssigningShift, setIsAssigningShift] = useState(false)
   const [isCompletingSale, setIsCompletingSale] = useState(false)
   const [receiptInfo, setReceiptInfo] = useState<ReceiptInfo | null>(null)
+  const [isDownloadingReceiptPdf, setIsDownloadingReceiptPdf] = useState(false)
+  const [receiptPdfMessage, setReceiptPdfMessage] = useState("")
   const [receiptHistory, setReceiptHistory] = useState<HistoricalReceipt[]>([])
   const [receiptHistoryCursor, setReceiptHistoryCursor] = useState<string | null>(null)
   const [receiptHistoryLoading, setReceiptHistoryLoading] = useState(false)
@@ -1889,7 +1891,7 @@ function POSScreenContent({
         }
       }
 
-      const saleNumber = `POS-${Date.now()}-${window.crypto.randomUUID()}`
+      const saleNumber = `RCPT-${Date.now()}`
       let receipt: {
         saleNumber: string
         createdAt: string
@@ -2083,6 +2085,265 @@ function POSScreenContent({
         .filter(Boolean)
         .join(" · ")
 
+  const receiptOperator = activeOperators.find(
+    (operator) => operator.id === selectedOperatorId,
+  )
+  const pdfReceiptCashier =
+    pastReceipt?.cashier ??
+    receiptInfo?.cashierName ??
+    receiptOperator?.name ??
+    "—"
+  const pdfReceiptShift = viewingPastReceipt
+    ? "—"
+    : receiptOperator?.shift ?? "—"
+
+  const downloadReceiptPdf = async () => {
+    if (isDownloadingReceiptPdf) return
+    setIsDownloadingReceiptPdf(true)
+    setReceiptPdfMessage("")
+    try {
+    const { jsPDF } = await import("jspdf")
+    const businessName = pastReceipt?.businessName || receiptInfo?.businessName
+    const itemLineCount = displayedReceiptItems.reduce((count, item) => {
+      const lines = Math.max(1, Math.ceil(item.name.length / 24))
+      return count + lines
+      }, 0)
+      const pageHeight = Math.max(170, 150 + itemLineCount * 6)
+      const document = new jsPDF({
+        unit: "mm",
+        format: [80, pageHeight],
+        compress: true,
+      })
+      const ink = "#0D1B3D"
+      const blue = "#123A8F"
+      const green = "#2E7D32"
+      const muted = "#6B7A99"
+      const left = 6
+      const right = 74
+      let y = 10
+      document.setTextColor(blue)
+      document.setFont("helvetica", "bold")
+      document.setFontSize(15)
+      document.text("MobiDuka POS", 40, y, { align: "center" })
+      y += 6
+      document.setFont("helvetica", "normal")
+      document.setFontSize(8)
+      document.setTextColor(green)
+      document.text(
+        viewingPastReceipt ? "RECEIPT DETAILS" : "SALE COMPLETE",
+        40,
+        y,
+        { align: "center" },
+      )
+      y += 8
+      document.setTextColor(ink)
+      document.setFont("helvetica", "bold")
+      document.setFontSize(9)
+      document.text(`Receipt #${displayedReceiptNumber}`, 40, y, {
+        align: "center",
+      })
+      y += 5
+      document.setFont("helvetica", "normal")
+      document.setTextColor(muted)
+      document.text(
+        new Date(displayedReceiptCreatedAt).toLocaleString("en-KE", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }),
+        40,
+        y,
+        { align: "center" },
+      )
+      y += 7
+      document.setDrawColor("#E8ECF4")
+      document.setLineDashPattern([1, 1], 0)
+      document.line(left, y, right, y)
+      y += 6
+
+      const businessLabel = displayedReceiptBusiness || businessName
+      if (businessLabel && businessLabel !== "MobiDuka POS") {
+        document.setTextColor(ink)
+        document.setFont("helvetica", "bold")
+        document.setFontSize(9)
+        const businessLabelLines = document.splitTextToSize(
+          businessLabel,
+          right - left,
+        ) as string[]
+        document.text(businessLabelLines, 40, y, { align: "center" })
+        y += businessLabelLines.length * 4.5 + 3
+      }
+
+      const metadataColumnWidth = (right - left - 6) / 2
+      const cashierCenter = left + metadataColumnWidth / 2
+      const shiftColumnLeft = left + metadataColumnWidth + 6
+      const shiftCenter = shiftColumnLeft + metadataColumnWidth / 2
+      document.setTextColor(muted)
+      document.setFont("helvetica", "normal")
+      document.setFontSize(5)
+      document.text("CASHIER", cashierCenter, y, { align: "center" })
+      document.text("SHIFT", shiftCenter, y, { align: "center" })
+      y += 4
+      document.setTextColor(muted)
+      document.setFont("helvetica", "normal")
+      document.setFontSize(7.5)
+      const cashierLines = document.splitTextToSize(
+        pdfReceiptCashier,
+        metadataColumnWidth,
+      ) as string[]
+      const shiftLines = document.splitTextToSize(
+        pdfReceiptShift,
+        metadataColumnWidth,
+      ) as string[]
+      document.text(cashierLines, cashierCenter, y, { align: "center" })
+      document.text(shiftLines, shiftCenter, y, { align: "center" })
+      const metadataHeight =
+        Math.max(cashierLines.length, shiftLines.length) * 3.5
+      document.setDrawColor("#E8ECF4")
+      const metadataDividerX = left + metadataColumnWidth + 3
+      document.line(
+        metadataDividerX,
+        y - 3,
+        metadataDividerX,
+        y + metadataHeight - 1,
+      )
+      y += metadataHeight + 3
+      document.setDrawColor("#E8ECF4")
+      document.line(left, y, right, y)
+      y += 6
+
+      document.setTextColor(ink)
+      document.setFontSize(8)
+      displayedReceiptItems.forEach((item) => {
+        const itemLines = document.splitTextToSize(
+          `${item.name} x ${item.qty}`,
+          43,
+        ) as string[]
+        document.text(itemLines, left, y)
+        document.text(
+          `KSh ${(item.price * item.qty).toLocaleString()}`,
+          right,
+          y,
+          { align: "right" },
+        )
+        y += itemLines.length * 4 + 2
+      })
+
+      document.setDrawColor("#E8ECF4")
+      document.line(left, y, right, y)
+      y += 6
+      document.setTextColor(muted)
+      const subtotalIndent = 4
+      document.text("Subtotal", left + subtotalIndent, y)
+      document.text(
+        `KSh ${displayedReceiptSubtotal.toLocaleString()}`,
+        right - subtotalIndent,
+        y,
+        { align: "right" },
+      )
+      y += 5
+      if (displayedReceiptDiscountAmount > 0) {
+        document.setTextColor("#D32F2F")
+        document.text("Discount", left, y)
+        document.text(
+          `-KSh ${displayedReceiptDiscountAmount.toLocaleString()}`,
+          right,
+          y,
+          { align: "right" },
+        )
+        y += 5
+      }
+
+      y += 2
+      document.setFillColor("#E8F5E9")
+      document.roundedRect(left, y - 4, right - left, 12, 1.5, 1.5, "F")
+      document.setTextColor(ink)
+      document.setFont("helvetica", "bold")
+      document.setFontSize(10)
+      document.text("TOTAL", left + 2, y + 3)
+      document.setTextColor(green)
+      document.text(
+        `KSh ${displayedReceiptTotal.toLocaleString()}`,
+        right - 2,
+        y + 3,
+        { align: "right" },
+      )
+      y += 15
+      document.setFont("helvetica", "normal")
+      document.setFontSize(8)
+      document.setTextColor(muted)
+      const paymentLabel = normalizedReceiptPaymentMethod.includes("mpesa")
+        ? "M-Pesa"
+        : normalizedReceiptPaymentMethod.includes("credit")
+          ? "Credit"
+          : "Cash"
+      document.text(`Payment: ${paymentLabel}`, 40, y, { align: "center" })
+      y += 6
+      if (
+        normalizedReceiptPaymentMethod.includes("credit") &&
+        (pastReceipt?.customer || selectedCreditor?.name)
+      ) {
+        const customerLines = document.splitTextToSize(
+          `Charged to: ${pastReceipt?.customer ?? selectedCreditor?.name}`,
+          right - left,
+        ) as string[]
+        document.text(customerLines, 40, y, { align: "center" })
+        y += customerLines.length * 4 + 2
+      }
+      document.text("Thank you for shopping with us.", 40, y + 3, {
+        align: "center",
+      })
+      const filename = `${displayedReceiptNumber
+        .replace(/[^a-zA-Z0-9._-]/g, "-")}.pdf`
+      if (isNativeOfflineApp()) {
+        const { Filesystem, Directory } = await import("@capacitor/filesystem")
+        const { Share } = await import("@capacitor/share")
+        const bytes = new Uint8Array(document.output("arraybuffer"))
+        let binary = ""
+        const chunkSize = 0x8000
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          binary += String.fromCharCode(
+            ...bytes.subarray(offset, offset + chunkSize),
+          )
+        }
+        const savedFile = await Filesystem.writeFile({
+          path: filename,
+          data: window.btoa(binary),
+          directory: Directory.Cache,
+        })
+        await Share.share({
+          title: `Receipt ${displayedReceiptNumber}`,
+          text: "Receipt PDF is ready to save or share.",
+          url: savedFile.uri,
+          dialogTitle: "Save or share receipt PDF",
+        })
+      } else {
+        const url = URL.createObjectURL(document.output("blob"))
+        const anchor = window.document.createElement("a")
+        anchor.href = url
+        anchor.download = filename
+        anchor.style.display = "none"
+        window.document.body.append(anchor)
+        anchor.click()
+        anchor.remove()
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      }
+      setReceiptPdfMessage("Receipt PDF is ready to download or share.")
+    } catch (reason) {
+      setReceiptPdfMessage(
+        reason instanceof Error
+          ? `Unable to create receipt PDF: ${reason.message}`
+          : "Unable to create receipt PDF.",
+      )
+    } finally {
+      setIsDownloadingReceiptPdf(false)
+    }
+  }
+
   if (registerTabStatus !== "active") {
     return (
       <div
@@ -2132,6 +2393,29 @@ function POSScreenContent({
     )
     return (
       <div className="screen" style={{ background: c.bg }}>
+        <style>{`@media print {
+          @page { margin: 0; }
+          body * { visibility: hidden !important; }
+          .receipt-print-area,
+          .receipt-print-area * {
+            visibility: visible !important;
+            color: #0D1B3D !important;
+          }
+          .receipt-print-area {
+            position: fixed !important;
+            inset: 0 auto auto 0 !important;
+            width: 80mm !important;
+            max-width: 80mm !important;
+            margin: 0 !important;
+            padding: 5mm !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            background: #fff !important;
+            background-color: #fff !important;
+            color: #0D1B3D !important;
+          }
+        }`}</style>
         <div
           style={{
               background: viewingPastReceipt
@@ -2245,7 +2529,10 @@ function POSScreenContent({
           </div>
         </div>
         <div className="scroll-area" style={{ padding: "20px 16px 100px" }}>
-          <div className="card" style={{ padding: "20px" }}>
+          <div
+            className="card receipt-print-area"
+            style={{ padding: "20px" }}
+          >
             <div style={{ textAlign: "center", marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: c.muted, marginBottom: 4 }}>
                 {displayedReceiptBusiness || "Business"}
@@ -2336,7 +2623,7 @@ function POSScreenContent({
                 >
                   {displayedReceiptNumber}
                 </div>
-              </div>
+                </div>
             </div>
             <div
               style={{
@@ -2457,36 +2744,50 @@ function POSScreenContent({
               )}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <div
+            role="group"
+            aria-label="Receipt actions"
+            style={{
+              display: "flex",
+              alignItems: "stretch",
+              gap: 8,
+              marginTop: 16,
+            }}
+          >
             <button
               className="btn"
+              type="button"
               aria-label="Receipt history"
+              title="Receipt history"
               onClick={() => {
                 setViewingPastReceipt(false)
                 setView("history")
               }}
               style={{
-                padding: "14px 12px",
-                background: "rgba(13,27,61,0.08)",
-                border: "1px solid #D0D7E8",
-                borderRadius: 14,
-                fontSize: 14,
-                fontWeight: 600,
+                width: 44,
+                minWidth: 44,
+                minHeight: 48,
+                padding: 0,
+                background: c.cardAlt,
+                border: `1px solid ${c.divider}`,
+                borderRadius: 13,
                 color: c.muted,
                 cursor: "pointer",
                 fontFamily: "inherit",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+                flexShrink: 0,
               }}
             >
               <svg
-                width="18"
-                height="18"
+                aria-hidden="true"
+                width="19"
+                height="19"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2.2"
+                strokeWidth="1.9"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
@@ -2497,23 +2798,109 @@ function POSScreenContent({
             </button>
             <button
               className="btn"
+              type="button"
+              onClick={() => void downloadReceiptPdf()}
+              disabled={isDownloadingReceiptPdf}
+              aria-label={
+                isNativeOfflineApp()
+                  ? "Save or share receipt PDF"
+                  : "Download receipt PDF"
+              }
+              title={
+                isNativeOfflineApp()
+                  ? "Save or share receipt PDF"
+                  : "Download receipt PDF"
+              }
               style={{
-                flex: 1,
-                padding: "14px",
-                background: "rgba(18,58,143,0.1)",
-                border: "1px solid #123A8F",
-                borderRadius: 14,
-                fontSize: 14,
-                fontWeight: 600,
-                color: "#123A8F",
-                cursor: "pointer",
+                width: 44,
+                minWidth: 44,
+                minHeight: 48,
+                padding: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: c.cardAlt,
+                border: `1px solid ${c.divider}`,
+                borderRadius: 13,
+                color: c.muted,
+                cursor: isDownloadingReceiptPdf ? "wait" : "pointer",
                 fontFamily: "inherit",
+                opacity: isDownloadingReceiptPdf ? 0.6 : 1,
+                flexShrink: 0,
               }}
             >
-              Print Receipt
+              <svg
+                aria-hidden="true"
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6M12 12v6m-3-3 3 3 3-3" />
+              </svg>
             </button>
             <button
               className="btn"
+              type="button"
+              onClick={() => {
+                if (isNativeOfflineApp()) {
+                  void downloadReceiptPdf()
+                  return
+                }
+                window.print()
+              }}
+              disabled={isDownloadingReceiptPdf}
+              aria-label={
+                isNativeOfflineApp()
+                  ? "Print receipt using a PDF app"
+                  : "Print receipt"
+              }
+              title={
+                isNativeOfflineApp()
+                  ? "Print receipt using a PDF app"
+                  : "Print receipt"
+              }
+              style={{
+                width: 44,
+                minWidth: 44,
+                minHeight: 48,
+                padding: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: c.cardAlt,
+                border: `1px solid ${c.divider}`,
+                borderRadius: 13,
+                color: c.muted,
+                cursor: isDownloadingReceiptPdf ? "wait" : "pointer",
+                fontFamily: "inherit",
+                opacity: isDownloadingReceiptPdf ? 0.6 : 1,
+                flexShrink: 0,
+              }}
+            >
+              <svg
+                aria-hidden="true"
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                <path d="M6 14h12v7H6zM18 12h.01" />
+              </svg>
+            </button>
+            <button
+              className="btn"
+              type="button"
               onClick={() => {
                 if (viewingPastReceipt) {
                   setViewingPastReceipt(false)
@@ -2529,11 +2916,13 @@ function POSScreenContent({
               }}
               style={{
                 flex: 1,
-                padding: "14px",
+                minWidth: 0,
+                minHeight: 48,
+                padding: "12px 10px",
                 background: "linear-gradient(135deg, #123A8F, #1A4FBF)",
                 border: "none",
-                borderRadius: 14,
-                fontSize: 14,
+                borderRadius: 13,
+                fontSize: 13,
                 fontWeight: 700,
                 color: "white",
                 cursor: "pointer",
@@ -2543,6 +2932,27 @@ function POSScreenContent({
               {viewingPastReceipt ? "Back to History" : "New Sale"}
             </button>
           </div>
+          {receiptPdfMessage && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: 12,
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: receiptPdfMessage.startsWith("Unable")
+                  ? c.errorBg
+                  : c.successBg,
+                color: receiptPdfMessage.startsWith("Unable")
+                  ? "#C62828"
+                  : "#2E7D32",
+                fontSize: 12,
+                lineHeight: 1.4,
+              }}
+            >
+              {receiptPdfMessage}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -4483,20 +4893,14 @@ function POSScreenContent({
               fontSize: 19,
             }}
           >
-            <svg
+            <img
+              src="/qr-code-scanner.svg"
               width="21"
               height="21"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="white"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+              alt=""
               aria-hidden="true"
-            >
-              <path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2" />
-              <path d="M8 9h8M8 12h8M8 15h5" />
-            </svg>
+              style={{ filter: "brightness(0) invert(1)" }}
+            />
           </button>
           <button
             className="btn"

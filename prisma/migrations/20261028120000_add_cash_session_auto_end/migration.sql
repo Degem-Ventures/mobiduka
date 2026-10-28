@@ -1,0 +1,2 @@
+ALTER TABLE "CashSession"
+ADD COLUMN "autoEndedAt" TIMESTAMP(3);
