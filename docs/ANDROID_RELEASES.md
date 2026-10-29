@@ -30,6 +30,7 @@ repository secrets:
 | Secret | Value |
 | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | Base64-encoded contents of `android/mobiduka-release.jks` |
+| `ANDROID_GOOGLE_SERVICES_JSON_BASE64` | Base64-encoded Firebase `google-services.json` containing the Android app `com.mobiduka.pos` |
 | `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
 | `ANDROID_KEY_ALIAS` | `mobiduka-release` |
 | `ANDROID_KEY_PASSWORD` | Password for the key |
@@ -50,6 +51,19 @@ Paste the file contents into the secret, then securely remove that temporary
 base64 file. Never commit or share the keystore, base64 value, or passwords.
 Loss of the signing key prevents Android from accepting future APK upgrades
 over installs signed with that key.
+
+Download `google-services.json` from the Firebase project that serves the
+Capacitor app, then create a one-line base64 value without adding the JSON file
+to Git:
+
+```sh
+base64 -w 0 android/app/google-services.json > google-services.json.base64
+```
+
+Add that value as `ANDROID_GOOGLE_SERVICES_JSON_BASE64` and securely remove the
+temporary base64 file. The release workflow verifies the package name and
+stops if the secret is missing or does not include `com.mobiduka.pos`. Debug
+builds warn and continue without Firebase when the secret is absent.
 
 For local release builds, `.env.local` can provide these values directly; set
 `ANDROID_KEYSTORE_PATH` to a path relative to `android/` (the generated local
