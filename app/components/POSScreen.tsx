@@ -998,30 +998,24 @@ function POSScreenContent({
         if (cancelled) return
         setDeviceUuid(registeredDeviceUuid)
 
-        const [shiftResponse, deviceResponse] = await Promise.all([
-          apiFetch<{
-            sessions: Array<{
+        const shiftResponse = await apiFetch<{
+          sessions: Array<{
+            id: string
+            closedAt: string | null
+            openedAt: string
+            cashier: {
               id: string
-              closedAt: string | null
-              openedAt: string
-              cashier: {
-                id: string
-                fullName: string
-                status?: string
-                role: { name: string } | null
-              } | null
-              shift: { name: string } | null
-              shiftType: string
-            }>
-          }>(
-            `/api/cash/session?businessId=${encodeURIComponent(currentBusinessId)}`,
-            { cache: "no-store" },
-          ),
-          apiFetch<{ currentShiftId: string | null }>(
-            `/api/cash/session/device?businessId=${encodeURIComponent(currentBusinessId)}&deviceUuid=${encodeURIComponent(registeredDeviceUuid)}`,
-            { cache: "no-store" },
-          ),
-        ])
+              fullName: string
+              status?: string
+              role: { name: string } | null
+            } | null
+            shift: { name: string } | null
+            shiftType: string
+          }>
+        }>(
+          `/api/cash/session?businessId=${encodeURIComponent(currentBusinessId)}`,
+          { cache: "no-store" },
+        )
         if (cancelled) return
 
         const operators = shiftResponse.sessions
@@ -1059,13 +1053,29 @@ function POSScreenContent({
         const locallySelectedShiftId = window.localStorage.getItem(
           deviceShiftStorageKey(currentBusinessId),
         )
+        let deviceCurrentShiftId: string | null = null
+        let deviceSelectionError: string | null = null
+        try {
+          const deviceResponse = await apiFetch<{
+            currentShiftId: string | null
+          }>(
+            `/api/cash/session/device?businessId=${encodeURIComponent(currentBusinessId)}&deviceUuid=${encodeURIComponent(registeredDeviceUuid)}`,
+            { cache: "no-store" },
+          )
+          deviceCurrentShiftId = deviceResponse.currentShiftId
+        } catch (reason) {
+          deviceSelectionError =
+            reason instanceof Error
+              ? reason.message
+              : "Unable to load this device's current shift."
+        }
         const availableSessionIds = new Set(
           operators.map((operator) => operator.sessionId),
         )
         const shiftIdToUse =
-          (deviceResponse.currentShiftId &&
-          availableSessionIds.has(deviceResponse.currentShiftId)
-            ? deviceResponse.currentShiftId
+          (deviceCurrentShiftId &&
+          availableSessionIds.has(deviceCurrentShiftId)
+            ? deviceCurrentShiftId
             : null) ??
           (locallySelectedShiftId &&
           availableSessionIds.has(locallySelectedShiftId)
@@ -1075,16 +1085,23 @@ function POSScreenContent({
 
         if (
           shiftIdToUse &&
-          shiftIdToUse !== deviceResponse.currentShiftId
+          shiftIdToUse !== deviceCurrentShiftId
         ) {
-          await apiFetch("/api/cash/session/device", {
-            method: "PUT",
-            body: JSON.stringify({
-              businessId: currentBusinessId,
-              deviceUuid: registeredDeviceUuid,
-              cashSessionId: shiftIdToUse,
-            }),
-          })
+          try {
+            await apiFetch("/api/cash/session/device", {
+              method: "PUT",
+              body: JSON.stringify({
+                businessId: currentBusinessId,
+                deviceUuid: registeredDeviceUuid,
+                cashSessionId: shiftIdToUse,
+              }),
+            })
+          } catch (reason) {
+            deviceSelectionError =
+              reason instanceof Error
+                ? reason.message
+                : "Unable to save this device's current shift."
+          }
         }
         if (cancelled) return
         setCurrentDeviceShiftId(shiftIdToUse ?? "")
@@ -1100,7 +1117,7 @@ function POSScreenContent({
         } else {
           window.localStorage.removeItem(deviceShiftStorageKey(currentBusinessId))
         }
-        setDataError("")
+        setDataError(deviceSelectionError ?? "")
       } catch (reason) {
         if (!cancelled) {
           if (reason instanceof TypeError && isNativeOfflineApp()) {

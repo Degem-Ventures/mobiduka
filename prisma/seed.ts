@@ -4,6 +4,7 @@ import { demoSuppliers } from "../data/demo-suppliers";
 import { demoPurchaseOrders } from "../data/demo-purchase-orders";
 import { demoCustomers } from "../data/demo-customers";
 import { demoNotifications } from "../data/demo-notifications";
+import { SYSTEM_ROLES } from "../lib/roles";
 
 const requestedForceSeed = process.argv.includes("--force-seed-demo");
 const databaseUrl = (process.env.DATABASE_URL ?? "").trim();
@@ -171,10 +172,47 @@ async function main() {
     },
   });
 
+  const [adminDefinition, managerDefinition, cashierDefinition] = SYSTEM_ROLES;
   const [ownerRole, managerRole, cashierRole] = await prisma.$transaction([
-    prisma.role.create({ data: { businessId: business.id, name: "Admin", description: "Store owner" } }),
-    prisma.role.create({ data: { businessId: business.id, name: "Manager", description: "Store manager" } }),
-    prisma.role.create({ data: { businessId: business.id, name: "Cashier", description: "Shift cashier" } }),
+    prisma.role.create({
+      data: {
+        businessId: business.id,
+        name: adminDefinition.name,
+        description: "Store owner",
+        isSystem: true,
+        icon: adminDefinition.icon,
+        color: adminDefinition.color,
+        permissions: {
+          create: adminDefinition.permissions.map(permissionKey => ({ permissionKey })),
+        },
+      },
+    }),
+    prisma.role.create({
+      data: {
+        businessId: business.id,
+        name: managerDefinition.name,
+        description: "Store manager",
+        isSystem: true,
+        icon: managerDefinition.icon,
+        color: managerDefinition.color,
+        permissions: {
+          create: managerDefinition.permissions.map(permissionKey => ({ permissionKey })),
+        },
+      },
+    }),
+    prisma.role.create({
+      data: {
+        businessId: business.id,
+        name: cashierDefinition.name,
+        description: "Shift cashier",
+        isSystem: true,
+        icon: cashierDefinition.icon,
+        color: cashierDefinition.color,
+        permissions: {
+          create: cashierDefinition.permissions.map(permissionKey => ({ permissionKey })),
+        },
+      },
+    }),
   ]);
 
   const passwordHash = await bcrypt.hash("OwnerPass123", 10);
