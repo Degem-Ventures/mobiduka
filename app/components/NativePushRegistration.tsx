@@ -12,16 +12,15 @@ import {
 } from "../../lib/client-api"
 
 type PushPermission = "prompt" | "prompt-with-rationale" | "granted" | "denied"
-type RegistrationState = "checking" | "disabled" | "ready" | "registering" | "registered" | "error"
 
 export default function NativePushRegistration() {
   const [isNative, setIsNative] = useState(false)
   const [session, setSession] = useState<ClientSession | null>(null)
   const [permission, setPermission] = useState<PushPermission | null>(null)
-  const [registrationState, setRegistrationState] =
-    useState<RegistrationState>("checking")
+  const [isChecking, setIsChecking] = useState(true)
+  const [isRequesting, setIsRequesting] = useState(false)
+  const [isDismissed, setIsDismissed] = useState(false)
   const [message, setMessage] = useState("")
-  const [isTesting, setIsTesting] = useState(false)
   const registerRef = useRef<(() => Promise<void>) | null>(null)
   const tokenRef = useRef("")
 
@@ -40,14 +39,9 @@ export default function NativePushRegistration() {
         currentSession.user.offline ||
         currentSession.user.demo
       ) {
-        setRegistrationState("ready")
-        setMessage(
-          "Push token received. Sign in online to connect this device to your business.",
-        )
         return
       }
 
-      setRegistrationState("registering")
       try {
         await apiFetch("/api/notifications/subscriptions", {
           method: "POST",
@@ -58,23 +52,15 @@ export default function NativePushRegistration() {
           }),
         })
         if (!active) return
-        setSession(currentSession)
-        setRegistrationState("registered")
-        setMessage(
-          "Push notifications are enabled for this account on this device.",
-        )
+        setPermission("granted")
+        setMessage("")
       } catch (error) {
         if (!active) return
         console.error(
           "Native push token could not be saved to the account.",
           error,
         )
-        setRegistrationState("error")
-        setMessage(
-          error instanceof Error
-            ? `Device token received, but account registration failed: ${error.message}`
-            : "Device token received, but account registration failed.",
-        )
+        setMessage("Could not connect notifications to this account.")
       }
     }
 
@@ -86,12 +72,10 @@ export default function NativePushRegistration() {
         currentSession.user.offline ||
         currentSession.user.demo
       ) {
-        setRegistrationState("ready")
-        setMessage(
-          "Sign in online to register this device for push notifications.",
-        )
+        setIsChecking(false)
         return
       }
+      if (askPermission) setIsRequesting(true)
       try {
         let status = await PushNotifications.checkPermissions()
         if (askPermission && status.receive !== "granted") {
@@ -100,16 +84,15 @@ export default function NativePushRegistration() {
         if (!active) return
         setPermission(status.receive)
         if (status.receive !== "granted") {
-          setRegistrationState("disabled")
           setMessage(
             status.receive === "denied"
-              ? "Notifications are blocked for this app. Allow them in your device settings, then retry."
-              : "Allow notifications so this device can receive business alerts.",
+              ? "Notifications are blocked. Allow them in Android Settings, then retry."
+              : "Enable notifications to receive business alerts on this device.",
           )
+          setIsChecking(false)
           return
         }
-        setRegistrationState("registering")
-        setMessage("Connecting this device to Firebase Cloud Messaging…")
+        setMessage("")
         if (Capacitor.getPlatform() === "android") {
           await PushNotifications.createChannel({
             id: "mobiduka-alerts",
@@ -124,12 +107,12 @@ export default function NativePushRegistration() {
       } catch (error) {
         if (!active) return
         console.error("Native push registration failed.", error)
-        setRegistrationState("error")
-        setMessage(
-          error instanceof Error
-            ? `Push registration failed: ${error.message}`
-            : "Push registration failed. Check native Firebase configuration.",
-        )
+        setMessage("Could not enable notifications. Please try again.")
+      } finally {
+        if (active) {
+          setIsChecking(false)
+          if (askPermission) setIsRequesting(false)
+        }
       }
     }
     registerRef.current = () => registerDevice(true)
@@ -142,8 +125,7 @@ export default function NativePushRegistration() {
         currentSession.user.offline ||
         currentSession.user.demo
       ) {
-        setRegistrationState("ready")
-        setMessage("")
+        setIsChecking(false)
         return
       }
       if (tokenRef.current) {
@@ -162,10 +144,6 @@ export default function NativePushRegistration() {
           PushNotifications.addListener("registrationError", (error) => {
             if (!active) return
             console.error("Firebase device-token registration failed.", error)
-            setRegistrationState("error")
-            setMessage(
-              `Firebase could not create a device token: ${error.error}. Check Android Firebase configuration and project credentials.`,
-            )
           }),
           PushNotifications.addListener(
             "pushNotificationReceived",
@@ -196,12 +174,6 @@ export default function NativePushRegistration() {
       } catch (error) {
         if (!active) return
         console.error("Native push listeners could not be initialized.", error)
-        setRegistrationState("error")
-        setMessage(
-          error instanceof Error
-            ? `Native push plugin is unavailable: ${error.message}`
-            : "Native push plugin is unavailable. Rebuild and sync the Capacitor app.",
-        )
       }
     })()
 
@@ -213,48 +185,21 @@ export default function NativePushRegistration() {
     }
   }, [])
 
-  const sendTestNotification = async () => {
-    if (!session) return
-    setIsTesting(true)
-    setMessage("Sending a push test to this device…")
-    try {
-      const result = await apiFetch<{ success: boolean; message: string }>(
-        "/api/notifications/subscriptions/test",
-        {
-          method: "POST",
-          body: JSON.stringify({ businessId: session.user.businessId }),
-        },
-      )
-      setMessage(result.message)
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `Push test failed: ${error.message}`
-          : "Push test failed.",
-      )
-    } finally {
-      setIsTesting(false)
-    }
-  }
-
   if (
     !isNative ||
     !session?.token ||
     session.user.offline ||
-    session.user.demo
+    session.user.demo ||
+    permission === "granted" ||
+    isDismissed ||
+    isChecking
   ) {
     return null
   }
 
-  const isRegistered = registrationState === "registered"
-  const needsPermission =
-    permission !== "granted" ||
-    registrationState === "disabled" ||
-    registrationState === "error"
-
   return (
     <aside
-      role={registrationState === "error" ? "alert" : "status"}
+      role="status"
       style={{
         position: "fixed",
         right: 12,
@@ -263,7 +208,7 @@ export default function NativePushRegistration() {
         width: "min(360px, calc(100vw - 24px))",
         padding: 14,
         border: "1px solid #d5deed",
-        borderRadius: 14,
+        borderRadius: 8,
         background: "white",
         color: "#0d1b3d",
         boxShadow: "0 8px 28px rgba(13,27,61,.2)",
@@ -271,37 +216,28 @@ export default function NativePushRegistration() {
       }}
     >
       <strong style={{ display: "block", marginBottom: 5 }}>
-        {isRegistered
-          ? "Push notifications enabled"
-          : "Device push notifications"}
+        Turn on notifications?
       </strong>
       <div style={{ color: "#53627b", lineHeight: 1.45 }}>
-        {message ||
-          "Checking notification permission and Firebase registration…"}
+        {message || "Receive business alerts on this device."}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        {needsPermission && (
-          <button
-            type="button"
-            disabled={registrationState === "registering"}
-            onClick={() => void registerRef.current?.()}
-            style={buttonStyle}
-          >
-            {permission === "denied"
-              ? "Retry after enabling in Settings"
-              : "Enable push"}
-          </button>
-        )}
-        {isRegistered && (
-          <button
-            type="button"
-            disabled={isTesting}
-            onClick={() => void sendTestNotification()}
-            style={buttonStyle}
-          >
-            {isTesting ? "Sending test…" : "Send test notification"}
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={isRequesting}
+          onClick={() => void registerRef.current?.()}
+          style={buttonStyle}
+        >
+          {isRequesting ? "Enabling…" : "Enable notifications"}
+        </button>
+        <button
+          type="button"
+          disabled={isRequesting}
+          onClick={() => setIsDismissed(true)}
+          style={dismissButtonStyle}
+        >
+          Not now
+        </button>
       </div>
     </aside>
   )
@@ -311,10 +247,22 @@ const buttonStyle = {
   minHeight: 34,
   padding: "0 11px",
   border: 0,
-  borderRadius: 8,
+  borderRadius: 6,
   background: "#123a8f",
   color: "white",
   font: "inherit",
   fontWeight: 700,
+  cursor: "pointer",
+} as const
+
+const dismissButtonStyle = {
+  minHeight: 34,
+  padding: "0 11px",
+  border: "1px solid #d5deed",
+  borderRadius: 6,
+  background: "white",
+  color: "#53627b",
+  font: "inherit",
+  fontWeight: 600,
   cursor: "pointer",
 } as const
