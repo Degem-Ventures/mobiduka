@@ -16,6 +16,7 @@ import {
   writeOfflineCollection,
   type QueuedOfflineCashSale,
 } from "../../lib/offline-store"
+import { offlineDemoBusinessName } from "../../lib/offline-demo"
 
 type ProductItem = {
   id: string
@@ -200,7 +201,10 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
   const [subscription, setSubscription] = useState(session?.user.subscription ?? null)
   const [subscriptionReady, setSubscriptionReady] = useState(Boolean(session?.user.offline))
   const [paywallDismissed, setPaywallDismissed] = useState(false)
-  const subscriptionBlocked = subscriptionReady && isSubscriptionBlocked(subscription)
+  const subscriptionBlocked =
+    session?.user.demo === true
+      ? false
+      : subscriptionReady && isSubscriptionBlocked(subscription)
 
   useEffect(() => {
     if (!session?.user.businessId || session.user.offline) {
@@ -225,7 +229,7 @@ export default function POSScreen({ onNavigate, initialCartItem }: Props) {
         setSubscriptionReady(true)
       })
     return () => { active = false }
-  }, [session?.user.businessId, session?.user.offline])
+  }, [session?.user.businessId, session?.user.offline, session?.user.demo])
 
   const handleSubscriptionLock = () => {
     setSubscription(current => ({
@@ -418,6 +422,10 @@ function POSScreenContent({
   useEffect(() => {
     setRegisterTabStatus("checking")
     setRegisterTabMessage("")
+    if (session?.user.demo) {
+      setRegisterTabStatus("active")
+      return
+    }
     if (!currentBusinessId) {
       setRegisterTabStatus("active")
       return
@@ -472,7 +480,7 @@ function POSScreenContent({
       if (retryTimer !== null) window.clearTimeout(retryTimer)
       releaseLock?.()
     }
-  }, [currentBusinessId])
+  }, [currentBusinessId, session?.user.demo])
 
   useEffect(() => {
     if (!currentBusinessId) return
@@ -787,7 +795,7 @@ function POSScreenContent({
       cancelled = true
       window.removeEventListener("online", handleOnline)
     }
-  }, [currentBusinessId, receiptHistoryRefresh, view, products, activeOperators, session?.user.name, session?.user.offline])
+  }, [currentBusinessId, receiptHistoryRefresh, view, products, activeOperators, session?.user.name, session?.user.offline, session?.user.demo])
 
   useEffect(() => {
     if (!session) {
@@ -1160,6 +1168,12 @@ function POSScreenContent({
 
   useEffect(() => {
     if (!isNativeOfflineApp() || !currentBusinessId) return;
+    if (session?.user.demo) {
+      setPendingOfflineSales(0);
+      setFailedOfflineSales(0);
+      setOfflineSyncError("");
+      return;
+    }
     const applySyncStatus = (status: {
       pending: number;
       failed: number;
@@ -1199,7 +1213,7 @@ function POSScreenContent({
     return () => {
       window.removeEventListener("mobiduka-offline-sync-status", handleSyncStatus);
     };
-  }, [currentBusinessId]);
+  }, [currentBusinessId, session?.user.demo]);
 
   const selectDeviceShift = async (operator: ActiveOperator) => {
     if (!deviceUuid || isAssigningShift) return
@@ -1963,7 +1977,10 @@ function POSScreenContent({
                 (operator) => operator.id === selectedOperatorId,
               )?.name ?? session.user.name,
           },
-          business: { name: "", branch: null },
+          business: {
+            name: session?.user.demo ? offlineDemoBusinessName : "",
+            branch: session?.user.demo ? "Sample only" : null,
+          },
         }
         syncState = "PENDING"
         setProducts((previous) =>
@@ -2479,8 +2496,9 @@ function POSScreenContent({
                   opacity: 0.9,
                 }}
               >
-                Saved on this device · {pendingOfflineSales} sale
-                {pendingOfflineSales === 1 ? "" : "s"} waiting to sync
+                {session?.user.demo
+                  ? "Sample sale · saved on this device only; never syncs"
+                  : `Saved on this device · ${pendingOfflineSales} sale${pendingOfflineSales === 1 ? "" : "s"} waiting to sync`}
               </div>
             )}
             {viewingPastReceipt && pastReceipt?.syncState && (
@@ -2493,7 +2511,9 @@ function POSScreenContent({
                   opacity: 0.9,
                 }}
               >
-                {pastReceipt.syncState === "FAILED"
+                {session?.user.demo
+                  ? "Sample receipt · saved on this device only; never syncs"
+                  : pastReceipt.syncState === "FAILED"
                   ? "Saved on this device · sync failed; retry from On-device Sync"
                   : "Saved on this device · waiting to sync"}
               </div>

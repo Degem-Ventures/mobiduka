@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./global.css";
 import WebPushRegistration from "./components/WebPushRegistration";
+import NativePushRegistration from "./components/NativePushRegistration";
 import OfflineServiceWorker from "./components/OfflineServiceWorker";
 
 export const metadata: Metadata = {
@@ -21,6 +22,7 @@ export default function RootLayout({
       <body className="antialiased" suppressHydrationWarning>
         <OfflineServiceWorker />
         <WebPushRegistration />
+        <NativePushRegistration />
         {children}
         <Analytics />
         <SpeedInsights />

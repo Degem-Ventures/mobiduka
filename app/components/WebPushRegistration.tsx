@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { getToken, isSupported, onMessage } from "firebase/messaging";
 import { getFirebaseMessaging } from "@/lib/firebase-web";
 import { apiFetch, getClientSession } from "@/lib/client-api";
@@ -16,6 +17,7 @@ export default function WebPushRegistration() {
   };
 
   useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
     setIsHydrated(true);
     let unsubscribe: (() => void) | undefined;
     void (async () => {
@@ -29,7 +31,9 @@ export default function WebPushRegistration() {
       if (!token) return;
       await apiFetch("/api/notifications/subscriptions", { method: "POST", body: JSON.stringify({ businessId: session.user.businessId, token, platform: "web" }) });
       unsubscribe = onMessage(messaging, () => window.dispatchEvent(new Event("mobiduka-notification")));
-    })().catch(() => undefined);
+    })().catch((error: unknown) => {
+      console.error("Browser push notifications could not be registered.", error);
+    });
     return () => unsubscribe?.();
   }, []);
 

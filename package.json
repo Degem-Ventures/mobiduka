@@ -39,6 +39,7 @@
     "@capacitor/haptics": "7.0.5",
     "@capacitor/ios": "^7.6.9",
     "@capacitor/network": "^7.0.4",
+    "@capacitor/push-notifications": "^7.0.7",
     "@capacitor/share": "^7.0.4",
     "@prisma/client": "^5.22.0",
     "@sentry/nextjs": "^10.75.0",

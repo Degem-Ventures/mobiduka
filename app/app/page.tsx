@@ -190,7 +190,9 @@ function AppInner() {
     const tokenParts = session?.token.split(".")
     let sessionIsValid = Boolean(session)
     if (session?.user.offline) {
-      sessionIsValid = isNativeOfflineApp() && !navigator.onLine
+      sessionIsValid =
+        isNativeOfflineApp() &&
+        (session.user.demo === true || !navigator.onLine)
     } else if (session && tokenParts?.[1]) {
       try {
         const claims = JSON.parse(
@@ -204,7 +206,7 @@ function AppInner() {
     }
     if (sessionIsValid) {
       const savedScreen = getLastScreen() as Screen | null
-      const restoredScreen = session?.user.offline
+      const restoredScreen = session?.user.demo || session?.user.offline
         ? "pos"
         : savedScreen && savedScreen !== "login"
           ? savedScreen
@@ -230,7 +232,8 @@ function AppInner() {
 
   useEffect(() => {
     const handleOnline = () => {
-      if (!getClientSession()?.user.offline) return
+      const session = getClientSession()
+      if (!session?.user.offline || session.user.demo) return
       clearClientSession()
       clearLastScreen()
       setLoggedIn(false)
@@ -405,6 +408,7 @@ function AppInner() {
     },
   ) => {
     const nextScreen = s as Screen
+    if (getClientSession()?.user.demo && nextScreen !== "pos") return
     if (
       getClientSession()?.user.offline &&
       nextScreen !== "pos" &&
@@ -429,7 +433,8 @@ function AppInner() {
     if (nextScreen !== "login") saveLastScreen(nextScreen)
   }
 
-  const showNav = showNavFor.includes(screen)
+  const showNav =
+    showNavFor.includes(screen) && getClientSession()?.user.demo !== true
   const offlineSession = getClientSession()?.user.offline === true
   const visibleLeftNavItems = offlineSession
     ? leftNavItems.filter((item) => item.key === "pos")
@@ -558,8 +563,9 @@ function AppInner() {
                 }}
               >
                 <span>
-                  Offline PIN session · POS only. Staff access may be out of
-                  date; sign in online to sync.
+                  {getClientSession()?.user.demo
+                    ? `${getClientSession()?.user.name} · sample data only. Sales stay on this device and never sync.`
+                    : "Offline PIN session · POS only. Staff access may be out of date; sign in online to sync."}
                 </span>
                 <button
                   className="btn"
@@ -572,7 +578,7 @@ function AppInner() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Sign in online
+                  {getClientSession()?.user.demo ? "Exit demo" : "Sign in online"}
                 </button>
               </div>
             )}

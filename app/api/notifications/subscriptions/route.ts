@@ -8,12 +8,17 @@ export async function POST(request: Request) {
     const businessId = requireBusinessAccess(request, body.businessId);
     const token = typeof body.token === "string" ? body.token.trim() : "";
     if (!businessId || !token) return NextResponse.json({ error: "Authenticated business and token are required." }, { status: 401 });
+    const platform = body.platform;
+    if (!platform || !["web", "android", "ios"].includes(platform)) {
+      return NextResponse.json({ error: "A supported push platform is required." }, { status: 400 });
+    }
 
     const userId = authenticatedUserId(request);
+    if (!userId) return NextResponse.json({ error: "Authenticated user is required." }, { status: 401 });
     const subscription = await prisma.notificationSubscription.upsert({
       where: { token },
-      update: { businessId, userId, platform: body.platform === "web" ? "web" : "web" },
-      create: { businessId, userId, token, platform: "web" },
+      update: { businessId, userId, platform },
+      create: { businessId, userId, token, platform },
     });
     return NextResponse.json({ success: true, subscriptionId: subscription.id }, { status: 201 });
   } catch (error) {

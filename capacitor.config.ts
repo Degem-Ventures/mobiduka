@@ -10,6 +10,14 @@ const config: CapacitorConfig = {
     allowMixedContent: false,
     adjustMarginsForEdgeToEdge: 'auto',
   },
+  plugins: {
+    CapacitorSQLite: {
+      androidIsEncryption: false,
+    },
+    PushNotifications: {
+      presentationOptions: ["alert", "sound", "badge"],
+    },
+  },
   server: {
     androidScheme: 'https',
     ...(liveReloadUrl ? { url: liveReloadUrl } : {}),

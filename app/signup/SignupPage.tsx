@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiFetch, saveClientSession, savePinLoginContext, type ClientSession } from "../../lib/client-api";
+import { getBusinessStarterTemplate } from "../../lib/business-starter-templates";
 
 type PublicPlan = {
   name: string
@@ -31,6 +32,7 @@ export default function SignupPage({
   const [ownerEmail, setOwnerEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [businessType, setBusinessType] = useState("");
+  const [includeStarterCatalog, setIncludeStarterCatalog] = useState(true);
   const [password, setPassword] = useState("");
   const [initialPin, setInitialPin] = useState("");
   const [planName, setPlanName] = useState("Basic");
@@ -64,6 +66,7 @@ export default function SignupPage({
   }, []);
 
   const selectedPlan = plans.find((plan) => plan.name === planName);
+  const starterTemplate = getBusinessStarterTemplate(businessType);
   const requiresPayment = planName !== "Basic";
   const canCheckout = !!selectedPlan?.onlineCheckoutEnabled &&
     (billingPeriod === "annual"
@@ -151,6 +154,7 @@ export default function SignupPage({
           ownerEmail: email,
           phone,
           businessType,
+          includeStarterCatalog,
           password,
           initialPin: initialPin || undefined,
           planName,
@@ -232,15 +236,32 @@ export default function SignupPage({
             <label style={fieldStyle}>Owner email<input required type="email" value={ownerEmail} onChange={event => setOwnerEmail(event.target.value)} autoComplete="email"/></label>
             <label style={fieldStyle}>Phone number<input required={requiresPayment} type="tel" value={phone} onChange={event => setPhone(event.target.value)} autoComplete="tel"/></label>
             <label style={fieldStyle}>Business type
-              <select value={businessType} onChange={event => setBusinessType(event.target.value)}>
+              <select required value={businessType} onChange={event => setBusinessType(event.target.value)}>
                 <option value="">Select a business type</option>
-                <option value="duka">Duka or kiosk</option>
-                <option value="mini-market">Mini-market</option>
+                <option value="duka">Duka</option>
+                <option value="kiosk">Kiosk</option>
+                <option value="mini-shop">Mini-shop</option>
                 <option value="pharmacy">Pharmacy</option>
                 <option value="agrovet">Agrovet</option>
-                <option value="retail-chain">Retail chain</option>
+                <option value="retail-chain">Growing multi-branch retailer</option>
                 <option value="other">Other</option>
               </select>
+            </label>
+            <label style={{ ...fieldStyle, display: "flex", alignItems: "flex-start", gap: 9, lineHeight: 1.5 }}>
+              <input
+                type="checkbox"
+                checked={includeStarterCatalog}
+                onChange={event => setIncludeStarterCatalog(event.target.checked)}
+                style={{ width: 16, height: 16, flexShrink: 0, marginTop: 2 }}
+              />
+              <span>
+                Add a {starterTemplate?.label ?? "business"} starter catalog
+                <span style={{ display: "block", color: "#65738b", fontWeight: 400 }}>
+                  {starterTemplate
+                    ? `${starterTemplate.categories.length} categories and ${starterTemplate.products.length} sample items. Samples have zero price and stock; review and edit before selling.`
+                    : "Choose a business type to preview its starter catalog."}
+                </span>
+              </span>
             </label>
             <label style={fieldStyle}>Password (at least 12 characters)<input required type="password" minLength={12} value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password"/></label>
             <label style={fieldStyle}>Optional cashier PIN (4 digits)<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength={4} value={initialPin} onChange={event => setInitialPin(event.target.value.replace(/\D/g, "").slice(0, 4))} autoComplete="off"/></label>

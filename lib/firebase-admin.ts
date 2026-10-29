@@ -105,7 +105,7 @@ export async function sendPushNotification(
     const businessId = topic.match(/^business_[^_]+_(.+)$/)?.[1];
     if (businessId) {
       const subscriptions = await prisma.notificationSubscription.findMany({
-        where: { businessId, platform: "web" },
+        where: { businessId, platform: { in: ["web", "android", "ios"] } },
         select: { token: true },
       });
       await sendPushNotificationToTokens(
@@ -125,13 +125,14 @@ export async function sendPushNotificationToTokens(
   title: string,
   body: string,
   dataPayload: Record<string, string> = {},
-): Promise<void> {
+): Promise<{ sent: number; failed: number }> {
   const projectId = process.env.FIREBASE_PROJECT_ID;
-  if (!projectId || tokens.length === 0) return;
+  if (!projectId || tokens.length === 0)
+    return { sent: 0, failed: tokens.length };
   const accessToken = await getFirebaseAccessToken();
-  if (!accessToken) return;
+  if (!accessToken) return { sent: 0, failed: tokens.length };
 
-  await Promise.all(tokens.map(async (token) => {
+  const results = await Promise.all(tokens.map(async (token) => {
     try {
       const response = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`, {
         method: "POST",
@@ -140,13 +141,33 @@ export async function sendPushNotificationToTokens(
           token,
           notification: { title, body },
           data: dataPayload,
+          android: {
+            priority: "HIGH",
+            notification: {
+              channel_id: "mobiduka-alerts",
+              sound: "default",
+            },
+          },
+          apns: {
+            payload: { aps: { sound: "default", badge: 1 } },
+          },
           webpush: { fcmOptions: { link: "/" } },
         } }),
         signal: AbortSignal.timeout(5000),
       });
-      if (!response.ok) console.error("Firebase web push failed with status", response.status);
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(
+          `Firebase push failed with status ${response.status}: ${errorBody.slice(0, 300)}`,
+        );
+        return false;
+      }
+      return true;
     } catch (error) {
-      console.error("Firebase web push failed:", error instanceof Error ? error.message : error);
+      console.error("Firebase push failed:", error instanceof Error ? error.message : error);
+      return false;
     }
   }));
+  const sent = results.filter(Boolean).length;
+  return { sent, failed: results.length - sent };
 }

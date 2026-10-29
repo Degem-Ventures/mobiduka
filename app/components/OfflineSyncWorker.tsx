@@ -27,6 +27,21 @@ export default function OfflineSyncWorker({ enabled }: { enabled: boolean }) {
     let lastRosterRefreshAttemptAt = 0
 
     const runSync = async () => {
+      if (session.user.demo) {
+        try {
+          const status = await getOfflineSaleSyncStatus(businessId)
+          if (cancelled) return
+          window.dispatchEvent(
+            new CustomEvent<OfflineSyncStatusEvent>(
+              "mobiduka-offline-sync-status",
+              { detail: { ...status, syncError: null } },
+            ),
+          )
+        } catch (error) {
+          console.error("Unable to read offline demo sale status.", error)
+        }
+        return
+      }
       if (!navigator.onLine) {
         try {
           const status = await getOfflineSaleSyncStatus(businessId)

@@ -7,6 +7,7 @@ import {
   normalizePlatformPhone,
   platformMpesaCheckoutAvailable,
 } from "@/lib/platform-mpesa";
+import { getBusinessStarterTemplate } from "@/lib/business-starter-templates";
 
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === "production" && process.env.BUSINESS_REGISTRATION_ENABLED !== "true") {
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
       businessType?: string;
       planName?: string;
       billingPeriod?: string;
+      includeStarterCatalog?: boolean;
     };
     const businessName = body.businessName?.trim() ?? "";
     const ownerName = body.ownerName?.trim() ?? "";
@@ -51,6 +53,21 @@ export async function POST(request: Request) {
       body.billingPeriod !== "annual"
     ) {
       return NextResponse.json({ error: "billingPeriod must be monthly or annual." }, { status: 400 });
+    }
+    if (
+      body.includeStarterCatalog !== undefined &&
+      typeof body.includeStarterCatalog !== "boolean"
+    ) {
+      return NextResponse.json({ error: "includeStarterCatalog must be a boolean." }, { status: 400 });
+    }
+    const businessType = body.businessType?.trim() || null;
+    const includeStarterCatalog = body.includeStarterCatalog === true;
+    const starterTemplate = getBusinessStarterTemplate(businessType);
+    if (includeStarterCatalog && !starterTemplate) {
+      return NextResponse.json(
+        { error: "Choose a supported business type before adding its starter catalog." },
+        { status: 400 },
+      );
     }
     const planName = body.planName?.trim() || "Basic";
     const billingPeriod = body.billingPeriod === "annual" ? "annual" : "monthly";
@@ -104,12 +121,58 @@ export async function POST(request: Request) {
           ownerName,
           email: ownerEmail,
           phone: paymentPhone ?? (body.phone?.trim() || null),
-          businessType: body.businessType?.trim() || null,
+          businessType,
           currency: "KES",
           timezone: "Africa/Nairobi",
           status: "ACTIVE",
         },
       });
+      let starterCatalogProductCount = 0;
+      if (includeStarterCatalog && starterTemplate) {
+        const categoryIds = new Map<string, string>();
+        for (const category of starterTemplate.categories) {
+          const createdCategory = await transaction.category.create({
+            data: {
+              businessId: business.id,
+              name: category.name,
+              emoji: category.emoji,
+              reportGroup: category.reportGroup,
+            },
+            select: { id: true, name: true },
+          });
+          categoryIds.set(createdCategory.name, createdCategory.id);
+        }
+        for (const item of starterTemplate.products) {
+          const categoryId = categoryIds.get(item.category);
+          if (!categoryId) {
+            throw new Error(
+              `Starter catalog category "${item.category}" is not configured.`,
+            );
+          }
+          await transaction.product.create({
+            data: {
+              businessId: business.id,
+              categoryId,
+              name: `[Sample] ${item.name}`,
+              unit: item.unit,
+              emoji: item.emoji,
+              costPrice: 0,
+              sellingPrice: 0,
+              minimumStock: 0,
+              trackStock: true,
+              status: "ACTIVE",
+              inventory: {
+                create: {
+                  businessId: business.id,
+                  quantity: 0,
+                  reservedQuantity: 0,
+                },
+              },
+            },
+          });
+          starterCatalogProductCount += 1;
+        }
+      }
       const role = await transaction.role.create({
         data: {
           businessId: business.id,
@@ -149,7 +212,7 @@ export async function POST(request: Request) {
           isTrialClaimed: true,
         },
       });
-      return { businessId: business.id, owner };
+      return { businessId: business.id, owner, starterCatalogProductCount };
     });
 
     return NextResponse.json({
@@ -158,6 +221,7 @@ export async function POST(request: Request) {
       owner: result.owner,
       requiresPayment,
       planName: plan.name,
+      starterCatalogProductCount: result.starterCatalogProductCount,
       subscription: {
         planType: plan.name.toUpperCase(),
         status: requiresPayment ? "PENDING" : "TRIAL",

@@ -5,6 +5,12 @@ import {
   isNativeOfflineApp,
   refreshOfflinePinRoster,
 } from '../../lib/offline-store'
+import {
+  offlineDemoBusinessId,
+  offlineDemoBusinessName,
+  offlineDemoCashierId,
+  prepareOfflineDemo,
+} from '../../lib/offline-demo'
 import { useAutoDismissMessage } from '../../lib/use-auto-dismiss-message'
 
 interface Props {
@@ -65,6 +71,35 @@ export default function LoginScreen({ onLogin }: Props) {
   }
 
   const handlePinDelete = () => setPin(p => p.slice(0, -1))
+
+  const startOfflineDemo = async () => {
+    setIsSubmitting(true)
+    setLoginError('')
+    try {
+      await prepareOfflineDemo()
+      saveClientSession({
+        token: '',
+        user: {
+          id: offlineDemoCashierId,
+          name: 'Sample Cashier',
+          businessId: offlineDemoBusinessId,
+          role: 'CASHIER',
+          offline: true,
+          demo: true,
+        },
+      })
+      onLogin()
+    } catch (error) {
+      console.error('Unable to prepare the offline demo.', error)
+      setLoginError(
+        error instanceof Error
+          ? `Unable to start the offline demo: ${error.message}`
+          : 'Unable to start the offline demo. Check device storage and try again.',
+      )
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   const submitLogin = async (loginPin?: string) => {
     setIsSubmitting(true)
@@ -362,6 +397,32 @@ export default function LoginScreen({ onLogin }: Props) {
           }}>
             Quick PIN Login
           </button>
+          {isNativeOfflineApp() && (
+            <button
+              className="btn"
+              onClick={() => void startOfflineDemo()}
+              disabled={isSubmitting}
+              style={{
+                width: '80%',
+                padding: '14px',
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 16,
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'white',
+                fontFamily: 'inherit',
+                opacity: isSubmitting ? 0.7 : 1,
+              }}
+            >
+              {isSubmitting ? 'Preparing sample store…' : `Try ${offlineDemoBusinessName} offline`}
+            </button>
+          )}
+          {loginError && (
+            <div role="alert" style={{ width: '80%', color: '#FFCDD2', fontSize: 12, textAlign: 'center' }}>
+              {loginError}
+            </div>
+          )}
         </div>
       </div>
     )

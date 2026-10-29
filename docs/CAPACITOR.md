@@ -8,6 +8,37 @@ The first upgrade from the previous remote-origin APK may require one online sig
 
 Exception to the cash-sale-only queuing statements above: when offline in the Capacitor app, new cash expenses can also be saved to SQLite and queued for synchronization. They appear in the expense list as pending or failed; failed entries can be retried after an online sign-in. Editing or deleting an expense, and recording an M-Pesa or bank expense, still requires an online session.
 
+## Native push notifications
+
+The Capacitor app registers its Android or iOS Firebase Cloud Messaging token to
+the signed-in business account. In the native app, sign in online and use the
+**Enable push** prompt. Once the device token is registered, **Send test
+notification** sends a test only to the current user's native device tokens.
+Put the app in the background to verify that Android/iOS displays the test in
+the system notification tray. Foreground pushes refresh the in-app unread count.
+The web-push registration component is disabled in native builds.
+
+Firebase must be configured before this can work:
+
+- In Firebase, register an Android app with application ID `com.mobiduka.pos`
+  and place its `google-services.json` at `android/app/google-services.json`.
+  Keep this project configuration out of Git if it contains project-specific
+  identifiers. Re-run `pnpm run cap:sync` and rebuild/reinstall the APK.
+- Set the server secrets `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and
+  `FIREBASE_PRIVATE_KEY` for the same Firebase project. The service account
+  needs permission to send Firebase Cloud Messaging messages.
+- For iOS, add the app to the same Firebase project, install
+  `GoogleService-Info.plist` in the Xcode app target, enable the Push
+  Notifications capability and APNs key in Firebase, then sync and rebuild.
+
+The native app reports permission, token-registration, account-registration,
+and test-send errors in its push status panel. If it reports that Firebase
+could not create a token, verify the platform Firebase config and rebuild.
+If the test endpoint says Firebase did not accept the notification, verify the
+server credentials and that the client token and server credentials belong to
+the same project. Never put the Firebase service-account private key in the
+mobile app or commit it to the repository.
+
 ## Local build
 
 Install Android Studio or the Android command-line SDK first. Then run:

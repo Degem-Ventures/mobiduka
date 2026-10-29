@@ -6,6 +6,7 @@ export type ClientSession = {
     businessId: string
     role: string
     offline?: boolean
+    demo?: boolean
     subscription?: {
       planType: string
       status: "TRIAL" | "ACTIVE" | "GRACE" | "EXPIRED" | "REVOKED" | "MISSING"
@@ -28,6 +29,7 @@ export class ApiResponseError extends Error {
 }
 
 export const SUBSCRIPTION_REQUIRED_EVENT = "mobiduka-subscription-required"
+export const CLIENT_SESSION_CHANGED_EVENT = "mobiduka-client-session-changed"
 
 const SESSION_KEY = "mobiduka_session"
 const PIN_LOGIN_CONTEXT_KEY = "mobiduka_pin_login_context"
@@ -156,10 +158,12 @@ export function getClientSession(): ClientSession | null {
 
 export function saveClientSession(session: ClientSession) {
   window.localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  window.dispatchEvent(new Event(CLIENT_SESSION_CHANGED_EVENT))
 }
 
 export function clearClientSession() {
   window.localStorage.removeItem(SESSION_KEY)
+  window.dispatchEvent(new Event(CLIENT_SESSION_CHANGED_EVENT))
 }
 
 export function getLastScreen() {
@@ -196,7 +200,7 @@ export async function apiFetchResponse(
   const session = getClientSession()
   if (session?.user.offline) {
     throw new TypeError(
-      "Offline PIN sessions can access saved data only. Sign in online to synchronize.",
+      "Offline sessions can access saved data only. Sign in online to synchronize.",
     )
   }
   const headers = createApiHeaders(init, session)
