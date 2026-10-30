@@ -35,6 +35,7 @@ repository secrets:
 | `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
 | `ANDROID_KEY_ALIAS` | `mobiduka-release` |
 | `ANDROID_KEY_PASSWORD` | Password for the key |
+| `RELEASE_TOKEN` | Fine-grained GitHub token with Contents read/write access to this repository, used to publish GitHub Releases |
 
 On Linux, create a one-line base64 file for `ANDROID_KEYSTORE_BASE64` with:
 

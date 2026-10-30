@@ -204,6 +204,16 @@ jobs:
             echo "branch=$GITHUB_REF_NAME"
           } > "$RUNNER_TEMP/mobiduka-release-build-info.txt"
 
+      - name: Verify GitHub release token
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [[ -z "$RELEASE_TOKEN" ]]; then
+            echo "::error::Set the RELEASE_TOKEN Actions secret to a fine-grained token with Contents read/write access to this repository."
+            exit 1
+          fi
+
       - name: Publish APK to Vercel Blob
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
@@ -274,6 +284,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: MobiDuka ${{ steps.release_version.outputs.version_name }}
           generate_release_notes: true
+          token: ${{ secrets.RELEASE_TOKEN }}
           files: |
             android/app/build/outputs/apk/release/app-release.apk
             ${{ runner.temp }}/mobiduka-release-build-info.txt
