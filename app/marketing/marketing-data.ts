@@ -15,7 +15,7 @@ export const faqItems = [
   ['Does it support offline workflows?', 'Supported retail workflows can continue during connectivity interruptions, with queued records synchronizing when connectivity returns.'],
   ['Does it support M-PESA?', 'MobiDuka supports M-PESA configuration and payment-status workflows. Availability depends on the merchant’s approved Daraja setup.'],
   ['Can I scan barcodes and print receipts?', 'Yes. SmartScan supports compatible barcode workflows, and receipts can be printed using compatible Bluetooth thermal printers.'],
-  ['Is there an Android app?', 'An Android APK distribution option is planned. The download button will be connected when an approved distribution URL is available.'],
+  ['Is there an Android app?', 'Download the latest signed Android APK from the Android app page.'],
   ['Is the iOS app available?', 'The iOS experience is in preparation. Contact the MobiDuka team for current availability.'],
   ['What packages are offered?', 'Basic, Growth and Enterprise packages are available for review. Public prices and final entitlements will be published after commercial approval.'],
 ]

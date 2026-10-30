@@ -31,6 +31,7 @@ repository secrets:
 | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | Base64-encoded contents of `android/mobiduka-release.jks` |
 | `ANDROID_GOOGLE_SERVICES_JSON_BASE64` | Base64-encoded Firebase `google-services.json` containing the Android app `com.mobiduka.pos` |
+| `BLOB_READ_WRITE_TOKEN` | Read/write token for the Vercel Blob store used for Android APK downloads |
 | `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
 | `ANDROID_KEY_ALIAS` | `mobiduka-release` |
 | `ANDROID_KEY_PASSWORD` | Password for the key |
@@ -64,6 +65,21 @@ Add that value as `ANDROID_GOOGLE_SERVICES_JSON_BASE64` and securely remove the
 temporary base64 file. The release workflow verifies the package name and
 stops if the secret is missing or does not include `com.mobiduka.pos`. Debug
 builds warn and continue without Firebase when the secret is absent.
+
+## Fast APK downloads with Vercel Blob
+
+Create a public Blob store in the Vercel project. Add its `BLOB_READ_WRITE_TOKEN`
+as a GitHub Actions repository secret with the same name. The deployed Next.js
+project also needs this token in its Production environment so the download page
+can read the latest-release manifest; Vercel may add it automatically when the
+store is connected to the project.
+
+For each signed release, the workflow uploads an immutable APK under a
+versioned path and updates `mobiduka/android/latest.json` with the version,
+download URL, SHA-256 checksum, file size, and minimum Android version. The
+public `/download` page reads that manifest and links directly to the Blob APK.
+GitHub Releases remains available as a fallback and archive. The APK remains
+public, so anyone with its download URL can install it.
 
 For local release builds, `.env.local` can provide these values directly; set
 `ANDROID_KEYSTORE_PATH` to a path relative to `android/` (the generated local

@@ -78,6 +78,7 @@ const dashboardScreen = "/mobiduka-dashboard.png";
 const shiftsScreen = "/mobiduka-shifts.png";
 const shopkeeperPhoto = "/kenyan-shopkeeper.png";
 const footerRoutes: Record<string, string> = {
+  "Android app": "/download",
   "Web dashboard": "/app",
   "Privacy Policy": "/privacy",
   "Terms of Service": "/terms",

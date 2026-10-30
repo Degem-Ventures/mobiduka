@@ -204,6 +204,68 @@ jobs:
             echo "branch=$GITHUB_REF_NAME"
           } > "$RUNNER_TEMP/mobiduka-release-build-info.txt"
 
+      - name: Publish APK to Vercel Blob
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          VERSION_NAME: ${{ steps.release_version.outputs.version_name }}
+          RELEASE_TAG: ${{ steps.release_version.outputs.tag }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$BLOB_READ_WRITE_TOKEN" ]]; then
+            echo "::error::Set the BLOB_READ_WRITE_TOKEN Actions secret to publish APK downloads."
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile } from 'node:fs/promises';
+          import { put } from '@vercel/blob';
+
+          const apkPath = 'android/app/build/outputs/apk/release/app-release.apk';
+          const apkBytes = await readFile(apkPath);
+          const version = process.env.VERSION_NAME;
+          const tag = process.env.RELEASE_TAG;
+          const versionCode = Number(process.env.VERSION_CODE);
+          const runIdentity = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+          const apk = await put(
+            `mobiduka/android/releases/${tag}/${runIdentity}/app-release.apk`,
+            new Blob([apkBytes], { type: 'application/vnd.android.package-archive' }),
+            {
+              access: 'public',
+              token: process.env.BLOB_READ_WRITE_TOKEN,
+              addRandomSuffix: false,
+              contentType: 'application/vnd.android.package-archive',
+              cacheControlMaxAge: 31536000,
+            },
+          );
+
+          const manifest = {
+            version,
+            tag,
+            versionCode,
+            downloadUrl: apk.downloadUrl,
+            sizeBytes: apkBytes.length,
+            sha256: createHash('sha256').update(apkBytes).digest('hex'),
+            minAndroidVersion: '6.0',
+            publishedAt: new Date().toISOString(),
+          };
+          await put(
+            'mobiduka/android/latest.json',
+            JSON.stringify(manifest),
+            {
+              access: 'public',
+              token: process.env.BLOB_READ_WRITE_TOKEN,
+              addRandomSuffix: false,
+              allowOverwrite: true,
+              contentType: 'application/json; charset=utf-8',
+              cacheControlMaxAge: 60,
+            },
+          );
+          console.log(`Published Android ${version} APK to Vercel Blob.`);
+          NODE
+
       - name: Publish APK to GitHub Releases
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
