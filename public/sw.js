@@ -1,4 +1,4 @@
-const CACHE_NAME = "mobiduka-app-shell-v1"
+const CACHE_NAME = "mobiduka-app-shell-v2"
 const APP_ROOT = "/"
 
 self.addEventListener("install", (event) => {
@@ -62,7 +62,7 @@ self.addEventListener("fetch", (event) => {
       (async () => {
         const cache = await caches.open(CACHE_NAME)
         try {
-          const response = await fetch(request)
+          const response = await fetch(request, { cache: "no-store" })
           if (response.ok) await cache.put(APP_ROOT, response.clone())
           return response
         } catch {

@@ -186,6 +186,7 @@ export default function MarketingPage({
           <button className="mk-brand" onClick={() => scrollTo('top')}><span><img src="/mobiduka_icon.svg" alt=""/></span><div><strong>MobiDuka</strong><small>POS</small></div></button>
           <nav className={mobileMenu ? 'open' : ''}>
             {marketingNavItems.map(item => <button key={item} onClick={() => scrollTo(item)}>{item.split('-').map(word => word[0].toUpperCase() + word.slice(1)).join(' ')}</button>)}
+            <Link href="/download">Android app</Link>
           </nav>
           <div className="mk-nav-actions">
             <div className="mk-theme-anchor">
