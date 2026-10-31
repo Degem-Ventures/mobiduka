@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server.js"
 import { prisma } from "@/lib/prisma"
+import { sendPushNotificationToTokens } from "@/lib/firebase-admin"
 
 export async function POST(request: Request) {
   let body: Record<string, unknown>
@@ -43,6 +44,22 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Website contact request could not be saved:", error)
     return NextResponse.json({ error: "Unable to save your request right now. Please try again later." }, { status: 500 })
+  }
+
+  try {
+    const subscriptions = await prisma.platformAdminNotificationSubscription.findMany({
+      where: { platformAdmin: { status: "ACTIVE" } },
+      select: { token: true },
+    })
+    await sendPushNotificationToTokens(
+      subscriptions.map(({ token }) => token),
+      "New support request",
+      "A new website contact request is waiting for review.",
+      { type: "support_request", contactMessageId: contactMessage.id },
+      { webPushLink: "/admin" },
+    )
+  } catch (error) {
+    console.error("Platform admin support push notification failed.", error)
   }
 
   const apiKey = process.env.RESEND_API_KEY

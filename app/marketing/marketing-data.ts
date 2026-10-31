@@ -1,4 +1,4 @@
-export type MarketingIconName = 'arrow' | 'check' | 'menu' | 'close' | 'scan' | 'stock' | 'mpesa' | 'offline' | 'report' | 'team' | 'shield' | 'printer' | 'sun' | 'moon' | 'monitor'
+export type MarketingIconName = 'arrow' | 'check' | 'menu' | 'close' | 'scan' | 'stock' | 'mpesa' | 'offline' | 'report' | 'team' | 'shield' | 'printer' | 'sun' | 'moon' | 'monitor' | 'android' | 'apple'
 
 export const industryPhotos = [
   'https://images.unsplash.com/photo-1762232621825-a719d413537c?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=80&w=900',

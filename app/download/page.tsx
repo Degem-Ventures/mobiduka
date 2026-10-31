@@ -1,5 +1,8 @@
 import type { Metadata } from "next"
-import { getLatestAndroidRelease } from "@/lib/android-release"
+import {
+  getAndroidReleaseArchive,
+  getLatestAndroidRelease,
+} from "@/lib/android-release"
 import { ThemeProvider } from "../context/ThemeContext"
 import AndroidDownloadContent from "./AndroidDownloadContent"
 
@@ -13,10 +16,14 @@ export const metadata: Metadata = {
 
 export default async function AndroidDownloadPage() {
   const release = await getLatestAndroidRelease()
+  const previousReleases = await getAndroidReleaseArchive(release?.tag)
 
   return (
     <ThemeProvider>
-      <AndroidDownloadContent release={release} />
+      <AndroidDownloadContent
+        release={release}
+        previousReleases={previousReleases}
+      />
     </ThemeProvider>
   )
 }

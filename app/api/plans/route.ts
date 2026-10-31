@@ -31,6 +31,14 @@ export async function GET() {
       {
         plans: plans.map((plan) => ({
           ...plan,
+          estimatedMonthlyPriceKsh:
+            plan.publicMonthlyPriceKsh === null && plan.annualPriceKsh !== null
+              ? Math.round(plan.annualPriceKsh / 120) * 10
+              : null,
+          estimatedAnnualPriceKsh:
+            plan.publicMonthlyPriceKsh !== null && plan.annualPriceKsh === null
+              ? Math.round((plan.publicMonthlyPriceKsh * 12) / 10) * 10
+              : null,
           marketingFeatures: stringList(plan.marketingFeatures),
           onlineCheckoutEnabled:
             plan.onlineCheckoutEnabled &&

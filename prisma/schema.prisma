@@ -130,6 +130,20 @@ model PlatformAdmin {
   lockedUntil         DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+
+  notificationSubscriptions PlatformAdminNotificationSubscription[]
+}
+
+model PlatformAdminNotificationSubscription {
+  id              String   @id @default(uuid())
+  platformAdminId String
+  token           String   @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  platformAdmin PlatformAdmin @relation(fields: [platformAdminId], references: [id], onDelete: Cascade)
+
+  @@index([platformAdminId])
 }
 
 model PlatformSubscription {

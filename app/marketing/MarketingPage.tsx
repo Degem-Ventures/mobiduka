@@ -20,7 +20,9 @@ import {
 type PublicPlan = {
   name: string
   publicMonthlyPriceKsh: number | null
+  estimatedMonthlyPriceKsh: number | null
   annualPriceKsh: number | null
+  estimatedAnnualPriceKsh: number | null
   subtitle: string
   audience: string
   color: string
@@ -70,6 +72,8 @@ function MarketingIcon({ name, size = 20 }: { name: MarketingIconName; size?: nu
     sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></>,
     moon: <path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/>,
     monitor: <><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></>,
+    android: <><path d="M7 8a5 5 0 0 1 10 0"/><path d="M6 8h12v7a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8Z"/><path d="m8 4 1.5 2M16 4l-1.5 2M3.5 10v4M20.5 10v4M9 17v3M15 17v3"/><circle cx="9" cy="10.5" r=".5"/><circle cx="15" cy="10.5" r=".5"/></>,
+    apple: <><path d="M12 8.3c-1.3 0-2-.7-3.1-.7-1.9 0-3.6 1.7-3.6 4.5 0 2.6 1.7 6.2 3.5 6.2.9 0 1.3-.6 2.5-.6 1.2 0 1.5.6 2.5.6 1.2 0 2.1-1.3 2.8-2.6-1.8-.9-2.4-3.1-1-4.5.5-.5 1-.7 1.5-.8-.8-1.5-2.1-2.4-3.5-2.4-1.1 0-1.6.3-2.6.3Z"/><path d="M12.4 6.7c.1-1.5 1.2-2.6 2.7-2.7 0 1.5-1.1 2.7-2.7 2.7Z"/></>,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -186,7 +190,10 @@ export default function MarketingPage({
           <button className="mk-brand" onClick={() => scrollTo('top')}><span><img src="/mobiduka_icon.svg" alt=""/></span><div><strong>MobiDuka</strong><small>POS</small></div></button>
           <nav className={mobileMenu ? 'open' : ''}>
             {marketingNavItems.map(item => <button key={item} onClick={() => scrollTo(item)}>{item.split('-').map(word => word[0].toUpperCase() + word.slice(1)).join(' ')}</button>)}
-            <Link href="/download">Android app</Link>
+            <div className="mk-platform-links" aria-label="Mobile apps">
+              <Link className="mk-platform-icon" href="/download" aria-label="Download Android app" title="Download Android app"><MarketingIcon name="android" size={18}/></Link>
+              <button className="mk-platform-icon is-disabled" type="button" disabled aria-label="iOS app not available yet" title="iOS app not available yet"><MarketingIcon name="apple" size={18}/></button>
+            </div>
           </nav>
           <div className="mk-nav-actions">
             <div className="mk-theme-anchor">
@@ -250,7 +257,7 @@ export default function MarketingPage({
                 <h3>{experience === 'android' ? 'Your complete shop counter, in your hand.' : experience === 'ios' ? 'A focused mobile view for business oversight.' : 'A wider view of performance, stock and profitability.'}</h3>
                 <p>{experience === 'android' ? 'Record sales, search products, scan barcodes, manage shifts and track payment status from one practical Android workflow.' : experience === 'ios' ? 'Review dashboards, checkout activity, inventory and sales analytics with safe-area-aware mobile design.' : 'Monitor revenue, expenses, inventory valuation, low-stock alerts and recent transactions from a responsive browser dashboard.'}</p>
                 <ul>{(experience === 'android' ? ['POS checkout and cart','SmartScan barcode workflows','Inventory and shift management','Compatible receipt printing'] : experience === 'ios' ? ['Business dashboard','Product catalogue','Payment status','Sales analytics'] : ['Revenue and sales trends','Expense summaries','Inventory valuation','Profitability reporting']).map(item => <li key={item}><MarketingIcon name="check" size={14}/>{item}</li>)}</ul>
-                {experience === 'android' ? <button className="mk-primary" onClick={() => setContactOpen(true)}>Ask about Android access</button> : experience === 'ios' ? <button className="mk-secondary" onClick={() => setContactOpen(true)}>Contact us for availability</button> : <Link className="mk-primary" href="/app">Explore Web Access</Link>}
+                {experience === 'android' ? <Link className="mk-primary" href="/download">Download Android app <MarketingIcon name="arrow" size={17}/></Link> : experience === 'ios' ? <button className="mk-secondary" onClick={() => setContactOpen(true)}>Contact us for availability</button> : <Link className="mk-primary" href="/app">Explore Web Access</Link>}
               </div>
               <div className={`mk-device-stage ${experience}`}>
                 {experience === 'android' && <><PhoneMockup src={dashboardScreen} alt="MobiDuka Android dashboard"/><PhoneMockup src={shiftsScreen} alt="MobiDuka Android shift management" className="secondary-phone"/></>}
@@ -296,11 +303,18 @@ export default function MarketingPage({
             <div className="mk-billing-toggle"><button className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly billing</button><button className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual billing</button></div>
             {planLoadError && <p role="alert">{planLoadError}</p>}
             <div className="mk-price-grid">{planCatalog.map(plan => {
-              const publicPrice = annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh
-              const checkoutAvailable = plan.name === "Basic" || (plan.onlineCheckoutEnabled && publicPrice !== null)
+              const isEstimatedMonthlyPrice =
+                !annual && plan.publicMonthlyPriceKsh === null && plan.estimatedMonthlyPriceKsh !== null
+              const isEstimatedAnnualPrice =
+                annual && plan.annualPriceKsh === null && plan.estimatedAnnualPriceKsh !== null
+              const publicPrice = annual
+                ? plan.annualPriceKsh ?? plan.estimatedAnnualPriceKsh
+                : plan.publicMonthlyPriceKsh ?? plan.estimatedMonthlyPriceKsh
+              const actualSelectedPrice = annual ? plan.annualPriceKsh : plan.publicMonthlyPriceKsh
+              const checkoutAvailable = plan.name === "Basic" || (plan.onlineCheckoutEnabled && actualSelectedPrice !== null)
               const signupBilling = plan.name === "Basic" ? "monthly" : annual ? "annual" : "monthly"
               const signupHref = `/signup?plan=${encodeURIComponent(plan.name)}&billing=${signupBilling}`
-              return <article className={plan.featured ? 'featured' : ''} key={plan.name}>{plan.featured && <div className="mk-recommended">Recommended</div>}<span>{plan.audience}</span><h3>{plan.name}</h3><div className="mk-price"><strong>{publicPrice === null ? "Price on request" : `KSh ${publicPrice.toLocaleString()}`}</strong>{publicPrice !== null && <small>/ {annual ? 'year' : 'month'}</small>}</div><p>{checkoutAvailable ? "Secure your subscription with M-PESA checkout." : "Contact our team for current pricing and availability."}</p><ul>{plan.marketingFeatures.map(feature => <li key={feature}><MarketingIcon name="check" size={13}/>{feature}</li>)}</ul>{checkoutAvailable ? <Link className={plan.featured ? 'mk-primary' : 'mk-secondary'} href={signupHref}>{plan.name === "Basic" ? "Start 14-day Basic trial" : "Choose plan"}</Link> : <button className={plan.featured ? 'mk-primary' : 'mk-secondary'} onClick={() => setContactOpen(true)}>{plan.cta}</button>}</article>
+              return <article className={plan.featured ? 'featured' : ''} key={plan.name}>{plan.featured && <div className="mk-recommended">Recommended</div>}<span>{plan.audience}</span><h3>{plan.name}</h3><div className="mk-price"><strong>{publicPrice === null ? "Price on request" : `${isEstimatedMonthlyPrice || isEstimatedAnnualPrice ? "≈ " : ""}KSh ${publicPrice.toLocaleString()}`}</strong>{publicPrice !== null && <small>/ {annual ? 'year' : 'month'}</small>}</div>{isEstimatedMonthlyPrice && <small className="mk-estimate-note">Approximate monthly equivalent, derived from annual pricing.</small>}{isEstimatedAnnualPrice && <small className="mk-estimate-note">Approximate annual equivalent, derived from monthly pricing.</small>}<p>{checkoutAvailable ? "Secure your subscription with M-PESA checkout." : "Contact our team for current pricing and availability."}</p><ul>{plan.marketingFeatures.map(feature => <li key={feature}><MarketingIcon name="check" size={13}/>{feature}</li>)}</ul>{checkoutAvailable ? <Link className={plan.featured ? 'mk-primary' : 'mk-secondary'} href={signupHref}>{plan.name === "Basic" ? "Start 14-day Basic trial" : "Choose plan"}</Link> : <button className={plan.featured ? 'mk-primary' : 'mk-secondary'} onClick={() => setContactOpen(true)}>{plan.cta}</button>}</article>
             })}</div>
             <div className="mk-pricing-note">Package information is shared with the admin license catalog. Public prices and exact entitlements remain unpublished until formally approved.</div>
           </div>

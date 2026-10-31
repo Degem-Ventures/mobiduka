@@ -2,7 +2,10 @@
 
 import Link from "next/link"
 import { useColors } from "../utils/theme"
-import type { AndroidRelease } from "@/lib/android-release"
+import type {
+  AndroidRelease,
+  AndroidReleaseArchive,
+} from "@/lib/android-release"
 
 function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -10,8 +13,10 @@ function formatSize(bytes: number) {
 
 export default function AndroidDownloadContent({
   release,
+  previousReleases,
 }: {
   release: AndroidRelease | null
+  previousReleases: AndroidReleaseArchive[]
 }) {
   const c = useColors()
 
@@ -127,6 +132,73 @@ export default function AndroidDownloadContent({
                     {release.sha256}
                   </dd>
                 </dl>
+                {previousReleases.length > 0 && (
+                  <details
+                    style={{
+                      maxWidth: 560,
+                      marginTop: 32,
+                      borderTop: `1px solid ${c.faint}`,
+                    }}
+                  >
+                    <summary
+                      style={{
+                        padding: "16px 0",
+                        color: c.text,
+                        fontSize: 14,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Previous versions ({previousReleases.length})
+                    </summary>
+                    <ul
+                      style={{
+                        display: "grid",
+                        gap: 8,
+                        padding: 0,
+                        margin: 0,
+                        listStyle: "none",
+                      }}
+                    >
+                      {previousReleases.map((previousRelease) => (
+                        <li
+                          key={previousRelease.tag}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 16,
+                            padding: "12px 14px",
+                            border: `1px solid ${c.faint}`,
+                            borderRadius: 6,
+                            background: c.card,
+                          }}
+                        >
+                          <div>
+                            <strong style={{ display: "block", fontSize: 13 }}>
+                              Android v{previousRelease.version}
+                            </strong>
+                            <span style={{ color: c.muted, fontSize: 11 }}>
+                              {formatSize(previousRelease.sizeBytes)} · {new Date(previousRelease.publishedAt).toISOString().slice(0, 10)}
+                            </span>
+                          </div>
+                          <a
+                            href={previousRelease.downloadUrl}
+                            style={{
+                              flexShrink: 0,
+                              color: c.primary,
+                              fontSize: 12,
+                              fontWeight: 700,
+                              textDecoration: "none",
+                            }}
+                          >
+                            Download
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </>
             ) : (
               <p

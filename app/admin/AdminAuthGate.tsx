@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import PlatformAdminPushRegistration from "./PlatformAdminPushRegistration";
 
 type AdminAuthGateProps = { children: ReactNode };
 
@@ -81,6 +82,7 @@ export default function AdminAuthGate({ children }: AdminAuthGateProps) {
         <span>SUPER_ADMIN session</span>
         <button onClick={() => void signOut()}>Sign out</button>
       </div>
+      <PlatformAdminPushRegistration />
       {children}
     </>
   );

@@ -125,12 +125,19 @@ export async function sendPushNotificationToTokens(
   title: string,
   body: string,
   dataPayload: Record<string, string> = {},
+  options: { webPushLink?: string } = {},
 ): Promise<{ sent: number; failed: number }> {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   if (!projectId || tokens.length === 0)
     return { sent: 0, failed: tokens.length };
   const accessToken = await getFirebaseAccessToken();
   if (!accessToken) return { sent: 0, failed: tokens.length };
+  const appOrigin = process.env.NEXT_PUBLIC_APP_URL
+    ? new URL(process.env.NEXT_PUBLIC_APP_URL)
+    : new URL(
+        `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "mobiduka.vercel.app"}`,
+      );
+  const webPushLink = new URL(options.webPushLink ?? "/", appOrigin).toString();
 
   const results = await Promise.all(tokens.map(async (token) => {
     try {
@@ -151,7 +158,7 @@ export async function sendPushNotificationToTokens(
           apns: {
             payload: { aps: { sound: "default", badge: 1 } },
           },
-          webpush: { fcmOptions: { link: "/" } },
+          webpush: { fcmOptions: { link: webPushLink } },
         } }),
         signal: AbortSignal.timeout(5000),
       });
